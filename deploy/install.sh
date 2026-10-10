@@ -110,7 +110,11 @@ echo "health above must show ok:true and the note count."
 # One factual question through the live AI tier, so a broken key shows up here and not in front
 # of a customer. It is a real question about a real note in the seeded corpus.
 echo "live ask:"
-curl -fsS -X POST "http://127.0.0.1:$PORT/api/ask" -H 'content-type: application/json' \
+# Behind the front gate the smoke question needs the same credentials a browser uses, otherwise
+# the gate answers 401 and the check fails on a JSON parse instead of on the thing it tests.
+AUTH=()
+if [ -n "${XUONG_USER:-}" ] && [ -n "${XUONG_PASS:-}" ]; then AUTH=(-u "$XUONG_USER:$XUONG_PASS"); fi
+curl -fsS "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/api/ask" -H 'content-type: application/json' \
   -d '{"question":"máy dừng giữa ca thì kiểm tra theo thứ tự nào?"}' \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("  coverage:", d["coverage"], "| mode:", d["mode"], "| cited:", [c["title"] for c in d["citations"]])'
 
