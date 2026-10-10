@@ -1,0 +1,78 @@
+#!/usr/bin/env node
+// scripts/seed.mjs — build a fresh database: demo expert profiles + the seed corpus.
+//
+// Every note is run through the real publishability gate, exactly as an expert's submitted note is.
+// Notes that need attestation say so in the output: the seed declares them general craft knowledge.
+
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { openDb, upsertExpert, upsertNote, logEvent, stats, publishedNotes } from '../src/db.mjs';
+import { decidePublication, loadRules } from '../src/gate.mjs';
+import { slugify } from '../src/interview.mjs';
+
+const rules = loadRules();
+const dbPath = process.env.XUONG_DB || 'data/xuong.db';
+const db = openDb(dbPath);
+
+const experts = JSON.parse(readFileSync('seed/experts.json', 'utf8'));
+for (const e of experts) upsertExpert(db, e);
+console.log(`experts: ${experts.length}`);
+
+const corpusDir = 'seed/corpus';
+const files = readdirSync(corpusDir).filter((f) => f.endsWith('.md'));
+const byAuthor = {
+  tpm: 'hung-qa',
+  'quan-ly-chuyen': 'hung-qa',
+  'cai-tien': 'hung-qa',
+  'an-toan': 'hung-qa',
+  'chat-luong': 'lan-lap-rap',
+  'cong-viec': 'hung-qa',
+  'chien-luoc': 'hung-qa',
+  khac: 'hung-qa'
+};
+
+let published = 0;
+let blocked = 0;
+for (const f of files) {
+  const raw = readFileSync(join(corpusDir, f), 'utf8');
+  const fm = /^---\n([\s\S]*?)\n---\n/.exec(raw);
+  const meta = {};
+  for (const line of (fm?.[1] ?? '').split('\n')) {
+    const m = /^(\w+):\s*(.*)$/.exec(line.trim());
+    if (m) meta[m[1]] = m[2];
+  }
+  const body = raw.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+  const title = meta.title ?? f.replace(/\.md$/, '');
+  const topic = meta.topic ?? 'khac';
+  const origin = meta.origin ?? 'demo';
+  const slug = slugify(`${meta.origin === 'vault' ? 'vault' : 'demo'}-${title}`);
+  const authorSlug = byAuthor[topic] ?? 'hung-qa';
+  const author = db.prepare('select id from experts where slug = ?').get(authorSlug);
+
+  // Seed notes carry the author's attestation (they are general craft knowledge by construction).
+  const decision = decidePublication({ title, body }, { attested: true, rules });
+  upsertNote(db, {
+    expert_id: author?.id ?? null,
+    slug,
+    title,
+    topic,
+    body,
+    status: decision.publish ? 'published' : 'blocked',
+    gate: decision.report,
+    origin: meta.origin ?? 'demo',
+    source: meta.source ?? ''
+  });
+  if (decision.publish) published += 1;
+  else {
+    blocked += 1;
+    const why = decision.report.findings.filter((x) => x.severity === 'block').map((x) => `${x.rule}:${x.match}`);
+    console.log(`  BLOCKED ${slug} — ${decision.reason} ${why.join(' ')}`);
+  }
+}
+
+logEvent(db, 'seed', '', `experts=${experts.length} notes=${files.length} published=${published} blocked=${blocked}`);
+const s = stats(db);
+console.log(`notes: ${published} published / ${blocked} blocked of ${files.length}`);
+console.log(`db: ${dbPath}`);
+console.log(`stats: ${JSON.stringify(s)}`);
+console.log(`published slugs: ${publishedNotes(db).map((n) => n.slug).join(', ')}`);

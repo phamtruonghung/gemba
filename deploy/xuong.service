@@ -1,0 +1,25 @@
+[Unit]
+Description=Xuong — Vietnam-first factory-production knowledge platform (prototype)
+Documentation=file:/opt/xuong/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/xuong
+EnvironmentFile=/etc/xuong/xuong.env
+ExecStart=/opt/node22/bin/node /opt/xuong/src/server.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+# The SQLite database and the admin token live outside the checkout so a redeploy of the
+# code cannot overwrite live state.
+ReadWritePaths=/var/lib/xuong
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xuong
+
+[Install]
+WantedBy=multi-user.target
