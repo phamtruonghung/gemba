@@ -36,12 +36,16 @@ page myself the row says so.
 | Price a session by the minute, hold the money before the call, settle on actual duration | Clarity.fm | "A *pre-charge* is a temporary hold on your card for the estimated cost of the call." / "You'll be charged based on the actual duration of the call at the expert's rate — not the estimated time." / "If the call ends sooner, you'll receive a refund or credit for the unused time." (help.startups.com, read 2026-10-10) | Session price = rate × minutes, minimum 30; payment is instructed by VietQR and confirmed by the operator (no card rails, and we never hold funds — §7) |
 | Capture tacit knowledge by an AI-led interview instead of asking for documents | Tacivo | "AI-guided sessions capture what departing employees know." + use cases: exit interviews, handovers, SOPs, after-action reviews + pushes to Notion/Confluence/SharePoint/Drive and an MCP server (homepage, read 2026-10-10) | `/c/:token/phong-van`: a scripted interview drafts a note, which then has to pass the gate before it is published |
 | Human experts positioned *against* chatbots, cheap 1:1 packages | Askany (Vietnam) | "Askany, startup tiên phong trong việc kết nối các chuyên gia tư vấn với doanh nghiệp nhỏ, startup tại Việt Nam. Startup này đã đầu tư đến 27 tỉ đồng để phát triển app và marketing." / "đặt lịch tư vấn theo gói 15 phút, theo giờ" (thanhnien.vn, read 2026-10-10) | The ladder's bottom rung: 15–30 minute packages, escalating from a machine answer |
+| AI as the front door, a human as the escalation, and the session itself turned into a reusable artifact | ExpertNetwork.AI | "Describe your question — AI recommends top experts by domain, seniority, and availability in minutes, not days." / "Every call generates a structured summary with key insights, action items, and searchable transcript." (research pass, 2026-10-10; the closest single model to this product) | Partial: the answer → escalation → paid session shape is built; turning a session into a new *published* note (with consent) is not |
 | Expert vetting, tiered revenue share by sustained quality | JustAnswer (mechanism), AlphaSights/GLG (conflict + compliance checks) | JustAnswer's "paid $2-11 per question, depending on what tier you're in" is **third-party (search result), not read on their page**; AlphaSights/GLG's conflict checks and "interactive compliance training prior to your first interaction" were read by the research pass | Not built: vetting is manual for the prototype (see §10) |
 | Answer-space boundary = "says I don't know" rather than a confident guess | SuperMe | Reported by the research pass, not re-read by me | Our version is stronger: a machine-readable marker (`THIEU_DU_LIEU`) that triggers escalation |
 
 What is **not** copied: building a "digital twin" that speaks as the expert (Delphi, Qiri). In a
 production context a fabricated diagnosis attributed to a named practitioner is a safety problem,
-not a feature.
+not a feature. The one guardrail pattern worth copying from the clinical end of the field is Qiri's —
+hard rules the model cannot override, every output signed off by the licensed human, and the human's
+corrections fed back. Here that is the mechanical gate plus the prompt contract: the model may cite
+retrieved notes and may refuse, and has no path to a diagnosis of its own.
 
 ## 3. The refusal contract
 
@@ -87,7 +91,7 @@ note carries `origin` and, where applicable, the author's attestation text. A bl
 blocked interview draft returns HTTP 422 with the same page — silently swallowing a rejection is the
 failure mode that makes an expert stop contributing.
 
-Known limit: this is a pattern gate, not a lawyer. It catches the shapes it knows; §10 lists the
+Known limit: this is a pattern gate, not a lawyer. It catches the shapes it knows; §11 lists the
 vetting it does not replace.
 
 ## 6. Money
@@ -130,7 +134,60 @@ directionally useful and must be confirmed with counsel before launch.
 That is why `/b/:ref` produces a VietQR instruction rather than a checkout, and why the operator
 marks payment — a design decision driven by the VND 50bn licensing threshold, not by laziness.
 
-## 8. Data model
+## 8. Demand — who buys factory advice in Vietnam, and what already pays for it
+
+Research pass of 2026-10-10, each figure with the page it came from. The Vietnamese-language pages
+were read by that pass and **not re-read** by me, so read this section as direction to verify rather
+than as settled numbers.
+
+**The buyer is small.** Vietnam had 859,048 enterprises in operation at the end of 2025, more than
+98% of them small or medium; the private sector is about half of GDP, 97% of private firms are
+SME-sized, its labour productivity is the lowest of any sector, and its technology/R&D spend is
+around 0.5% of GDP (General Statistics Office figures relayed by baocaovien.vn and baophapluat.vn).
+
+**What they buy today is an engagement, never an answer.** Domestic improvement consultancies sell
+6–24 month on-site programmes (TST), shop-floor "Go-See" diagnosis with hands-on coaching (VJIP),
+and — literally — rented improvement specialists: "Cung cấp các chuyên gia cải tiến chuyên nghiệp,
+Black Belt, Master Black Belt làm việc fulltime hoặc parttime tại nhà máy" (CiCC / Lean Vietnam).
+Where a price is public it is for training rather than advice: a five-day lean/kaizen course at
+VND 10,000,000 (VND 8,000,000 discounted), and a two-day 5S–Kaizen course at "VND 3,000,000
+/participant (VAT excluded)". No provider found sells a standalone diagnosis, an answer, or a
+knowledge product — which is exactly the space rungs 1–3 are aimed at.
+
+**Public money already buys this kind of advice.** A 2026 decree under the FTA-utilisation ecosystem
+funds **up to 50% of the value of "improvement solution" consulting contracts**, capped at
+VND 200m per enterprise per year (VND 100m for co-operatives and household businesses): "Hỗ trợ tối đa
+50% giá trị các hợp đồng tư vấn giải pháp cải tiến, nâng cao quy trình … nhưng không quá 200 triệu
+đồng/các hợp đồng/năm/doanh nghiệp" (Nghị định 240/2026/NĐ-CP, via baochinhphu.vn). State-funded
+projects cap a domestic senior consultant at VND 40m/month (Thông tư 02/2015/TT-BLĐTBXH, via
+thuvienphapluat.vn), and the national productivity programme's draft financing caps an expert at
+VND 15m per training course. The programme that builds the state's own expert pool targets only about
+1,000 certified productivity-and-quality experts by 2030, ~200 of them regionally or internationally
+certified (Quyết định 1322/QĐ-TTg, via QUATEST 2).
+
+**Who else pays: the OEM and the donor, not the SME.** Samsung and the Ministry of Industry and Trade
+agreed to build smart factories at 50 enterprises and train 100 Vietnamese smart-factory consultants;
+JICA's Keieijuku programme has trained over 1,150 executives from 750+ companies; an ILO programme
+with Swiss and Norwegian funding trained 58 enterprise consultants and picked 26 of them to advise
+30 enterprises. Capability building in Vietnamese manufacturing is substantially funded from outside
+the factory — a channel to sell into, not merely a subsidy to admire.
+
+**What is scarce is capability, measurably.** 25.3% of manufacturing firms reported being unable to
+recruit labour that met their requirements in a Q1/2026 survey (19.1% across all sectors); 62% of
+firms lack digitally-skilled staff, 55% are financially constrained and 37% do not know where to
+start; among SMEs only 2.2% master the technology they adopted, and 48.8% of those that once adopted
+a digital solution stopped using it as unsuitable (VCCI and state figures relayed by
+lyluanchinhtri.vn and hcmcpv.org.vn). The demand is not for software and not for a course: it is for
+someone who knows the answer and can be reached cheaply.
+
+**What this changes here.** (1) Price for a supervisor's budget — hundreds of thousands of VND, not a
+consulting day rate. (2) The co-funding scheme is the strongest commercial channel found in the whole
+pass: a paid session sold as an "improvement solution" consulting contract can be half paid by the
+state, up to the annual cap, and eligibility is cheap to check. (3) The certified expert pool the
+state builds is tiny, so a marketplace of practising supervisors is adjacent to it and far cheaper to
+reach. (4) Nobody sells the standalone answer — which is the rung this prototype already implements.
+
+## 9. Data model
 
 `node:sqlite` (`src/db.mjs`), one file:
 
@@ -143,7 +200,7 @@ marks payment — a design decision driven by the VND 50bn licensing threshold, 
   state (`requested` → `awaiting_payment` → `paid` → `completed`);
 - `events` — an append-only log of what the system did, so a dispute has a record.
 
-## 9. Decisions
+## 10. Decisions
 
 1. **Refusal is a feature, and it is machine-readable.** A refused question is the product's best
    qualified lead; the marker is part of the answer contract, not a UI concern.
@@ -158,7 +215,7 @@ marks payment — a design decision driven by the VND 50bn licensing threshold, 
    mistaken for a practitioner's real published craft.
 7. **No simulated expert.** Answers attributed to a person are written by that person.
 
-## 10. Open questions — decide before selling anything
+## 11. Open questions — decide before selling anything
 
 1. **Legal/tax shape**: MoIT registration or notification; who withholds PIT on expert payouts and
    under which threshold; VAT treatment of a consulting service; invoice path. Needs Vietnamese
@@ -173,12 +230,14 @@ marks payment — a design decision driven by the VND 50bn licensing threshold, 
 6. **Interview capture at scale**: whether a practitioner will keep answering an AI interviewer in
    week six.
 
-## 11. Roadmap (order matters)
+## 12. Roadmap (order matters)
 
 1. Three real consultations with one practitioner, booked through the deployed instance — the only
    test of the ladder that counts.
-2. Withholding + invoice module for payouts (small, and it is the thing that stops you paying anyone).
-3. Delivery of the answer where the supervisor already is (Zalo/email) instead of a page he must
+2. Check what the state will pay for (§8): an "improvement solution" consulting contract can be half
+   funded up to VND 200m a year per enterprise. Cheap to verify, and it changes who the buyer is.
+3. Withholding + invoice module for payouts (small, and it is the thing that stops you paying anyone).
+4. Delivery of the answer where the supervisor already is (Zalo/email) instead of a page he must
    come back to.
-4. A second topic area, to see whether the corpus or the expert is the constraint.
-5. Only then: subscriptions, more experts, and a public domain.
+5. A second topic area, to see whether the corpus or the expert is the constraint.
+6. Only then: subscriptions, more experts, and a public domain.
