@@ -163,6 +163,12 @@ Cloudflare dashboard (a token-managed `cloudflared` runs on the Proxmox host), s
 is one ingress entry there: `xuong.<your-domain>` → `http://192.168.1.150:8090`. Verification that
 counts is a request from outside the LAN: `401` without credentials, `200` with them.
 
+For a URL today there is `deploy/quick-tunnel.sh`: it installs `cloudflared`, runs a quick tunnel to
+`127.0.0.1:8090`, and prints the `https://<name>.trycloudflare.com` URL. It refuses to start when no
+`XUONG_PASS` is configured, because that would publish an open ask form. The URL changes on every
+restart and the tunnel dies with the host — a demonstration instrument, not an address anyone should
+bookmark.
+
 ## What is deliberately not built
 
 No payment gateway or escrow (see above), no email/Zalo notification (the expert has a tokenised
