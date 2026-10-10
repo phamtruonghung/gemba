@@ -59,6 +59,8 @@ else
 # Xưởng runtime configuration. Mode 600 — holds the LLM key and the operator token.
 XUONG_PORT=$PORT
 XUONG_HOST=0.0.0.0
+XUONG_USER=${XUONG_USER:-}
+XUONG_PASS=${XUONG_PASS:-}
 XUONG_DATA_DIR=$DATA_DIR
 XUONG_LLM_KEY=${OPENROUTER_API_KEY:-}
 XUONG_LLM_BASE_URL=${XUONG_LLM_BASE_URL:-https://openrouter.ai/api/v1}

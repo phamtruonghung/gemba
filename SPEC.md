@@ -214,6 +214,10 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
 6. **Corpus provenance is visible**: every note shows `origin`, so the demo material is never
    mistaken for a practitioner's real published craft.
 7. **No simulated expert.** Answers attributed to a person are written by that person.
+8. **The gate is in the app, not in the deployment.** Every path except `/healthz` can require HTTP
+   basic auth (`XUONG_USER`/`XUONG_PASS`), because the ask form spends money on a model per question
+   and a publicly reachable instance without it is an open bill. Relying on a proxy someone has to
+   remember to configure is how that gets forgotten.
 
 ## 11. Open questions — decide before selling anything
 
