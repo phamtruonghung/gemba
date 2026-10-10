@@ -78,7 +78,7 @@ the refusal marker are enforced by tests.
 | `XUONG_ADMIN_TOKEN` | generated into `<data>/admin.token` | operator console token (`/qt/<token>`) |
 | `XUONG_LLM_KEY` | — | API key for the answer model; absent ⇒ labelled extractive mode |
 | `XUONG_LLM_BASE_URL` | OpenRouter | OpenAI-compatible chat-completions base URL |
-| `XUONG_LLM_MODEL` | `deepseek/deepseek-v4.1-flash` | model id |
+| `XUONG_LLM_MODEL` | `deepseek/deepseek-v4-flash-0731` | model id (the code's default, so the README and the code agree) |
 | `XUONG_LLM_TIMEOUT_MS` | `90000` | per-request timeout |
 | `XUONG_BANK_BIN` / `XUONG_BANK_ACCOUNT` | — | VietQR recipient; unset ⇒ the booking page shows the amount with no QR |
 

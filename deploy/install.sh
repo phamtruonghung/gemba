@@ -72,6 +72,22 @@ EOF
 fi
 chmod 600 "$ENV_DIR/xuong.env"
 
+# An env file written by an earlier run predates any key added since, and the script keeps
+# existing files rather than clobbering the operator's configuration. So every key that the
+# current unit expects is added if it is missing — otherwise a new setting silently never
+# applies, which is how the front gate looked configured while the instance stayed open.
+for key in XUONG_USER XUONG_PASS; do
+  if ! grep -q "^$key=" "$ENV_DIR/xuong.env"; then
+    echo "$key=" >> "$ENV_DIR/xuong.env"
+    echo "added the missing key $key to $ENV_DIR/xuong.env (empty — fill it in to use it)"
+  fi
+done
+if [ -n "${XUONG_USER:-}" ] && [ -n "${XUONG_PASS:-}" ]; then
+  sed -i "s|^XUONG_USER=.*|XUONG_USER=$XUONG_USER|; s|^XUONG_PASS=.*|XUONG_PASS=$XUONG_PASS|" "$ENV_DIR/xuong.env"
+  echo "front gate set from this script's environment"
+fi
+chmod 600 "$ENV_DIR/xuong.env"
+
 say "4. seed the corpus (idempotent: upserts by slug)"
 set -a; . "$ENV_DIR/xuong.env"; set +a
 cd "$APP_DIR"
