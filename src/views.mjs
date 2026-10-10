@@ -455,6 +455,15 @@ ${expert ? `<p><a class="btn alt" href="/c/${esc(expert.token)}">← Về bàn l
   });
 }
 
+export function unauthorizedPage() {
+  return layout({
+    title: 'Cần đăng nhập',
+    body: `<div class="card"><h1>Cần đăng nhập</h1>
+<p>Bản thử nghiệm này chỉ mở cho người có tài khoản. Trình duyệt sẽ hỏi tên và mật khẩu — nhập cặp đã cấp cho anh/chị.</p>
+<p class="muted">Nếu hộp thoại không hiện: đóng tab rồi mở lại, hoặc dùng chế độ ẩn danh để xoá thông tin đăng nhập cũ.</p></div>`
+  });
+}
+
 export function errorPage({ code, message }) {
   return layout({
     title: `Lỗi ${code}`,

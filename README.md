@@ -71,7 +71,8 @@ the refusal marker are enforced by tests.
 | Variable | Default | Meaning |
 |---|---|---|
 | `XUONG_PORT` | `8090` | HTTP port |
-| `XUONG_HOST` | `127.0.0.1` | bind address |
+| `XUONG_HOST` | `0.0.0.0` | bind address |
+| `XUONG_USER` / `XUONG_PASS` | — | HTTP basic auth in front of everything except `/healthz`; **set this before publishing the instance to any hostname** |
 | `XUONG_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
 | `XUONG_DB` | `<data>/xuong.db` | database path |
 | `XUONG_ADMIN_TOKEN` | generated into `<data>/admin.token` | operator console token (`/qt/<token>`) |
@@ -145,6 +146,22 @@ XUONG_LLM_KEY_FILE=/root/or.key bash deploy/install.sh   # taking the key from a
 It runs as a systemd service (`xuong.service`) on the demo host `192.168.1.150:8090`. Ports 80/443
 there belong to another stack, so the app is published on 8090 — a reverse proxy is the deployment's
 job, not the app's.
+
+### Publishing it to a hostname
+
+The ask form spends money: every question calls a model. An instance reachable from the internet
+without a gate is therefore an open bill and an open spam target, so the app carries its own front
+gate rather than relying on the deployment to remember one:
+
+- set `XUONG_USER` and `XUONG_PASS` and every path — the pages, `/api/ask`, the expert desks, the
+  console — answers `401` with a basic-auth challenge until the browser authenticates;
+- `/healthz` stays open (it is the readiness probe) and deliberately does not print the database path;
+- with neither variable set the app is open, which is what local development wants.
+
+Tunnelling is the deployment's business, not the app's. On this host the tunnel is managed in the
+Cloudflare dashboard (a token-managed `cloudflared` runs on the Proxmox host), so a public hostname
+is one ingress entry there: `xuong.<your-domain>` → `http://192.168.1.150:8090`. Verification that
+counts is a request from outside the LAN: `401` without credentials, `200` with them.
 
 ## What is deliberately not built
 

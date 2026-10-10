@@ -105,6 +105,7 @@ test('healthz reports the corpus size and the AI tier honestly', async () => {
   assert.equal(body.ok, true);
   assert.equal(body.notes, 4);
   assert.equal(body.llm, 'none');
+  assert.equal(body.db, undefined, 'healthz must not print the database path on a public host');
 });
 
 test('ask: an on-corpus question is answered with citations to real notes', async () => {

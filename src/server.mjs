@@ -3,7 +3,7 @@
 
 import http from 'node:http';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 import * as dbm from './db.mjs';
 import { checkNote, decidePublication, loadRules } from './gate.mjs';
@@ -14,6 +14,28 @@ import { questionAt, draftNoteFromInterview, slugify, SCRIPT } from './interview
 import * as views from './views.mjs';
 
 const ROUTE_DUE_HOURS = 48;
+
+// Constant-time compare; lengths are allowed to differ (a length leak is not the secret).
+function sameSecret(a, b) {
+  const ab = Buffer.from(String(a), 'utf8');
+  const bb = Buffer.from(String(b), 'utf8');
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+export function basicAuthOk(header, { user, pass }) {
+  if (!user || !pass) return true;
+  if (typeof header !== 'string' || !header.startsWith('Basic ')) return false;
+  let decoded;
+  try {
+    decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+  } catch {
+    return false;
+  }
+  const i = decoded.indexOf(':');
+  if (i < 0) return false;
+  return sameSecret(decoded.slice(0, i), user) && sameSecret(decoded.slice(i + 1), pass);
+}
 const MAX_EXPERTS_PER_QUESTION = 3;
 
 function readEnvFile(path) {
@@ -46,6 +68,10 @@ export function loadConfig(env = process.env) {
     dbPath: merged.XUONG_DB || `${dataDir}/xuong.db`,
     dataDir,
     adminToken,
+    // Optional front gate. Set XUONG_USER + XUONG_PASS before publishing this to a public
+    // hostname: the ask form calls a paid model, so an open instance is an open bill.
+    user: merged.XUONG_USER || '',
+    pass: merged.XUONG_PASS || '',
     bankBin: merged.XUONG_BANK_BIN || '',
     bankAccount: merged.XUONG_BANK_ACCOUNT || '',
     llm: llmConfig(merged)
@@ -112,8 +138,18 @@ export function createApp({ dbPath = 'data/xuong.db', config = loadConfig(), rul
       res.end();
     };
 
-    // --- health ------------------------------------------------------------
-    if (path === '/healthz') return sendJson(200, { ok: true, notes: index.n, llm: config.llm.enabled ? 'configured' : 'none', db: config.dbPath });
+    // --- health (the only path that answers without the front gate) --------
+    if (path === '/healthz') return sendJson(200, { ok: true, notes: index.n, llm: config.llm.enabled ? 'configured' : 'none' });
+
+    // --- front gate: optional HTTP basic auth ------------------------------
+    if (!basicAuthOk(req.headers.authorization, config)) {
+      res.writeHead(401, {
+        'www-authenticate': 'Basic realm="xuong", charset="UTF-8"',
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store'
+      });
+      return res.end(views.unauthorizedPage());
+    }
 
     // --- JSON API (used by tests and by anyone wiring this into a bot) ------
     if (path === '/api/ask' && method === 'POST') {
