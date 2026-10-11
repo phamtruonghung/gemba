@@ -45,6 +45,8 @@ ADMIN_PASSWORD = os.environ.get("UI_ADMIN_PASSWORD") or (None if EXTERNAL else "
 ADMIN_PAGES = [
     ("operator-overview", "/admin"),
     ("operator-practitioners", "/admin/experts"),
+    ("operator-bookings", "/admin/bookings"),
+    ("operator-accounts", "/admin/accounts"),
     ("operator-invitations", "/admin/invites"),
     ("operator-settings", "/admin/settings"),
     ("operator-audit", "/admin/audit"),
@@ -267,7 +269,8 @@ def admin_pass(browser):
     npage.fill("#password", ADMIN_PASSWORD)
     npage.click("button[type=submit]")
     npage.wait_for_load_state("load")
-    for name, path in [("operator-overview", "/admin"), ("operator-practitioners", "/admin/experts")]:
+    for name, path in [("operator-overview", "/admin"), ("operator-practitioners", "/admin/experts"),
+                       ("operator-bookings", "/admin/bookings"), ("operator-accounts", "/admin/accounts")]:
         npage.goto(BASE + path, wait_until="load")
         settle(npage)
         over = npage.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")

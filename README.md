@@ -44,6 +44,32 @@ node scripts/admin-create.mjs --email me@example.com     # create or reset; prin
 | Default session | 45 minutes | What the booking form proposes |
 | Default rate | 600,000 VND/h | Used for a new practitioner with no rate yet |
 
+### Accounts and sessions
+
+`/admin/accounts` lists every account with its role, whether it is on, how many sessions it is holding,
+when it last signed in, and the practitioner row it belongs to.
+
+- **Lock** stops the account signing in *and* ends every session it is already holding. A lock that
+  leaves someone working for as long as their cookie lives is a claim about the future, not about now.
+- **Unlock** restores it; **Sign out everywhere** ends the sessions without locking.
+- **Role** moves an account between asker, operator and practitioner. It refuses two things on purpose:
+  the account you are signed in as (a mistake nobody can undo from inside the console) and the last
+  operator who can sign in (which would lock everybody out). An account cannot be made a practitioner
+  without a roster row, so role changes cannot hand out a desk that does not exist.
+- **An operator is invited, never handed a password.** The invitation carries the role; the form on the
+  page cannot promote the account it creates.
+
+### Bookings, and what happens to the money
+
+`/admin/bookings` is the reconciliation desk: filter by status, mark **Payment received** and **Session
+done**, **Move** a session (the price is re-quoted from the practitioner's current rate and the current
+settings — a reschedule keeps the payment), and **Cancel** with a reason.
+
+Cancelling after the client paid is not a status change, it is money owed back. The platform instructs
+payment and never holds it (ADR-0008), so a cancelled paid booking records the amount and appears under
+**Refunds owed** as an instruction to send back — never as money the platform is sitting on. The page
+also totals what each practitioner has earned: paid out, the platform fee, and what is still in flight.
+
 ### Practitioners, and how one arrives
 
 A practitioner is who a refused question is routed to and where a paid session happens. There is **no
@@ -140,6 +166,8 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 | `GET /desk` | the desk of the signed-in practitioner (the account door, next to `/c/<token>`) |
 | `GET/POST /admin/login`, `POST /admin/logout` | operator sign-in |
 | `GET /admin`, `GET/POST /admin/experts`, `GET/POST /admin/experts/:id` (+ `/invite`, `/pause`, `/resume`, `/rotate`), `GET /admin/invites`, `GET/POST /admin/settings`, `GET /admin/audit` | the operator console |
+| `GET/POST /admin/accounts` (+ `/role`, `/lock`, `/unlock`, `/signout`) | every account, and stopping one |
+| `GET /admin/bookings` (+ `/paid`, `/completed`, `/reschedule`, `/cancel`) | reconcile, move or cancel a booking |
 | `GET /account` | the signed-in asker's own questions and bookings |
 | `POST /api/ask` | JSON ask: question, plant type, asker → answer, citations, coverage, ref |
 | `GET /api/question/:ref` | one question with its answer, citations and expert answers |

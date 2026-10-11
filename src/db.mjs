@@ -71,6 +71,12 @@ create table if not exists bookings (
   payout_vnd integer not null,
   status text not null default 'requested',
   payment_ref text not null default '',
+  cancelled_at text,
+  -- What the client actually paid that the platform now owes them back. Non-zero only when a booking
+  -- was cancelled after it was paid: the platform instructs payment and never holds it (ADR-0008), so
+  -- this is the amount an operator has to send back, not money the platform is sitting on.
+  refund_vnd integer not null default 0,
+  cancel_reason text not null default '',
   created_at text not null
 );
 create table if not exists interviews (
@@ -111,6 +117,7 @@ create table if not exists invites (
   email text not null,
   name text not null default '',
   expert_id integer references experts(id),
+  role text not null default 'expert',
   created_at text not null,
   expires_at text not null,
   accepted_at text,
@@ -157,7 +164,11 @@ export function migrate(db) {
   addColumn('users', 'status', "status text not null default 'active'");
   // An expert may have an account (slice 2: invitation). Nullable: the demo experts have none, and
   // the desk token still works without one.
-  addColumn('experts', 'user_id', 'user_id integer references users(id)');
+  addColumn('experts', 'user_id', 'user_id integer references users(id)')
+  addColumn('invites', 'role', "role text not null default 'expert'")
+  addColumn('bookings', 'cancelled_at', 'cancelled_at text')
+  addColumn('bookings', 'refund_vnd', 'refund_vnd integer not null default 0')
+  addColumn('bookings', 'cancel_reason', "cancel_reason text not null default ''");
   return db;
 }
 
@@ -188,14 +199,6 @@ export function createUser(db, { email, name, password_hash, role = 'asker', sta
     .prepare('insert into users (email, name, password_hash, role, status, created_at) values (?, ?, ?, ?, ?, ?)')
     .run(String(email).trim().toLowerCase(), name, password_hash, role, status, nowIso());
   return userById(db, Number(info.lastInsertRowid));
-}
-
-export function setUserRole(db, id, role) {
-  return db.prepare('update users set role = ? where id = ?').run(role, id).changes;
-}
-
-export function setUserStatus(db, id, status) {
-  return db.prepare('update users set status = ? where id = ?').run(status, id).changes;
 }
 
 /**
@@ -249,6 +252,106 @@ export function countUsers(db) {
 // --- sessions --------------------------------------------------------------
 // The cookie carries an opaque id; this table is the whole of the session state, which is what makes
 // sign-out (and "sign out everywhere") real rather than a client-side illusion.
+
+/**
+ * Every account, with what a person looking at the list actually needs: what it is, whether it is on,
+ * how many sessions it is holding and when it last signed in. Ordered by power, not by id, because the
+ * operator's own account and the practitioners are the ones being looked at; the askers are the tail.
+ */
+export function allUsers(db, { q = '', limit = 200 } = {}) {
+  const search = String(q).trim().toLowerCase();
+  const where = search ? 'where lower(u.email) like ? or lower(u.name) like ?' : '';
+  const args = search ? [`%${search}%`, `%${search}%`] : [];
+  return db
+    .prepare(
+      `select u.id, u.email, u.name, u.role, u.status, u.created_at,
+        (select count(*) from sessions s where s.user_id = u.id and s.expires_at > ?) as live_sessions,
+        (select max(s.created_at) from sessions s where s.user_id = u.id) as last_signin,
+        (select e.id from experts e where e.user_id = u.id) as expert_id,
+        (select e.name from experts e where e.user_id = u.id) as expert_name
+       from users u ${where}
+       order by case u.role when 'admin' then 0 when 'expert' then 1 else 2 end, u.id desc
+       limit ?`
+    )
+    .all(nowIso(), ...args, limit);
+}
+
+export function setUserRole(db, id, role) {
+  if (!['asker', 'expert', 'admin'].includes(role)) throw new Error(`refusing to set role ${role}`);
+  return db.prepare('update users set role = ? where id = ?').run(role, id).changes;
+}
+
+export function setUserStatus(db, id, status) {
+  if (!['active', 'locked'].includes(status)) throw new Error(`refusing to set status ${status}`);
+  return db.prepare('update users set status = ? where id = ?').run(status, id).changes;
+}
+
+/**
+ * How many operators could still get in. A lock or a demotion has to ask this first: refusing to lock
+ * the last operator is the difference between a safeguard and a console nobody can open.
+ */
+export function countActiveAdmins(db) {
+  return db.prepare("select count(*) as n from users where role = 'admin' and status = 'active'").get().n;
+}
+
+// --- bookings, for the operator -------------------------------------------
+
+/**
+ * A cancellation is not just a status. If the client had already paid, the platform owes them a refund
+ * *instruction* — so the amount is recorded, and `refundsOwed` is what an operator works from. Losing
+ * that on cancellation would mean a cancelled paid session quietly became free.
+ */
+export function cancelBooking(db, ref, { reason = '', refundVnd = 0 } = {}) {
+  return db
+    .prepare("update bookings set status = 'cancelled', cancelled_at = ?, cancel_reason = ?, refund_vnd = ? where ref = ?")
+    .run(nowIso(), String(reason).slice(0, 300), Math.max(0, Math.round(refundVnd)), ref).changes;
+}
+
+export function rescheduleBooking(db, ref, { startsAt, minutes, priceVnd, feeVnd, payoutVnd }) {
+  return db
+    .prepare('update bookings set starts_at = ?, minutes = ?, price_vnd = ?, fee_vnd = ?, payout_vnd = ? where ref = ?')
+    .run(startsAt, minutes, priceVnd, feeVnd, payoutVnd, ref).changes;
+}
+
+export function refundsOwed(db) {
+  return db
+    .prepare("select b.*, e.name as expert_name from bookings b left join experts e on e.id = b.expert_id where b.status = 'cancelled' and b.refund_vnd > 0 order by b.cancelled_at desc")
+    .all();
+}
+
+export function allBookings(db, { status = '', limit = 200 } = {}) {
+  const where = status ? 'where b.status = ?' : '';
+  const args = status ? [status] : [];
+  return db
+    .prepare(
+      `select b.*, e.name as expert_name, e.slug as expert_slug from bookings b
+       left join experts e on e.id = b.expert_id ${where}
+       order by case b.status when 'requested' then 0 when 'awaiting_payment' then 1 when 'paid' then 2 else 3 end,
+         b.starts_at limit ?`
+    )
+    .all(...args, limit);
+}
+
+export function bookingStatusCounts(db) {
+  return Object.fromEntries(
+    db.prepare('select status, count(*) as n from bookings group by status').all().map((r) => [r.status, r.n])
+  );
+}
+
+/** What each practitioner has earned, for the page where the operator decides about rates. */
+export function revenueByExpert(db) {
+  return db
+    .prepare(
+      `select e.id, e.name,
+        coalesce(sum(case when b.status = 'completed' then b.payout_vnd else 0 end), 0) as paid_out_vnd,
+        coalesce(sum(case when b.status = 'completed' then b.fee_vnd else 0 end), 0) as fee_vnd,
+        coalesce(sum(case when b.status in ('completed','paid','awaiting_payment') then b.price_vnd else 0 end), 0) as pending_vnd,
+        count(b.id) as bookings
+       from experts e left join bookings b on b.expert_id = e.id
+       group by e.id order by bookings desc, e.name`
+    )
+    .all();
+}
 
 export function createSession(db, { id, userId, expiresAt, userAgent = '' }) {
   db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent) values (?, ?, ?, ?, ?)').run(
@@ -382,15 +485,15 @@ export function expertByUser(db, userId) {
 
 export const INVITE_DAYS = 7;
 
-export function createInvite(db, { token, email, name = '', expertId, createdBy = '', days = INVITE_DAYS }) {
+export function createInvite(db, { token, email, name = '', expertId, role = 'expert', createdBy = '', days = INVITE_DAYS }) {
   const at = new Date();
   const info = db
     .prepare(
-      `insert into invites (token, email, name, expert_id, created_at, expires_at, created_by)
-       values (?, ?, ?, ?, ?, ?, ?)`
+      `insert into invites (token, email, name, expert_id, role, created_at, expires_at, created_by)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
-      token, String(email).trim().toLowerCase(), name, expertId ?? null,
+      token, String(email).trim().toLowerCase(), name, expertId ?? null, role,
       at.toISOString(), new Date(at.getTime() + days * 86400_000).toISOString(), createdBy
     );
   return inviteById(db, Number(info.lastInsertRowid));
