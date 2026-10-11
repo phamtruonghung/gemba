@@ -18,7 +18,10 @@ from playwright.sync_api import sync_playwright
 # The repo this file lives in — never a path from the machine it was written on.
 ROOT = Path(__file__).resolve().parent.parent
 PORT = int(os.environ.get("UI_PORT", "8097"))
-BASE = f"http://127.0.0.1:{PORT}"
+# UI_BASE points the same checks at a running deployment (the LXC, the public tunnel) instead of
+# booting a local one; UI_USER/UI_PASS fill the front gate's basic-auth dialog when it is on.
+BASE = os.environ.get("UI_BASE") or f"http://127.0.0.1:{PORT}"
+EXTERNAL = bool(os.environ.get("UI_BASE"))
 # Default to the system temp dir: a hard-coded path from the author's machine is a check that
 # passes here and cannot pass anywhere else (CI caught exactly that).
 SHOTS = Path(os.environ.get("SHOT_DIR") or Path(tempfile.gettempdir()) / "xuong-ui-shots")
@@ -105,6 +108,11 @@ def sample_png(path):
 
 
 def main():
+    if EXTERNAL:
+        print(f"checking the running instance at {BASE} instead of starting one")
+        run_checks()
+        print(f"\n{'ALL CHECKS PASSED' if not failures else 'FAILURES: ' + ', '.join(failures)}")
+        return 1 if failures else 0
     # Seeded, not ':memory:'. An empty corpus renders a different page — no notes, no experts,
     # zeros in the stats — and checking that page is checking a page nobody will ever see.
     db_path = str(Path(tempfile.gettempdir()) / "xuong-ui-check.db")
@@ -146,7 +154,16 @@ def run_checks():
         )
         for scheme in ("light", "dark"):
             for width in (375, 1440):
-                ctx = browser.new_context(viewport={"width": width, "height": 900}, color_scheme=scheme, device_scale_factor=1)
+                ctx = browser.new_context(
+                    viewport={"width": width, "height": 900},
+                    color_scheme=scheme,
+                    device_scale_factor=1,
+                    http_credentials=(
+                        {"username": os.environ["UI_USER"], "password": os.environ["UI_PASS"]}
+                        if os.environ.get("UI_USER") and os.environ.get("UI_PASS")
+                        else None
+                    ),
+                )
                 page = ctx.new_page()
                 for name, path in PAGES:
                     page.goto(BASE + path, wait_until="load")
