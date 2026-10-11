@@ -1,0 +1,20 @@
+# A temporary public URL for an instance that is otherwise LAN-only.
+#
+# This is the cheap exposure, not the product's front door: a quick tunnel gets a random
+# *.trycloudflare.com hostname that changes every restart and carries no access policy of its own.
+# For a stable hostname with an identity gate in front, use a named tunnel (see README).
+#
+# The instance's own gate (GEMBA_USER/GEMBA_PASS) is what protects it either way: without it, a public
+# quick tunnel is an open bill, because every question spends a model call.
+[Unit]
+Description=Cloudflare quick tunnel for Gemba (temporary public URL)
+After=network-online.target gemba.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8090 --logfile /var/log/gemba-tunnel.log --loglevel info
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
