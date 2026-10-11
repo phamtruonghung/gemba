@@ -2,8 +2,9 @@
 // No API key is configured here, so the AI tier runs in its labelled extractive mode.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { createApp } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
@@ -270,4 +271,28 @@ test('no English state word reaches a Vietnamese page', async () => {
       assert.ok(!body.includes(word), `page ${i} leaks the English state ${word}`);
     }
   }
+});
+
+// Regression: createApp() used to default to a relative 'data/xuong.db' and ignore config.dbPath.
+// The service then read an empty corpus while the installer seeded, and the container volume
+// mounted, a different file — with no error anywhere. The configured path must be the one opened.
+test('the app opens the database the configuration names, not a file next to the source', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xuong-configured-db-'));
+  const configured = join(dir, 'nested', 'xuong.db');
+  const app = createApp({
+    config: {
+      port: 0,
+      host: '127.0.0.1',
+      dbPath: configured,
+      dataDir: dir,
+      adminToken: ADMIN,
+      bankBin: '',
+      bankAccount: '',
+      llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 }
+    },
+    rules: loadRules()
+  });
+  assert.ok(existsSync(configured), 'the configured database file should have been created');
+  assert.equal(app.index().n, 0, 'a fresh configured database starts with an empty corpus');
+  app.db.close?.();
 });

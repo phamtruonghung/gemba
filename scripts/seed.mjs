@@ -8,10 +8,14 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { openDb, upsertExpert, upsertNote, logEvent, stats, publishedNotes } from '../src/db.mjs';
 import { decidePublication, loadRules } from '../src/gate.mjs';
+import { loadConfig } from '../src/server.mjs';
 import { slugify } from '../src/interview.mjs';
 
 const rules = loadRules();
-const dbPath = process.env.XUONG_DB || 'data/xuong.db';
+// The database the server will open, resolved the same way. Hardcoding a relative 'data/xuong.db'
+// here meant the seed wrote to one file while the service read another (XUONG_DB alone was honoured;
+// XUONG_DATA_DIR was not), so a fresh corpus never reached the running app.
+const dbPath = loadConfig().dbPath;
 const db = openDb(dbPath);
 
 const experts = JSON.parse(readFileSync('seed/experts.json', 'utf8'));
