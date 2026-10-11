@@ -37,7 +37,7 @@ create table if not exists questions (
   asker text not null default '',
   contact text not null default '',
   plant_type text not null default '',
-  topic text not null default 'khac',
+  topic text not null default 'other',
   text text not null,
   ai_answer text not null default '',
   ai_citations text not null default '[]',
@@ -90,6 +90,21 @@ create table if not exists events (
   ref text not null default '',
   detail text not null default ''
 );
+create table if not exists users (
+  id integer primary key,
+  email text unique not null,
+  name text not null,
+  password_hash text not null,
+  created_at text not null,
+  last_seen_at text
+);
+create table if not exists sessions (
+  id text primary key,
+  user_id integer not null references users(id) on delete cascade,
+  created_at text not null,
+  expires_at text not null,
+  user_agent text not null default ''
+);
 create index if not exists idx_notes_topic on notes(topic, status);
 create index if not exists idx_questions_status on questions(status);
 create index if not exists idx_bookings_status on bookings(status);
@@ -101,6 +116,25 @@ export function openDb(path = 'data/xuong.db') {
   db.exec('pragma journal_mode = wal;');
   db.exec('pragma foreign_keys = on;');
   db.exec(SCHEMA);
+  migrate(db);
+  return db;
+}
+
+/**
+ * Additive migrations, run on every open so an existing instance (and the SQLite file inside a
+ * running container) picks them up without a manual step. `create table if not exists` above covers
+ * new tables; these cover *columns added to a table that already exists*, which is the case
+ * `create table if not exists` silently does nothing about.
+ */
+export function migrate(db) {
+  const columns = (table) => db.prepare(`select name from pragma_table_info('${table}')`).all().map((r) => r.name);
+  const addColumn = (table, column, ddl) => {
+    if (!columns(table).includes(column)) db.exec(`alter table ${table} add column ${ddl};`);
+  };
+  // Accounts: a question or a booking can belong to a signed-in person. Nullable on purpose —
+  // everything asked before accounts existed stays valid and keeps its display name.
+  addColumn('questions', 'user_id', 'user_id integer references users(id)');
+  addColumn('bookings', 'user_id', 'user_id integer references users(id)');
   return db;
 }
 
@@ -119,6 +153,101 @@ export function makeRef(prefix) {
 
 export function logEvent(db, kind, ref = '', detail = '') {
   db.prepare('insert into events (at, kind, ref, detail) values (?, ?, ?, ?)').run(nowIso(), kind, ref, String(detail).slice(0, 500));
+}
+
+// --- accounts --------------------------------------------------------------
+
+/** The one shape a user is ever handed to the views: never the password hash. */
+export const publicUser = (u) => (u ? { id: u.id, email: u.email, name: u.name, created_at: u.created_at } : null);
+
+export function createUser(db, { email, name, password_hash }) {
+  const info = db
+    .prepare('insert into users (email, name, password_hash, created_at) values (?, ?, ?, ?)')
+    .run(String(email).trim().toLowerCase(), name, password_hash, nowIso());
+  return userById(db, Number(info.lastInsertRowid));
+}
+
+export function userByEmail(db, email) {
+  return db.prepare('select * from users where email = ?').get(String(email ?? '').trim().toLowerCase());
+}
+
+export function userById(db, id) {
+  return db.prepare('select * from users where id = ?').get(id);
+}
+
+export function touchUser(db, id) {
+  db.prepare('update users set last_seen_at = ? where id = ?').run(nowIso(), id);
+}
+
+export function countUsers(db) {
+  return db.prepare('select count(*) c from users').get().c;
+}
+
+// --- sessions --------------------------------------------------------------
+// The cookie carries an opaque id; this table is the whole of the session state, which is what makes
+// sign-out (and "sign out everywhere") real rather than a client-side illusion.
+
+export function createSession(db, { id, userId, expiresAt, userAgent = '' }) {
+  db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent) values (?, ?, ?, ?, ?)').run(
+    id,
+    userId,
+    nowIso(),
+    expiresAt,
+    String(userAgent).slice(0, 200)
+  );
+  return id;
+}
+
+/** The user behind a session id, or null. Expired rows are deleted on sight, so the table cannot
+ *  grow without bound on an instance nobody signs out of. */
+export function sessionUser(db, id) {
+  if (!id) return null;
+  const row = db.prepare('select * from sessions where id = ?').get(String(id));
+  if (!row) return null;
+  if (row.expires_at <= nowIso()) {
+    db.prepare('delete from sessions where id = ?').run(row.id);
+    return null;
+  }
+  return userById(db, row.user_id) ?? null;
+}
+
+export function deleteSession(db, id) {
+  return db.prepare('delete from sessions where id = ?').run(String(id)).changes;
+}
+
+export function deleteSessionsForUser(db, userId) {
+  return db.prepare('delete from sessions where user_id = ?').run(userId).changes;
+}
+
+export function countSessions(db, userId) {
+  return db.prepare('select count(*) c from sessions where user_id = ? and expires_at > ?').get(userId, nowIso()).c;
+}
+
+// --- what an account owns --------------------------------------------------
+
+export function questionsForUser(db, userId, limit = 50) {
+  return db.prepare('select * from questions where user_id = ? order by id desc limit ?').all(userId, limit);
+}
+
+export function bookingsForUser(db, userId, limit = 50) {
+  return db
+    .prepare(
+      `select b.*, e.name as expert_name from bookings b left join experts e on e.id = b.expert_id
+       where b.user_id = ? order by b.id desc limit ?`
+    )
+    .all(userId, limit);
+}
+
+/**
+ * Attach an already-asked question to the account that just signed in. Only an unclaimed question
+ * is claimed, and only by the person holding its ref — a ref is a random 3-character suffix on top
+ * of the date, but "who owns this row" is not something to decide optimistically.
+ */
+export function claimQuestion(db, ref, userId) {
+  const q = questionByRef(db, ref);
+  if (!q || q.user_id) return null;
+  db.prepare('update questions set user_id = ? where id = ?').run(userId, q.id);
+  return questionByRef(db, ref);
 }
 
 // --- experts ---------------------------------------------------------------
@@ -217,9 +346,9 @@ export function notesForExpert(db, expertId) {
 export function insertQuestion(db, q) {
   const ref = q.ref ?? makeRef('X');
   db.prepare(
-    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, status, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`
-  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'khac', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', nowIso());
+    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, status, user_id, created_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`
+  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.user_id ?? null, nowIso());
   return questionByRef(db, ref);
 }
 
@@ -270,9 +399,9 @@ export function recentQuestions(db, limit = 20) {
 export function insertBooking(db, b) {
   const ref = b.ref ?? makeRef('B');
   db.prepare(
-    `insert into bookings (ref, expert_id, asker, contact, topic, agenda, starts_at, minutes, price_vnd, fee_vnd, payout_vnd, status, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?)`
-  ).run(ref, b.expert_id, b.asker, b.contact, b.topic ?? '', b.agenda ?? '', b.starts_at, b.minutes, b.price_vnd, b.fee_vnd, b.payout_vnd, nowIso());
+    `insert into bookings (ref, expert_id, asker, contact, topic, agenda, starts_at, minutes, price_vnd, fee_vnd, payout_vnd, status, user_id, created_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)`
+  ).run(ref, b.expert_id, b.asker, b.contact, b.topic ?? '', b.agenda ?? '', b.starts_at, b.minutes, b.price_vnd, b.fee_vnd, b.payout_vnd, b.user_id ?? null, nowIso());
   return bookingByRef(db, ref);
 }
 

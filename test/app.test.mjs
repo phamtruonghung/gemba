@@ -177,7 +177,7 @@ test('the AI-moderated interview turns eight answers into a published note', asy
   const start = await fetch(`${base}/c/${EXPERT_TOKEN}/interview`);
   const html = await start.text();
   assert.equal(start.status, 200);
-  assert.match(html, /Question 1\/8/);
+  assert.match(html, /Question 1 of 8/);
 
   const idMatch = /name="id" value="(\d+)"/.exec(html);
   assert.ok(idMatch, 'the interview session id is in the form');

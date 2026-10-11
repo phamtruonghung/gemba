@@ -198,7 +198,13 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
 - `answers` — expert answers to routed questions;
 - `bookings` — expert, asker, contact, topic, agenda, `starts_at`, minutes, price/fee/payout,
   state (`requested` → `awaiting_payment` → `paid` → `completed`);
+- `users` — email (unique, lowercased), name, `password_hash` (`scrypt`, salted), created/last seen;
+- `sessions` — session id (32 random bytes), user, expiry, user agent; a session is a row, so signing
+  out revokes it;
 - `events` — an append-only log of what the system did, so a dispute has a record.
+
+`questions.user_id` and `bookings.user_id` are added by an idempotent migration inside `openDb`, so an
+instance seeded before accounts existed keeps its rows and simply has them unattached.
 
 ## 10. Decisions
 
@@ -224,6 +230,17 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
    and a publicly reachable instance without it is an open bill. Relying on a proxy someone has to
    remember to configure is how that gets forgotten.
 
+10. **An account is a key, not a gate.** Askers sign in to keep their questions, not to be allowed
+    in: a guest can still ask, and the question is still answered or refused on its merits. Making
+    the ask *identify* you before it helps you is the fastest way to have nobody ask.
+11. **The session cookie is an opaque id with a row behind it**, not a signed token. Signing out must
+    actually end the session (and one day end *all* of them); a token the server cannot revoke is a
+    promise it cannot keep. Passwords are `scrypt`, salts per account, comparison constant-time.
+12. **The interface is generated from a design system, not decorated afterwards.** The tokens live in
+    `design-system/xuong/MASTER.md`, the CSS in `src/views.mjs` is written against them, and
+    `scripts/ui-check.py` measures the result in a browser (overflow, contrast, focus, tap targets,
+    the painted button). A palette nobody checks is a palette that drifts.
+
 ## 11. Open questions — decide before selling anything
 
 1. **Legal/tax shape**: MoIT registration or notification; who withholds PIT on expert payouts and
@@ -232,6 +249,11 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
 2. **Who the first expert is**, and whether his employer's policy allows paid outside advice
    (moonlighting clauses are the real blocker, not the technology).
 3. **Who owns a note once the machine answers from it** — the expert, the platform, or neither.
+4. **Accounts**: is email verification or a password reset required before a stranger's account
+   matters? Is there any PII obligation (Decree 13/2023 on personal data) once real emails and plant
+   names sit in the same table as questions? A sign-in rate limit is the minimum before exposure.
+5. **Does signing in change the refusal rate?** The product's best lead is a refused question; if
+   accounts let us see the *same* plant asking twice, that is worth more than the count.
 4. **Marketplace or consultancy**: one vetted practitioner (simpler, defensible) versus an open
    expert marketplace (needs vetting, disputes, tiers).
 5. **Refusal economics**: how many refused questions convert to a paid session before the model's

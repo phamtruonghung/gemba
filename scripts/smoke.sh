@@ -63,5 +63,19 @@ curl -s -o /tmp/smoke-gate.html -w '   note with an order number + price → %{h
 grep -oE 'document|person_name|figure|block_term' /tmp/smoke-gate.html | sort -u | sed 's/^/     rule: /'
 
 echo
-echo "── 7. counters"
+echo "── 7. accounts"
+EMAIL="smoke-$(date +%s)@example.com"
+JAR=$(mktemp)
+curl -s -o /dev/null -c "$JAR" -w '   POST /signup → %{http_code}\n' -X POST "$BASE/signup" \
+  --data-urlencode "name=Smoke Asker" --data-urlencode "email=$EMAIL" \
+  --data-urlencode "password=a sentence of ten characters"
+grep -q "xuong_session" "$JAR" && echo "   session cookie set → yes" || echo "   session cookie set → NO"
+curl -s -b "$JAR" "$BASE/account" | grep -oE "Signed in as Smoke Asker|$EMAIL" | sort -u | sed 's/^/     /'
+# The same cookie must mean nothing after signing out: revocation, not forgetting.
+curl -s -o /dev/null -b "$JAR" -c "$JAR" -X POST "$BASE/signout"
+curl -s -o /dev/null -b "$JAR" -w '   GET /account after sign-out → %{http_code}\n' "$BASE/account"
+rm -f "$JAR"
+
+echo
+echo "── 8. counters"
 curl -s "$BASE/healthz" | j 200

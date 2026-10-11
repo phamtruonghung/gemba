@@ -12,6 +12,7 @@ import { askFromCorpus, llmConfig } from './llm.mjs';
 import { quote, formatVnd, MIN_MINUTES, transferInstruction, suggestRateVnd } from './pricing.mjs';
 import { questionAt, draftNoteFromInterview, slugify, SCRIPT } from './interview.mjs';
 import * as views from './views.mjs';
+import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, newSessionId, sessionExpiry, hashPassword, verifyPassword, checkEmail, checkPassword, checkName, SESSION_COOKIE } from './auth.mjs';
 
 const ROUTE_DUE_HOURS = 48;
 
@@ -92,7 +93,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     return index;
   };
 
-  async function runAsk({ text, plant_type = '', asker = '', contact = '', topic = '' }) {
+  async function runAsk({ text, plant_type = '', asker = '', contact = '', topic = '', user_id = null }) {
     const hits = search(text, index, 5);
     const cov = coverage(text, hits, index);
     const inferredTopic = topic || hits[0]?.note?.topic || 'other';
@@ -106,7 +107,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       ai_answer: ai.answer,
       ai_citations: ai.citations,
       ai_coverage: ai.coverage,
-      ai_mode: ai.mode
+      ai_mode: ai.mode,
+      user_id
     });
     dbm.logEvent(db, 'ask', q.ref, `coverage=${ai.coverage} mode=${ai.mode} hits=${hits.length}`);
     return { question: q, hits, ai, cov };
@@ -131,9 +133,19 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const method = req.method ?? 'GET';
     const form = body.form ?? {};
     const json = body.json ?? null;
-    const send = (code, html) => {
-      res.writeHead(code, { 'content-type': 'text/html; charset=utf-8' });
+    const send = (code, html, headers = {}) => {
+      res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', ...headers });
       res.end(html);
+    };
+    // The session cookie is read once per request; `user` is the public shape (never the hash), and
+    // every page that shows a nav needs it.
+    const sessionId = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? '';
+    const account = dbm.sessionUser(db, sessionId);
+    const user = dbm.publicUser(account);
+    const fail = (code, message) => send(code, views.errorPage({ code, message, user }));
+    const withCookie = (to, id, secure) => {
+      res.writeHead(303, { location: to, 'set-cookie': sessionCookie(id, { secure }) });
+      res.end();
     };
     const sendJson = (code, obj) => {
       res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' });
@@ -161,7 +173,14 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (path === '/api/ask' && method === 'POST') {
       const text = (json?.question ?? form.q ?? '').trim();
       if (!text) return sendJson(400, { error: 'missing question' });
-      const out = await runAsk({ text, plant_type: json?.plant_type ?? form.plant_type ?? '', asker: json?.asker ?? form.asker ?? '', contact: json?.contact ?? form.contact ?? '', topic: json?.topic ?? form.topic ?? '' });
+      const out = await runAsk({
+        text,
+        plant_type: json?.plant_type ?? form.plant_type ?? '',
+        asker: json?.asker ?? form.asker ?? account?.name ?? '',
+        contact: json?.contact ?? form.contact ?? account?.email ?? '',
+        topic: json?.topic ?? form.topic ?? '',
+        user_id: account?.id ?? null
+      });
       return sendJson(200, {
         ref: out.question.ref,
         topic: out.question.topic,
@@ -186,29 +205,113 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       return sendJson(200, dbm.listExperts(db).map((e) => ({ slug: e.slug, name: e.name, topics: e.topics, rate_vnd: e.rate_vnd })));
     }
 
+    // --- accounts ----------------------------------------------------------
+    if (path === '/signin' && method === 'GET') {
+      if (account) return redirect('/account');
+      return send(200, views.signInPage({ keep: url.searchParams.get('keep') ?? '', next: url.searchParams.get('next') ?? '', user }));
+    }
+    if (path === '/signup' && method === 'GET') {
+      if (account) return redirect('/account');
+      return send(200, views.signUpPage({ keep: url.searchParams.get('keep') ?? '', user }));
+    }
+    if (path === '/signin' && method === 'POST') {
+      const email = String(form.email ?? '').trim();
+      const password = String(form.password ?? '');
+      const found = dbm.userByEmail(db, email);
+      // One message for both failures. Saying "no account with that email" tells a stranger which
+      // addresses have accounts here, which is the whole of what they wanted to know.
+      if (!found || !(await verifyPassword(password, found.password_hash))) {
+        dbm.logEvent(db, 'signin_failed', '', `email=${email.slice(0, 60)}`);
+        return send(401, views.signInPage({
+          email,
+          error: 'That email and password do not match an account.',
+          field: 'password',
+          keep: String(form.keep ?? ''),
+          user
+        }));
+      }
+      const id = newSessionId();
+      dbm.createSession(db, { id, userId: found.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
+      dbm.touchUser(db, found.id);
+      dbm.logEvent(db, 'signin', '', `user=${found.id}`);
+      // The guest question this person was looking at is claimed on the way through — the whole
+      // point of signing in from that page.
+      const keep = String(form.keep ?? '').trim();
+      if (keep) dbm.claimQuestion(db, keep, found.id);
+      const next = String(form.next ?? '').trim();
+      return withCookie(keep ? `/q/${encodeURIComponent(keep)}` : next && next.startsWith('/') ? next : '/account', id, isSecureRequest(req));
+    }
+    if (path === '/signup' && method === 'POST') {
+      const name = checkName(form.name);
+      const email = checkEmail(form.email);
+      const password = checkPassword(form.password);
+      const reject = (check) =>
+        send(400, views.signUpPage({ name: String(form.name ?? ''), email: String(form.email ?? ''), error: check.error, field: check.field, keep: String(form.keep ?? ''), user }));
+      if (!name.ok) return reject(name);
+      if (!email.ok) return reject(email);
+      if (!password.ok) return reject(password);
+      if (dbm.userByEmail(db, email.value)) {
+        return send(409, views.signUpPage({
+          name: name.value, email: email.value,
+          error: 'There is already an account with that email — sign in instead.',
+          field: 'email', keep: String(form.keep ?? ''), user
+        }));
+      }
+      const created = dbm.createUser(db, { email: email.value, name: name.value, password_hash: await hashPassword(password.value) });
+      const id = newSessionId();
+      dbm.createSession(db, { id, userId: created.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
+      dbm.logEvent(db, 'signup', '', `user=${created.id}`);
+      const keep = String(form.keep ?? '').trim();
+      if (keep) dbm.claimQuestion(db, keep, created.id);
+      return withCookie(keep ? `/q/${encodeURIComponent(keep)}` : '/account', id, isSecureRequest(req));
+    }
+    if (path === '/signout' && method === 'POST') {
+      if (sessionId) dbm.deleteSession(db, sessionId);
+      res.writeHead(303, { location: '/', 'set-cookie': clearedSessionCookie({ secure: isSecureRequest(req) }) });
+      return res.end();
+    }
+    if (path === '/account') {
+      if (!account) return redirect('/signin?next=/account');
+      return send(200, views.accountPage({
+        user,
+        questions: dbm.questionsForUser(db, account.id),
+        bookings: dbm.bookingsForUser(db, account.id),
+        sessions: dbm.countSessions(db, account.id),
+        flash: url.searchParams.get('welcome') === '1' ? 'Account created — everything you ask from now on is kept here.' : ''
+      }));
+    }
+
     // --- pages -------------------------------------------------------------
     if (path === '/') {
       return send(200, views.home({
         stats: dbm.stats(db),
         experts: dbm.listExperts(db),
         notes: dbm.publishedNotes(db).slice(-6).reverse(),
-        questions: dbm.recentQuestions(db, 8)
+        questions: dbm.recentQuestions(db, 8),
+        user
       }));
     }
-    if (path === '/how-it-works') return send(200, views.howItWorksPage());
-    if (path === '/experts') return send(200, views.expertListPage({ experts: dbm.listExperts(db), topics: views.topicList() }));
-    if (path === '/library') return send(200, views.corpusPage({ notes: (() => { const t = url.searchParams.get('topic'); const all = dbm.publishedNotes(db); return t ? all.filter((n) => n.topic === t) : all; })(), topic: url.searchParams.get('topic') ?? '', topics: views.topicList() }));
+    if (path === '/how-it-works') return send(200, views.howItWorksPage({ user }));
+    if (path === '/experts') return send(200, views.expertListPage({ experts: dbm.listExperts(db), topics: views.topicList(), user }));
+    if (path === '/library') return send(200, views.corpusPage({ notes: (() => { const t = url.searchParams.get('topic'); const all = dbm.publishedNotes(db); return t ? all.filter((n) => n.topic === t) : all; })(), topic: url.searchParams.get('topic') ?? '', topics: views.topicList(), user }));
     if (path.startsWith('/notes/')) {
       const slug = decodeURIComponent(path.slice('/notes/'.length));
       const note = dbm.noteBySlug(db, slug);
-      if (!note || note.status !== 'published') return send(404, views.errorPage({ code: 404, message: 'No such note in the library.' }));
+      if (!note || note.status !== 'published') return fail(404, 'No such note in the library.');
       const expert = note.expert_id ? dbm.listExperts(db).find((e) => e.id === note.expert_id) : null;
-      return send(200, views.notePage({ note, expert }));
+      return send(200, views.notePage({ note, expert, user }));
     }
     if (path === '/ask' && method === 'POST') {
       const text = String(form.q ?? '').trim();
-      if (!text) return send(400, views.errorPage({ code: 400, message: 'No question was entered.' }));
-      const out = await runAsk({ text, plant_type: form.plant_type ?? '', asker: form.asker ?? '', contact: form.contact ?? '', topic: form.topic ?? '' });
+      if (!text) return fail(400, 'No question was entered.');
+      const out = await runAsk({
+        text,
+        plant_type: form.plant_type ?? '',
+        asker: String(form.asker ?? '').trim() || account?.name || '',
+        contact: String(form.contact ?? '').trim() || account?.email || '',
+        topic: form.topic ?? '',
+        user_id: account?.id ?? null
+      });
       return redirect(`/q/${out.question.ref}`);
     }
 
@@ -216,23 +319,26 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const qMatch = /^\/q\/([^/]+)$/.exec(path);
     if (qMatch) {
       const q = dbm.questionByRef(db, decodeURIComponent(qMatch[1]));
-      if (!q) return send(404, views.errorPage({ code: 404, message: 'No such question.' }));
+      if (!q) return fail(404, 'No such question.');
       const ids = JSON.parse(q.ai_citations);
       const cited = ids.map((id) => dbm.publishedNotes(db).find((n) => n.id === id)).filter(Boolean);
+      const owned = Boolean(account && q.user_id === account.id);
       return send(200, views.questionPage({
         q,
         aiCitations: cited,
         answers: dbm.answersFor(db, q.ref),
         experts: dbm.listExperts(db),
         routedNames: dbm.expertsForTopic(db, q.topic).map((e) => e.name),
-        bankConfigured: Boolean(config.bankBin && config.bankAccount)
+        bankConfigured: Boolean(config.bankBin && config.bankAccount),
+        user,
+        claimed: owned
       }));
     }
     const escMatch = /^\/q\/([^/]+)\/ask-expert$/.exec(path);
     if (escMatch && method === 'POST') {
       const ref = decodeURIComponent(escMatch[1]);
       const q = dbm.questionByRef(db, ref);
-      if (!q) return send(404, views.errorPage({ code: 404, message: 'No such question.' }));
+      if (!q) return fail(404, 'No such question.');
       if (q.contact === '' && (form.contact ?? '')) {
         db.prepare('update questions set contact = ?, asker = ? where ref = ?').run(String(form.contact), String(form.asker ?? ''), ref);
       }
@@ -246,19 +352,20 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     function createBooking(send, redirect, { ref, form }) {
       const expertSlug = String(form.expert ?? '');
       const expert = dbm.listExperts(db).find((e) => e.slug === expertSlug);
-      if (!expert) return send(400, views.errorPage({ code: 400, message: 'No valid expert selected.' }));
+      if (!expert) return fail(400, 'No valid expert selected.');
       const minutes = Number(form.minutes ?? 45);
       let money;
       try {
         money = quote(expert.rate_vnd, minutes);
       } catch (err) {
-        return send(400, views.errorPage({ code: 400, message: String(err.message) }));
+        return fail(400, String(err.message));
       }
       const q = ref ? dbm.questionByRef(db, ref) : null;
       const b = dbm.insertBooking(db, {
         expert_id: expert.id,
-        asker: String(form.asker ?? '').trim() || 'guest',
-        contact: String(form.contact ?? '').trim(),
+        user_id: account?.id ?? null,
+        asker: String(form.asker ?? '').trim() || account?.name || 'guest',
+        contact: String(form.contact ?? '').trim() || account?.email || '',
         topic: String(form.topic ?? q?.topic ?? 'other'),
         agenda: String(form.agenda ?? q?.text ?? '').slice(0, 1000),
         starts_at: String(form.starts_at ?? '').trim(),
@@ -274,17 +381,17 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const bMatch = /^\/b\/([^/]+)$/.exec(path);
     if (bMatch) {
       const b = dbm.bookingByRef(db, decodeURIComponent(bMatch[1]));
-      if (!b) return send(404, views.errorPage({ code: 404, message: 'No such booking.' }));
+      if (!b) return fail(404, 'No such booking.');
       const instruction = config.bankBin && config.bankAccount
         ? transferInstruction({ bankBin: config.bankBin, account: config.bankAccount, amountVnd: b.price_vnd, ref: b.ref })
         : null;
-      return send(200, views.bookingPage({ b, instruction, bankConfigured: Boolean(instruction) }));
+      return send(200, views.bookingPage({ b, instruction, bankConfigured: Boolean(instruction), user }));
     }
     const paidMatch = /^\/b\/([^/]+)\/transferred$/.exec(path);
     if (paidMatch && method === 'POST') {
       const ref = decodeURIComponent(paidMatch[1]);
       const b = dbm.bookingByRef(db, ref);
-      if (!b) return send(404, views.errorPage({ code: 404, message: 'No such booking.' }));
+      if (!b) return fail(404, 'No such booking.');
       if (b.status === 'requested') dbm.setBookingStatus(db, ref, 'awaiting_payment');
       return redirect(`/b/${ref}`);
     }
@@ -295,7 +402,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const token = decodeURIComponent(cMatch[1]);
       const sub = cMatch[2] ?? '';
       const expert = dbm.expertByToken(db, token);
-      if (!expert) return send(404, views.errorPage({ code: 404, message: 'This link is not valid.' }));
+      if (!expert) return fail(404, 'This link is not valid.');
 
       if (sub === '' && method === 'GET') {
         return send(200, views.expertWorkspacePage({
@@ -339,7 +446,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         if (method === 'POST') {
           const id = Number(form.id);
           const it = dbm.interviewById(db, id);
-          if (!it || it.expert_id !== expert.id) return send(404, views.errorPage({ code: 404, message: 'That interview session is not valid.' }));
+          if (!it || it.expert_id !== expert.id) return fail(404, 'That interview session is not valid.');
           const advanced = dbm.advanceInterview(db, id, String(form.answer ?? '').trim());
           if (advanced.step >= SCRIPT.length) {
             const answers = JSON.parse(advanced.answers);
@@ -385,7 +492,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (aMatch) {
       const token = decodeURIComponent(aMatch[1]);
       const sub = aMatch[2] ?? '';
-      if (token !== config.adminToken) return send(404, views.errorPage({ code: 404, message: 'No such page.' }));
+      if (token !== config.adminToken) return fail(404, 'No such page.');
       if (sub === '/confirm' && method === 'POST') {
         const ref = String(form.ref ?? '');
         const b = dbm.bookingByRef(db, ref);
@@ -409,11 +516,13 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         pendingBookings: dbm.bookingsFor(db, {}).filter((b) => b.status !== 'cancelled'),
         blockedNotes: db.prepare(`select * from notes where status = 'blocked' order by id desc`).all(),
         openQuestions: dbm.recentQuestions(db, 30),
-        answerable: db.prepare(`select * from questions where status = 'routed'`).all().filter((q) => !answered.has(q.id))
+        answerable: db.prepare(`select * from questions where status = 'routed'`).all().filter((q) => !answered.has(q.id)),
+        accounts: dbm.countUsers(db),
+        user
       }));
     }
 
-    return send(404, views.errorPage({ code: 404, message: `There is no page ${path}.` }));
+    return fail(404, `There is no page ${path}.`);
   }
 
   const server = http.createServer(async (req, res) => {
@@ -432,7 +541,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       await handle(req, res, { form, json });
     } catch (err) {
       res.writeHead(500, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(views.errorPage({ code: 500, message: String(err?.message ?? err) }));
+      res.end(fail(500, String(err?.message ?? err)));
     }
   });
 
