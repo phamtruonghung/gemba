@@ -7,9 +7,9 @@
 ---
 
 **Project:** Xuong
-**Generated:** 2026-10-11 10:32:41
-**Category:** B2B Service
-**Design Dials:** Variance 4/10 (Balanced / Modern) | Motion 2/10 (Subtle) | Density 5/10 (Standard)
+**Generated:** 2026-10-11 12:31:07
+**Category:** General
+**Design Dials:** Variance 5/10 (Balanced / Modern) | Motion 2/10 (Subtle) | Density 6/10 (Standard)
 
 ---
 
@@ -19,40 +19,76 @@
 
 | Role | Hex | CSS Variable |
 |------|-----|--------------|
-| Primary | `#0F172A` | `--color-primary` |
-| On Primary | `#FFFFFF` | `--color-on-primary` |
-| Secondary | `#334155` | `--color-secondary` |
-| On Secondary | `#FFFFFF` | `--color-on-secondary` |
-| Accent/CTA | `#0369A1` | `--color-accent` |
-| On Accent/CTA | `#FFFFFF` | `--color-on-accent` |
-| Background | `#F8FAFC` | `--color-background` |
-| Foreground | `#020617` | `--color-foreground` |
+| Brand / Accent / CTA | `#EA580C` | `--color-accent` |
+| On Accent/CTA | `#1A0D03` | `--color-on-accent` |
+| Accent hover / pressed | `#C2410C` | `--color-accent-hover` |
+| Accent as text (links) | `#9A3412` | `--color-accent-ink` |
+| Accent tint (soft fills) | `#FFF1E6` | `--color-accent-tint` |
+| Background (warm paper) | `#F7F4F1` | `--color-background` |
+| Foreground (ink) | `#0B1A1D` | `--color-foreground` |
 | Card | `#FFFFFF` | `--color-card` |
-| Card Foreground | `#020617` | `--color-card-foreground` |
-| Muted | `#E8ECF1` | `--color-muted` |
-| Muted Foreground | `#475569` | `--color-muted-foreground` |
-| Border | `#E2E8F0` | `--color-border` |
-| Destructive | `#DC2626` | `--color-destructive` |
-| On Destructive | `#FFFFFF` | `--color-on-destructive` |
-| Ring | `#0F172A` | `--color-ring` |
+| Muted | `#F1ECE6` | `--color-muted` |
+| Muted Foreground | `#5B5A57` | `--color-muted-foreground` |
+| Border | `#E7E1DA` | `--color-border` |
+| Graphite (structure, refusals) | `#334155` | `--color-graphite` |
+| Dark band | `#1A1614` | `--color-band` |
+| Destructive | `#B91C1C` | `--color-destructive` |
 
-**Color Notes:** Professional navy + blue CTA
+**Color Notes:** Orange is the brand colour — the generated system had it as an accent beside industrial
+grey #64748B; the product's own decision is that orange *is* the theme, so it carries the primary action,
+the brand mark, the tint fills and the dark band's highlight. The neutral moved from cool slate to a warm
+paper pair (`#F7F4F1` / `#0B1A1D`) to sit with it. Graphite `#334155` is kept for structure and for the
+refusal panel — a refusal must not be mistaken for the brand's own accent, and it must not read as an
+error either. Every pair above was measured at 4.5:1 or better on the rendered page in both themes.
+
+**Dark mode:** `#141110` background, `#1D1917` cards, accent `#FB923C` with `#1A0D03` text, accent-as-text
+`#FDBA74`. Driven by `prefers-color-scheme`, overridden in one token block.
 
 ### Typography
 
-- **Heading Font:** Roboto
-- **Body Font:** Roboto
-- **Mood:** material design 3, md3, android, google, tonal, friendly, rounded, accessible, adaptive
-- **Google Fonts:** [Roboto + Roboto](https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;1,400)
+- **Heading Font:** system UI stack (`Segoe UI Variable Text`, `Segoe UI`, `system-ui`, …)
+- **Body Font:** the same stack
+- **Mood:** geometric, modern, clean, balanced — the *scale and tracking* are borrowed from the
+  structure reference (a display sans at ~64px/500 with -0.03em tracking and a 0.98 line-height for h1),
+  not the font file.
 
-**CSS Import:**
-```css
-@import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap');
-```
+**No webfont request, on purpose.** The generated pairing (Outfit + Work Sans) and the reference's Geist
+both need `fonts.googleapis.com`; this app runs as an appliance on a factory LAN and behind a tunnel, so a
+third-party request on every page load is a blank flash and a dependency. See the header comment in
+`src/views.mjs`. If a webfont is ever wanted, self-host the woff2 in the repo rather than link Google.
+
+### Structure reference
+
+The page shape follows `arbolus.com`, read with `scripts/read-reference.py` (outline, computed styles,
+screenshots) rather than copied by eye:
+
+1. thin dark utility bar — one status on the left, account links right
+2. light nav bar — logo left, nav pills, one filled CTA right
+3. centred hero — small uppercase stat row, very large headline (breaks to two lines), lead, one button
+4. the product's primary action — the ask form in a single card, max-width 820px
+5. a three-column feature row divided by hairlines, each with a small uppercase pill tag
+6. a two-column block: prose + outline button on the left, a framed example on the right, with stat cards
+7. a full-width **dark band** carrying the profile cards (the reference's carousel section, as a grid)
+8. a four-card grid — the four rungs
+9. a two-column money block: text left, a tinted panel with a tilted mockup card right
+10. a three-card quote row — what a refusal sounds like, from the real corpus
+11. a three-card "who it is for" row
+12. a resource-card grid — the published notes, with topic tag and reading time
+13. a closing dark CTA band
+14. a four-column footer plus a legal/prototype base row
+
+### Typography and spacing, as rendered
+
+- h1 `clamp(38px, 6.2vw, 64px)`, weight 600, tracking -0.03em, line-height 0.98
+- h2 `clamp(26px, 3.4vw, 42px)`, weight 600, tracking -0.02em
+- lead `clamp(17px, 1.6vw, 20px)` in muted foreground
+- eyebrow: 12px, weight 650, tracking 0.14em, uppercase
+- sections: 64px vertical rhythm (88px for the hero), 1200px container, 820px for reading-width pages
+- cards: 16px radius, 1px border, 24px padding; buttons are pills at 46px minimum height
 
 ### Spacing Variables
 
-*Density: 5/10 — Standard*
+*Density: 6/10 — Standard*
 
 | Token | Value | Usage |
 |-------|-------|-------|
@@ -82,7 +118,7 @@
 ```css
 /* Primary Button */
 .btn-primary {
-  background: #0369A1;
+  background: #EA580C;
   color: white;
   padding: 12px 24px;
   border-radius: 8px;
@@ -99,8 +135,8 @@
 /* Secondary Button */
 .btn-secondary {
   background: transparent;
-  color: #0F172A;
-  border: 2px solid #0F172A;
+  color: #64748B;
+  border: 2px solid #64748B;
   padding: 12px 24px;
   border-radius: 8px;
   font-weight: 600;
@@ -139,9 +175,9 @@
 }
 
 .input:focus {
-  border-color: #0F172A;
+  border-color: #64748B;
   outline: none;
-  box-shadow: 0 0 0 3px #0F172A20;
+  box-shadow: 0 0 0 3px #64748B20;
 }
 ```
 
@@ -167,21 +203,21 @@
 
 ## Style Guidelines
 
-**Style:** Accessible & Ethical
+**Style:** Minimalism & Swiss Style
 
-**Keywords:** Accessible, inclusive interface, high contrast, large text (16px+), keyboard navigation, screen reader friendly, accessibility standards aware, focus state, semantic
+**Keywords:** Clean, simple, spacious, functional, white space, high contrast, geometric, sans-serif, grid-based, essential
 
-**Best For:** Government, healthcare, education, inclusive products, large audience, legal compliance, public
+**Best For:** Enterprise apps, dashboards, documentation sites, SaaS platforms, professional tools
 
-**Key Effects:** Clear focus rings (3-4px), ARIA labels, skip links, responsive design, reduced motion, 44x44px touch targets
+**Key Effects:** Subtle hover (200-250ms), smooth transitions, sharp shadows if any, clear type hierarchy, fast loading
 
 ### Page Pattern
 
-**Pattern Name:** Trust & Authority + Conversion
+**Pattern Name:** Hero + Features + CTA
 
-- **Conversion Strategy:** Security badges. Case studies. Transparent pricing. Low-friction form. Provide pause/stop and stop the logo carousel on focus, hover, and reduced motion. Previous/next controls provide the keyboard equivalent; pause offscreen/hidden and render a static logo set under reduced motion.
-- **CTA Placement:** Contact Sales / Get Quote (primary) + Nav
-- **Section Order:** Hero (mission/credibility) > Proof (logos, certs, stats) > Solution overview > Clear CTA path
+- **Conversion Strategy:** Deep CTA placement. For CTA label text, verify at least 4.5:1 against the button fill; use 7:1 only when the product explicitly targets AAA normal-text contrast. Keep focus and component boundaries independently visible. Disable hero parallax under reduced motion and render its static final state.
+- **CTA Placement:** Hero (sticky) + Bottom
+- **Section Order:** Hero with headline/image > Value prop > Key features (3-5) > CTA section > Footer
 
 ---
 
@@ -203,9 +239,6 @@ gsap.from(el, { opacity: 0, y: 12, duration: 0.35, ease: 'power1.out', scrollTri
 
 ## Anti-Patterns (Do NOT Use)
 
-- ❌ Playful design
-- ❌ Hidden credentials
-- ❌ AI purple/pink gradients
 
 ### Additional Forbidden Patterns
 
