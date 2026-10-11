@@ -148,15 +148,35 @@ done
 echo
 echo "health above must show ok:true and the note count."
 # One factual question through the live AI tier, so a broken key shows up here and not in front
-# of a customer. It is a real question about a real note in the seeded corpus.
+# of a customer. It is a real question about a real note in the seeded corpus — and the installer
+# then deletes the row it created: a verification step must not leave its own test data on the
+# instance it just verified (the home page counts questions, and an operator cannot tell the
+# installer's probe from a real one).
 echo "live ask:"
 # Behind the front gate the smoke question needs the same credentials a browser uses, otherwise
 # the gate answers 401 and the check fails on a JSON parse instead of on the thing it tests.
 AUTH=()
 if [ -n "${XUONG_USER:-}" ] && [ -n "${XUONG_PASS:-}" ]; then AUTH=(-u "$XUONG_USER:$XUONG_PASS"); fi
+PROBE_JSON="$(mktemp)"
+PROBE_REF_FILE="$(mktemp)"
 curl -fsS "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/api/ask" -H 'content-type: application/json' \
-  -d '{"question":"the machine stops mid-shift — what should I check, and in what order?"}' \
-  | python3 -c 'import json,sys; d=json.load(sys.stdin); print("  coverage:", d["coverage"], "| mode:", d["mode"], "| cited:", [c["title"] for c in d["citations"]])'
+  -d '{"question":"the machine stops mid-shift — what should I check, and in what order?"}' -o "$PROBE_JSON"
+python3 - "$PROBE_JSON" "$PROBE_REF_FILE" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print("  coverage:", d["coverage"], "| mode:", d["mode"], "| cited:", [c["title"] for c in d["citations"]])
+open(sys.argv[2], "w").write(d.get("ref", ""))
+PY
+PROBE_REF="$(cat "$PROBE_REF_FILE")"
+rm -f "$PROBE_JSON" "$PROBE_REF_FILE"
+if [ -n "$PROBE_REF" ]; then
+  PROBE_REF="$PROBE_REF" DB="$DATA_DIR/xuong.db" "$NODE_DIR/bin/node" -e '
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(process.env.DB);
+    const n = db.prepare("DELETE FROM questions WHERE ref = ?").run(process.env.PROBE_REF).changes;
+    console.log("  probe question removed from the instance:", n, "row");
+    db.close();'
+fi
 
 TOKEN="$(sed -n 's/^XUONG_ADMIN_TOKEN=//p' "$ENV_DIR/xuong.env")"
 if [ -z "$TOKEN" ]; then TOKEN="$(cat "$DATA_DIR/admin.token" 2>/dev/null || true)"; fi
