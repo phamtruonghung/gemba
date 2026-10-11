@@ -322,6 +322,36 @@ def run_checks():
                     bg = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
                     check("dark mode is applied", parse_rgb(bg) is not None and sum(parse_rgb(bg)) < 200, bg)
 
+                # The reading view: a note is markdown and a reader should see prose. A screenshot cannot
+                # assert this, and a test on the renderer alone misses the wiring between page and server.
+                page.goto(BASE + "/library", wait_until="load")
+                first_note = page.evaluate("() => { const a = document.querySelector('a[href^=\"/notes/\"]'); return a ? a.getAttribute('href') : null; }")
+                if not first_note:
+                    check(f"a note is reachable from the library — {scheme}", False, "no note link on /library")
+                else:
+                    page.goto(BASE + first_note, wait_until="load")
+                    prose = page.evaluate(
+                        """() => {
+                          const el = document.querySelector('.prose');
+                          return el ? { blocks: el.children.length, text: el.innerText } : { blocks: 0, text: '' };
+                        }"""
+                    )
+                    check(f"the note body renders as prose — {scheme}", prose["blocks"] > 0, f"{prose['blocks']} blocks")
+                    leak = re.search(r"\[\[|\*\*|(^|\s)#{2,}\s", prose["text"], re.M)
+                    check(f"no markdown syntax survives on a note page — {scheme}", leak is None, repr(leak.group(0)) if leak else "")
+
+                # A form that waits on a model has to say so, or a working form reads as a broken one.
+                page.goto(BASE + "/", wait_until="load")
+                pending = page.evaluate(
+                    """() => {
+                      const form = document.querySelector('form[data-pending]');
+                      const script = [...document.scripts].some((s) => s.textContent.includes('data-pending'));
+                      if (!form) return { ok: false, why: 'no form declares data-pending' };
+                      return { ok: script && !!form.querySelector('[data-pending-note]'), why: script ? '' : 'no script handles it' };
+                    }"""
+                )
+                check(f"the ask form announces that it is working — {scheme}", pending["ok"], pending["why"])
+
                 ctx.close()
         browser.close()
 

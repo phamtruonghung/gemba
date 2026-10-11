@@ -36,7 +36,10 @@ before(async () => {
   });
   upsertNote(app.db, {
     expert_id: expertId, slug: 'markup-note', title: 'A note that exists so a page has something on it',
-    topic: 'tpm', body: 'The press stops because the guard sensor drifts.\n\nCheck it first.',
+    topic: 'tpm',
+    // A body with real markdown in it: the reading view is the thing under test.
+    body: 'The press stops because the guard sensor drifts.\n\n## What to check first\n\n'
+      + '- The guard sensor gap.\n- The *reset* lever.\n\nCheck the sensor before the lever, as [[markup-note]] says.',
     status: 'published', gate: { verdict: 'clean', ok: true, needs_attestation: false, findings: [] },
     origin: 'demo'
   });
@@ -97,4 +100,33 @@ test('the theme is orange and it is a token, not a scattered literal', async () 
   assert.match(html, /--color-accent:#ea580c/i);
   assert.match(html, /class="brand"/);
   assert.match(html, /<svg class="ico"[^>]*>\s*<path/, 'a glyph with a path in it');
+});
+
+test('a note reads as prose, not as its own markdown source', async () => {
+  // The bug this guards: the note page printed `esc(note.body)`, so a reader met "## What to check
+  // first" with the hashes and the bullets as hyphens — the syntax of the note, not the note.
+  const { html } = await get('/notes/markup-note');
+  assert.match(html, /<div class="prose">/, 'the body renders in the reading view');
+  assert.match(html, /<h2>What to check first<\/h2>/, 'a section heading is a heading');
+  assert.match(html, /<ul>\s*<li>The guard sensor gap\.<\/li>/, 'a bullet is a bullet');
+  assert.match(html, /<em>reset<\/em>/, 'and emphasis is emphasis');
+
+  const page = html.replace(/<style>[\s\S]*?<\/style>/, '');
+  assert.ok(!/##\s/.test(page), 'no heading syntax survives on the page');
+  assert.ok(!/<li>- /.test(page), 'and no bullet is printed as a hyphen');
+});
+
+test('a form that waits on a model says so instead of looking broken', async () => {
+  const { html } = await get('/');
+  assert.match(html, /data-pending="Thinking…"/, 'the ask form declares what to say while it waits');
+  assert.match(html, /data-pending-note/, 'and carries a place to say it');
+  assert.match(html, /addEventListener\('submit'/, 'the one script listens for the submit');
+});
+
+test('a note that names another note links to it', async () => {
+  // The renderer resolves `[[name]]`; this proves the server hands it the library's own slugs, which is
+  // the half a unit test on the renderer cannot see.
+  const { html } = await get('/notes/markup-note');
+  assert.match(html, /<a href="\/notes\/markup-note">/, 'the reference is a link to the note');
+  assert.ok(!html.includes('[['), 'and the wiki brackets never reach the reader');
 });
