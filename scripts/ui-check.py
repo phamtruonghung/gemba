@@ -146,6 +146,17 @@ def main():
     return 1 if failures else 0
 
 
+# A capture taken while the entry fade is still running photographs a dark band at partial opacity:
+# mid-grey with pale text. That is a picture of an animation, not of the design, and it is how a
+# contrast alarm (or a false all-clear) gets raised by the screenshots this script leaves behind.
+SETTLE_CSS = "*{animation:none!important;transition:none!important;opacity:1!important}"
+
+
+def settle(page):
+    page.emulate_media(reduced_motion="reduce")
+    page.add_style_tag(content=SETTLE_CSS)
+
+
 def run_checks():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
@@ -233,6 +244,7 @@ def run_checks():
                     check(f"card actions line up — {tag}", not misaligned, "; ".join(misaligned[:3]))
 
                     if width == 1440:
+                        settle(page)
                         page.screenshot(path=str(SHOTS / f"{name}-{scheme}.png"), full_page=True)
 
                 # keyboard: the first Tab reaches the skip link, and focus is visible
