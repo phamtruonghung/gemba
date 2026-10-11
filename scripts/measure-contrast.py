@@ -51,9 +51,17 @@ def report(path):
             start = cur
     runs.append((start, rows[-1]))
     y0, y1 = max(runs, key=lambda r: r[1] - r[0])
-    bg = Counter(
+    dark = Counter(
         p for p in (px[x, y] for y in range(y0, y1, 2) for x in range(20, W - 20, 11)) if lum(p) < 0.12
-    ).most_common(1)[0][0]
+    )
+    if not dark:
+        # A run of rows can look dark on the sampled columns and contain no dark pixel once the
+        # finer grid is used (line art, a photograph, a page rendered with different fonts). That is
+        # a picture this script cannot read, not a contrast failure — and crashing here would turn a
+        # green build red with a traceback, which is the worst of both answers.
+        print(f"{Path(path).name}: rows {y0}-{y1} read as a band but carry no dark pixel — skipped")
+        return 0
+    bg = dark.most_common(1)[0][0]
 
     light = Counter()
     for y in range(y0, y1):
