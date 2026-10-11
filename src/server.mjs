@@ -301,7 +301,14 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const note = dbm.noteBySlug(db, slug);
       if (!note || note.status !== 'published') return fail(404, 'No such note in the library.');
       const expert = note.expert_id ? dbm.listExperts(db).find((e) => e.id === note.expert_id) : null;
-      return send(200, views.notePage({ note, expert, user }));
+      // `[[wiki links]]` in a note name other notes by their vault name; resolve them against what
+      // the library actually holds, under both the stored slug and its bare name.
+      const links = new Map();
+      for (const n of dbm.publishedNotes(db)) {
+        links.set(n.slug, n.title);
+        links.set(n.slug.replace(/^(vault|demo)-/, ''), n.title);
+      }
+      return send(200, views.notePage({ note, expert, user, links }));
     }
     if (path === '/ask' && method === 'POST') {
       const text = String(form.q ?? '').trim();

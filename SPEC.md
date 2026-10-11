@@ -259,6 +259,16 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
     not a mood board. A refusal is graphite, not amber: with orange as the brand, an amber panel
     would read as brand emphasis, and a refusal must read as neither praise nor error.
 
+16. **A note is rendered, not printed.** The corpus, the expert notes and the interview drafts are
+    markdown; `src/markdown.mjs` turns them into prose for the reading view — headings as headings,
+    bullets as hanging bullets, a table as a table, and `[[wiki references]]` as real links when the
+    library holds the note and as plain names when it does not. It escapes the text **first** and
+    builds tags around the escaped text, so no note can inject markup whatever its author wrote, and a
+    `javascript:` URL never becomes an anchor. The one script in the product exists for the same
+    reason: a submit that waits on a model call has to say it is working (`data-pending`), or a
+    working form reads as a broken one and gets clicked twice. It is progressive enhancement — with
+    JavaScript off the forms post exactly as before.
+
 ## 11. Open questions — decide before selling anything
 
 1. **Legal/tax shape**: MoIT registration or notification; who withholds PIT on expert payouts and

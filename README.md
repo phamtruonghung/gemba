@@ -155,10 +155,15 @@ resource cards, a closing dark CTA band, and a four-column footer.
   checked at 4.5:1 or better — on the rendered page, and again from the screenshot's own pixels
   (`scripts/measure-contrast.py`), because a style-based check can pair the wrong background inside
   a dark band.
-- **No client JavaScript.** The one motion in the system (a short entry fade) is CSS, and it is
+- **One inline script, no client-side rendering.** Pages are built on the server; the only script
+  reports that a slow submit is in flight (`data-pending` on the ask and desk forms) and still posts
+  correctly with JavaScript off. The one motion in the system (a short entry fade) is CSS, and it is
   off under `prefers-reduced-motion`. A factory-floor browser and a locked-down corporate one both
   work. Screenshots are taken with animation disabled: a capture taken mid-fade shows a band at
   partial opacity and invents a contrast failure that does not exist.
+- **A note is rendered as prose, not printed as markdown.** The reading view (`src/markdown.mjs`) turns
+  a note into headings, hanging bullets, real tables and working `[[wiki references]]`, escaping the
+  text before it builds any tag — so a note cannot inject markup, whoever wrote it.
 - **Accessible by construction**: a skip link, visible focus rings, `aria-current` on the current
   nav item, labels bound to every field, errors next to the field that caused them, and 44px touch
   targets for controls (inline links in text are exempt under WCAG 2.2). `scripts/ui-check.py`
