@@ -26,6 +26,24 @@ jobs:
       - name: Unit and end-to-end tests (node:test, no dependencies)
         run: node --test test/*.test.mjs
 
+  ui:
+    # The design system is only as good as the check that runs on it. This job measures the pages
+    # in a real browser (overflow at phone and desktop widths, contrast, focus, tap targets, the
+    # painted button), so a token cannot quietly drift into an unreadable palette.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install playwright pillow && python -m playwright install --with-deps chromium
+      - name: Interface checks in a headless browser
+        run: python scripts/ui-check.py
+
   image:
     needs: test
     runs-on: ubuntu-latest

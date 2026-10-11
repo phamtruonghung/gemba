@@ -91,6 +91,8 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 | Route | What it does |
 |---|---|
 | `GET /healthz` | liveness + corpus size + whether the model is configured |
+| `GET/POST /signup`, `GET/POST /signin`, `POST /signout` | create an account, sign in, sign out |
+| `GET /account` | the signed-in asker's own questions and bookings |
 | `POST /api/ask` | JSON ask: question, plant type, asker → answer, citations, coverage, ref |
 | `GET /api/question/:ref` | one question with its answer, citations and expert answers |
 | `GET /api/experts` | expert profiles |
@@ -102,6 +104,49 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 | `POST /c/:token/note` | expert submits a note (goes through the gate) |
 | `POST /c/:token/interview` | AI-moderated interview that drafts a note, then gates it |
 | `POST /c/:token/confirm`, `/complete` | operator: money arrived; session done |
+
+## Accounts, and what signing in changes
+
+An asker can create an account (name, email, password) and sign in. The session cookie is an
+**opaque random id** with a row in `sessions` — not a signed token — so signing out *revokes* it
+server-side rather than trusting the client to forget. Passwords are hashed with `scrypt` at Node's
+defaults (`N=16384, r=8, p=1`), salts are per-account, verification is constant-time, and the hash
+never leaves the database. Password policy is length only (10+ characters, up to 200): composition
+rules push people towards `Passw0rd!` and NIST has said to drop them.
+
+What it buys you:
+
+- **Your questions stay findable.** A question asked while signed in is linked to the account and
+  listed on `/account`. Guest asks still work and are not lost — they just are not attached to
+  anybody.
+- **Claiming.** Ask as a guest, then sign in with `keep=<ref>` and the question moves under the
+  account (the result page offers exactly that link).
+- **Ownership is checked, not assumed.** `/account` redirects to `/signin` when there is no session,
+  and it lists only rows whose `user_id` matches.
+
+What it does not do yet: no password reset, no email verification, no sign-in rate limit, and no
+CSRF token (the forms are `POST`-only, the cookie is `SameSite=Lax`, so a cross-site form post
+cannot carry it — a token is still the honest fix if this is ever sold).
+
+The old `XUONG_USER`/`XUONG_PASS` gate is separate and still available: it is the *door*, kept for
+protecting a public prototype, while accounts are the *identity* inside it. Tests and LAN runs leave
+both off, which is why an unauthenticated instance is still open by design.
+
+## The interface
+
+The visual system is generated, not improvised: `design-system/xuong/MASTER.md` holds the palette,
+type scale, spacing, radius and shadow tokens, and `src/views.mjs` carries them as CSS custom
+properties. Navy and slate for authority, one blue accent reserved for the primary action, and a
+distinct amber panel for a refusal so "I do not know" never looks like an error.
+
+- **Light and dark** are both first-class, driven by `prefers-color-scheme`; every colour pair was
+  checked at 4.5:1 or better, on the rendered page rather than in the stylesheet.
+- **No client JavaScript.** The one motion in the system (a short entry fade) is CSS, and it is
+  off under `prefers-reduced-motion`. A factory-floor browser and a locked-down corporate one both
+  work.
+- **Accessible by construction**: a skip link, visible focus rings, `aria-current` on the current
+  nav item, labels bound to every field, errors next to the field that caused them, and 44px touch
+  targets. `scripts/ui-check.py` asserts all of it in a headless browser at 375px and 1440px.
 
 ## Money
 
@@ -117,7 +162,9 @@ of it is a deliberate decision. See `SPEC.md` § *Vietnam constraints*.
 
 ## Tests, and what they caught
 
-43 tests (`node --test`), including an end-to-end walk over real HTTP. They are worth more than the
+60 tests (`node --test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+(102 checks in a headless browser: overflow at 375/1440, contrast, focus, tap targets, labels, and
+the primary button sampled from the pixels it actually painted). They are worth more than the
 coverage number because of what they found:
 
 - Vietnamese surnames in capitals were not caught by the gate (a character-range regex matched
@@ -244,16 +291,19 @@ bookmark.
 
 No payment gateway or escrow (see above), no email/Zalo notification (the expert has a tokenised
 queue instead), no expert KYC/vetting, no invoice or withholding module, no contracts or ToS, no
-asker accounts, no English UI, no mobile app, no analytics. `SPEC.md` § *Open questions* names the
-ones that must be decided before selling anything.
+mobile app, no analytics. Accounts exist for askers (email + password, below) but **not** for
+experts or the operator, and there is no password reset, no email verification and no rate limit on
+sign-in yet. `SPEC.md` § *Open questions* names the ones that must be decided before selling
+anything.
 
 ## Repo layout
 
 ```
-src/       db.mjs  gate.mjs  retrieval.mjs  pricing.mjs  llm.mjs  interview.mjs  views.mjs  server.mjs
-scripts/   seed.mjs  import-notes.mjs  smoke.sh  probe-*.mjs
+src/       db.mjs  auth.mjs  gate.mjs  retrieval.mjs  pricing.mjs  llm.mjs  interview.mjs  views.mjs  server.mjs
+scripts/   seed.mjs  import-notes.mjs  smoke.sh  ui-check.py  ui-shots.py  probe-*.mjs
+design-system/xuong/MASTER.md   the generated visual system the interface is built from
 seed/      experts.json  topic-map.json  corpus/  vault-raw/
-test/      unit.test.mjs  app.test.mjs  auth.test.mjs
+test/      unit.test.mjs  app.test.mjs  auth.test.mjs  accounts.test.mjs
 deploy/    install.sh  xuong.service  quick-tunnel.sh  entrypoint.sh  docker-smoke.sh
 Dockerfile  docker-compose.yml  .env.example     the same app as a container, for another machine
 .github/workflows/ci.yml                          tests, then build-and-publish the image
