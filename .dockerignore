@@ -1,0 +1,14 @@
+# Build context excludes. The image needs src/, scripts/, seed/, package.json and the
+# entrypoint only — the rest is repo furniture.
+.git
+.github
+.gitignore
+data
+node_modules
+*.log
+.env
+SPEC.md
+test
+deploy/install.sh
+deploy/quick-tunnel.sh
+deploy/xuong.service

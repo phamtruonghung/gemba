@@ -1,0 +1,50 @@
+# Xưởng in one container.
+#
+#   cp .env.example .env      # then fill it in (see README § Configuration)
+#   docker compose up -d      # builds the image and serves the app on :8090
+#   docker compose logs -f    # the app's own log, including the front-gate warning
+#
+# The product is a single Node process — no separate frontend service, no build step, no
+# database service. The only state is /data (SQLite file + generated admin token).
+services:
+  xuong:
+    build: .
+    image: ghcr.io/phamtruonghung/xuong:latest
+    container_name: xuong
+    restart: unless-stopped
+    ports:
+      # host port : container port. The container always listens on 8090; set
+      # XUONG_HOST_PORT=9000 to reach it on a different port on this machine.
+      - "${XUONG_HOST_PORT:-8090}:8090"
+    env_file:
+      # Same XUONG_* variables the systemd deployment uses. Optional so a fresh clone runs
+      # without it (and warns loudly that the gate is off).
+      - path: .env
+        required: false
+    environment:
+      # These four override anything in .env: the container port must stay 8090 or the port
+      # mapping and the health check break, and the database path must stay inside the volume.
+      XUONG_HOST: 0.0.0.0
+      XUONG_PORT: 8090
+      XUONG_DATA_DIR: /data
+      XUONG_DB: /data/xuong.db
+    volumes:
+      - xuong-data:/data
+
+  # Optional: publish this instance through a Cloudflare quick tunnel, so it can be opened from
+  # anywhere without opening a router port. The URL is random and changes on every restart:
+  #   docker compose --profile tunnel up -d
+  #   docker compose logs tunnel | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com'
+  # Set XUONG_USER/XUONG_PASS first — a quick tunnel with no gate publishes an open ask form.
+  # For a stable hostname use an ingress entry on your managed tunnel instead.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    container_name: xuong-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://xuong:8090
+    depends_on:
+      - xuong
+
+volumes:
+  xuong-data:

@@ -75,6 +75,7 @@ the refusal marker are enforced by tests.
 | `XUONG_USER` / `XUONG_PASS` | — | HTTP basic auth in front of everything except `/healthz`; **set this before publishing the instance to any hostname** |
 | `XUONG_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
 | `XUONG_DB` | `<data>/xuong.db` | database path |
+| `XUONG_HOST_PORT` | `8090` | host-side port in `docker-compose.yml`; the container always listens on 8090 internally |
 | `XUONG_ADMIN_TOKEN` | generated into `<data>/admin.token` | operator console token (`/qt/<token>`) |
 | `XUONG_LLM_KEY` | — | API key for the answer model; absent ⇒ labelled extractive mode |
 | `XUONG_LLM_BASE_URL` | OpenRouter | OpenAI-compatible chat-completions base URL |
@@ -115,7 +116,7 @@ of it is a deliberate decision. See `SPEC.md` § *Vietnam constraints*.
 
 ## Tests, and what they caught
 
-33 tests (`node --test`), including an end-to-end walk over real HTTP. They are worth more than the
+40 tests (`node --test`), including an end-to-end walk over real HTTP. They are worth more than the
 coverage number because of what they found:
 
 - Vietnamese surnames in capitals were not caught by the gate (a character-range regex matched
@@ -131,8 +132,24 @@ coverage number because of what they found:
 - `expert.topics[0]` returned the raw JSON string `"["` because the column was never parsed.
 - The whole UI was Vietnamese except the state machine's own words (`open`, `answered`, `paid`),
   which leaked to users — now every status is rendered through a Vietnamese label map.
+- **The app ignored the database it was configured to use.** `createApp` defaulted to a relative
+  `data/xuong.db`, and `seed.mjs` to the same string, so `XUONG_DB` worked and `XUONG_DATA_DIR` did
+  not: the service read one file while the installer seeded another. On a host where the working
+  directory happened to match, nothing looked wrong — in the container it produced an instance with
+  an **empty corpus and no error anywhere**. Both now resolve through `loadConfig().dbPath`, with a
+  test that fails if a configured path is ignored, and `scripts/probe-db.mjs` to show which file
+  holds the questions when two exist.
+- The installer kept an existing env file, so a key introduced later (the front-gate pair) never
+  reached the service: the gate *looked* configured while the instance answered `200` unauthenticated.
+- The installer's final smoke question posted without credentials, so a correctly configured front
+  gate made a healthy install report a JSON parse error.
 
 ## Deployment
+
+Two ways to run it on a host: the systemd installer below for a bare machine, or the container
+(next section) when it has to move between machines. Both read the same `XUONG_*` variables, write
+the same SQLite schema, and honour the same data path — the app opens the database it is configured
+with, never a file that happens to sit next to the source.
 
 `deploy/install.sh` is idempotent: it installs Node from the official tarball, copies the tree,
 writes `/etc/xuong/xuong.env` (mode 600), installs `deploy/xuong.service`, seeds the database if it
@@ -146,6 +163,41 @@ XUONG_LLM_KEY_FILE=/root/or.key bash deploy/install.sh   # taking the key from a
 It runs as a systemd service (`xuong.service`) on the demo host `192.168.1.150:8090`. Ports 80/443
 there belong to another stack, so the app is published on 8090 — a reverse proxy is the deployment's
 job, not the app's.
+
+### Docker, to move it to another machine
+
+The whole product is one Node process — no separate frontend service, no build step, no database
+service — so the image is the source tree plus a writable `/data`.
+
+```bash
+cp .env.example .env       # fill in XUONG_USER/XUONG_PASS, and XUONG_LLM_KEY for real answers
+docker compose up -d       # builds the image and serves on :8090
+docker compose logs -f xuong
+```
+
+Or from the published image, no checkout needed:
+
+```bash
+docker run -d --name xuong -p 8090:8090 --env-file .env \
+  -v xuong-data:/data ghcr.io/phamtruonghung/xuong:latest
+```
+
+`deploy/docker-smoke.sh` does the whole thing and cleans up after itself: build, start, check the
+gate from outside (401 without credentials, 200 with them), ask a real question *through the
+container*, and print what landed in the volume. Use it after changing anything in `src/`.
+
+State is only the volume (`xuong-data`: the SQLite file plus the generated admin token), so carrying
+an instance to another machine is:
+
+```bash
+docker save ghcr.io/phamtruonghung/xuong:latest | gzip | ssh other-host 'gunzip | docker load'
+docker run --rm -v xuong-data:/data -v "$PWD:/backup" alpine tar czf /backup/xuong-data.tgz -C /data .
+```
+
+The container always listens on 8090 internally and always writes `/data`; `XUONG_HOST_PORT` moves
+only the host-side port. The entrypoint seeds the corpus when the volume is empty and says loudly
+when `XUONG_PASS` is missing, so an ungated container announces itself in the log rather than
+quietly becoming an open model bill.
 
 ### Publishing it to a hostname
 
@@ -182,8 +234,10 @@ ones that must be decided before selling anything.
 src/       db.mjs  gate.mjs  retrieval.mjs  pricing.mjs  llm.mjs  interview.mjs  views.mjs  server.mjs
 scripts/   seed.mjs  import-notes.mjs  smoke.sh  probe-*.mjs
 seed/      experts.json  topic-map.json  corpus/  vault-raw/
-test/      unit.test.mjs  app.test.mjs
-deploy/    install.sh  xuong.service
+test/      unit.test.mjs  app.test.mjs  auth.test.mjs
+deploy/    install.sh  xuong.service  quick-tunnel.sh  entrypoint.sh  docker-smoke.sh
+Dockerfile  docker-compose.yml  .env.example     the same app as a container, for another machine
+.github/workflows/ci.yml                          tests, then build-and-publish the image
 SPEC.md    the mechanism being copied, the constraints, the decisions, the open questions
 ```
 
