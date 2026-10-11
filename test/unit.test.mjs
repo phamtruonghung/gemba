@@ -9,6 +9,7 @@ import { buildIndex, search, coverage, tokenize, fold } from '../src/retrieval.m
 import { quote, priceFor, split, roundVnd, formatVnd, transferInstruction, PLATFORM_TAKE_RATE, MIN_MINUTES } from '../src/pricing.mjs';
 import { buildPrompt, askFromCorpus, NO_DATA_MARKER } from '../src/llm.mjs';
 import { SCRIPT, draftNoteFromInterview, slugify } from '../src/interview.mjs';
+import { openDb, upsertNote, pruneSeedNotes, publishedNotes } from '../src/db.mjs';
 
 const CRAFT = `# The machine stops mid-shift
 
@@ -84,6 +85,30 @@ test('gate: the rules are extensible per deployment', () => {
 test('gate: the attestation wording says what the author is signing', () => {
   assert.match(ATTESTATION_TEXT, /no figures/);
   assert.match(ATTESTATION_TEXT, /customer or supplier names/);
+});
+
+test('db: a re-seed retires the notes this deployment no longer ships, and never a person\'s note', () => {
+  const db = openDb(':memory:');
+  const note = (slug, origin) => upsertNote(db, { slug, title: slug, topic: 'tpm', body: 'x', status: 'published', origin });
+  note('demo-retired-name', 'demo');
+  note('vault-retired-name', 'vault');
+  note('demo-current-name', 'demo');
+  note('expert-kept', 'expert');
+
+  const retired = pruneSeedNotes(db, ['demo-current-name']);
+
+  assert.deepEqual(retired.map((n) => n.slug).sort(), ['demo-retired-name', 'vault-retired-name']);
+  assert.deepEqual(publishedNotes(db).map((n) => n.slug).sort(), ['demo-current-name', 'expert-kept']);
+});
+
+test('seed: every topic in the corpus is covered by an expert, so no note falls back silently', () => {
+  const experts = JSON.parse(readFileSync('seed/experts.json', 'utf8'));
+  const covered = new Set(experts.flatMap((e) => e.topics ?? []));
+  const used = readdirSync('seed/corpus')
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => /^topic:\s*(.+)$/m.exec(readFileSync(join('seed/corpus', f), 'utf8'))[1].trim());
+  const orphans = [...new Set(used)].filter((t) => !covered.has(t));
+  assert.deepEqual(orphans, [], `no expert covers: ${orphans.join(', ')}`);
 });
 
 test('retrieval: folds Vietnamese diacritics both ways', () => {

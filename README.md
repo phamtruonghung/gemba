@@ -117,7 +117,7 @@ of it is a deliberate decision. See `SPEC.md` § *Vietnam constraints*.
 
 ## Tests, and what they caught
 
-41 tests (`node --test`), including an end-to-end walk over real HTTP. They are worth more than the
+43 tests (`node --test`), including an end-to-end walk over real HTTP. They are worth more than the
 coverage number because of what they found:
 
 - Vietnamese surnames in capitals were not caught by the gate (a character-range regex matched
@@ -137,6 +137,13 @@ coverage number because of what they found:
   routes), so the corpus notes were retranslated with the gate's rules restated as a constraint: they
   still pass it clean, in the new language. The gate's Vietnamese patterns stayed — a Vietnamese note
   carrying an employer's order number is still someone else's information.
+- Renaming the topics silently mis-attributed every note: the seed mapped topic to author with a
+  hardcoded table whose keys were the old Vietnamese slugs, and a `?? 'hung-qa'` fallback turned the
+  miss into one author for the whole corpus. The map now comes from the experts' own `topics`, an
+  uncovered topic throws, and a test asserts the corpus and the profiles agree.
+- `systemctl enable --now` does not restart a running unit, so a deploy reported success while the
+  host kept serving the previous build — and the new front gate's page (`Cần đăng nhập`, `lang="vi"`)
+  is how it was caught. The installer now restarts and checks the process start time.
 - **The app ignored the database it was configured to use.** `createApp` defaulted to a relative
   `data/xuong.db`, and `seed.mjs` to the same string, so `XUONG_DB` worked and `XUONG_DATA_DIR` did
   not: the service read one file while the installer seeded another. On a host where the working
@@ -157,8 +164,15 @@ the same SQLite schema, and honour the same data path — the app opens the data
 with, never a file that happens to sit next to the source.
 
 `deploy/install.sh` is idempotent: it installs Node from the official tarball, copies the tree,
-writes `/etc/xuong/xuong.env` (mode 600), installs `deploy/xuong.service`, seeds the database if it
-is missing, and starts the service.
+writes `/etc/xuong/xuong.env` (mode 600), installs `deploy/xuong.service`, re-seeds the corpus, and
+**restarts** the service — then proves the restarted process is the one it just installed, because
+`systemctl enable --now` leaves an already-running unit on the old code (and the old database) while
+every check passes against it.
+
+The re-seed is an upsert by slug, followed by a **retire** step: a seed note whose slug has left the
+seed set is deleted, so renaming a note updates the corpus instead of leaving the old copy published
+next to the new one. Notes written by a person (`origin: expert|interview`) are never touched — the
+corpus is the deployment's content; the questions and notes are the operator's.
 
 ```bash
 bash deploy/install.sh                 # on the host

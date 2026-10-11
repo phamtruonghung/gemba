@@ -117,9 +117,23 @@ fi
 say "5. systemd unit"
 install -m 644 "$APP_DIR/deploy/xuong.service" /etc/systemd/system/xuong.service
 systemctl daemon-reload
-systemctl enable --now xuong.service
+systemctl enable xuong.service
+STARTED_AT=$(date +%s)
+# `enable --now` does not restart a unit that is already running, so an update left the old process
+# serving the old code and old database while the checks below — and the operator — saw a healthy
+# instance. Restart explicitly, then prove the running process is the one just installed.
+systemctl restart xuong.service
 sleep 2
 systemctl --no-pager --lines=8 status xuong.service || true
+ACTIVE_SINCE=$(systemctl show xuong.service -p ActiveEnterTimestamp --value)
+ACTIVE_EPOCH=$(date -d "$ACTIVE_SINCE" +%s 2>/dev/null || echo 0)
+if [ "$ACTIVE_EPOCH" -lt "$STARTED_AT" ]; then
+  echo "ERROR: the service did not restart — it is still the process started at $ACTIVE_SINCE."
+  echo "       Everything below would be testing the previous build."
+  exit 1
+fi
+echo "restarted at $ACTIVE_SINCE (pid $(systemctl show xuong.service -p MainPID --value))"
+journalctl -u xuong.service --no-pager -n 6 -o cat | sed 's/^/  /' || true
 
 say "6. verify over HTTP"
 for i in 1 2 3 4 5; do

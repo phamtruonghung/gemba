@@ -213,10 +213,13 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
    are English; a raw state token (`awaiting_payment`, `blocked`) leaking into a page is a bug (there
    is a test for it). The gate's *rules* still carry the Vietnamese patterns alongside the English
    ones, because the raw notes a practitioner actually writes are Vietnamese.
-6. **Corpus provenance is visible**: every note shows `origin`, so the demo material is never
+6. **The deployment owns the seed corpus; the operator owns the rest.** A re-seed upserts by slug and
+   retires seed notes whose slug has left the seed set (`origin: expert|interview` is never touched).
+   Renaming content must update the corpus, not duplicate it.
+7. **Corpus provenance is visible**: every note shows `origin`, so the demo material is never
    mistaken for a practitioner's real published craft.
-7. **No simulated expert.** Answers attributed to a person are written by that person.
-8. **The gate is in the app, not in the deployment.** Every path except `/healthz` can require HTTP
+8. **No simulated expert.** Answers attributed to a person are written by that person.
+9. **The gate is in the app, not in the deployment.** Every path except `/healthz` can require HTTP
    basic auth (`XUONG_USER`/`XUONG_PASS`), because the ask form spends money on a model per question
    and a publicly reachable instance without it is an open bill. Relying on a proxy someone has to
    remember to configure is how that gets forgotten.

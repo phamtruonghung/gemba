@@ -4,7 +4,14 @@
     "name": "Hung",
     "headline": "Production supervisor, 20 years — assembly, improvement, shift management (sample profile)",
     "bio": "Sample profile for the trial build. Notes in the vault under this group are craft knowledge already stripped of any specific plant.",
-    "topics": ["tpm", "shift-management", "improvement", "safety"],
+    "topics": [
+      "tpm",
+      "shift-management",
+      "improvement",
+      "safety",
+      "strategy",
+      "open-work"
+    ],
     "years": 20,
     "rate_vnd": 800000,
     "token": "demo-hung-7f3a91"
@@ -14,7 +21,11 @@
     "name": "Lan",
     "headline": "Electronics assembly shift leader (sample profile)",
     "bio": "Sample profile for the trial build: used to test the question-handoff and scheduling flow.",
-    "topics": ["shift-management", "quality", "safety"],
+    "topics": [
+      "shift-management",
+      "quality",
+      "safety"
+    ],
     "years": 12,
     "rate_vnd": 600000,
     "token": "demo-lan-2c8d40"
@@ -24,7 +35,10 @@
     "name": "Dung",
     "headline": "Maintenance engineer — equipment, machine stops, tooling (sample profile)",
     "bio": "Sample profile for the trial build.",
-    "topics": ["tpm", "improvement"],
+    "topics": [
+      "tpm",
+      "improvement"
+    ],
     "years": 15,
     "rate_vnd": 700000,
     "token": "demo-dung-91be55"
