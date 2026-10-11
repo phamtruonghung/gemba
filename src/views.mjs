@@ -333,7 +333,7 @@ export function home({ stats, experts, notes, questions, user = null }) {
 ${askForm({ user })}
 <div class="card">
   <h2>What the platform holds right now</h2>
-  <p><strong>${stats.notes}</strong> published notes · <strong>${stats.experts}</strong> expert profiles · <strong>${stats.questions}</strong> questions received · <strong>${stats.thin}</strong> the library could not answer (those went to a person).</p>
+  <p><strong>${stats.notes}</strong> published notes · <strong>${stats.experts}</strong> expert profiles${stats.questions ? ` · <strong>${stats.questions}</strong> questions asked · <strong>${stats.thin}</strong> the library could not cover — those went to a person` : ' · no questions asked yet'}.</p>
   <h3>Topics</h3>
   <p class="stack-sm">${chips}</p>
 </div>
