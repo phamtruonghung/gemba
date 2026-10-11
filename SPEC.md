@@ -318,3 +318,18 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
    come back to.
 5. A second topic area, to see whether the corpus or the expert is the constraint.
 6. Only then: subscriptions, more experts, and a public domain.
+
+20. **An account for a practitioner is created by invitation, never by registration.** Vetting is the
+    product: the corpus is worth something because it came from people who ran the line, and open
+    signup would trade that for a queue nobody works. The operator creates an invitation (single use,
+    seven days, tied to an email and a practitioner row); the practitioner sets their own password and
+    gets an account, a role and their own desk. The URL token keeps working as the fallback for a lost
+    password, and *rotating* it is the answer to a leaked link — which is exactly what a URL token in
+    the front door could never offer.
+21. **A switch that does nothing is worse than no switch.** `experts.accept_questions` existed as a
+    column, was written by the seeder, and was never read by `expertsForTopic` — an operator could
+    switch a practitioner off and questions would keep arriving, which is worse than having no switch,
+    because it is a promise the system does not keep. Routing now honours it. The same principle is
+    why the invitation form is hidden once a practitioner has an account (an invitation to that
+    address could only be refused) and why `/desk` sends an asker somewhere useful instead of showing
+    an empty workspace.

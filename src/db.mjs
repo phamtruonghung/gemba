@@ -105,6 +105,17 @@ create table if not exists sessions (
   expires_at text not null,
   user_agent text not null default ''
 );
+create table if not exists invites (
+  id integer primary key,
+  token text unique not null,
+  email text not null,
+  name text not null default '',
+  expert_id integer references experts(id),
+  created_at text not null,
+  expires_at text not null,
+  accepted_at text,
+  created_by text not null default ''
+);
 create table if not exists settings (
   key text primary key,
   value text not null,
@@ -309,7 +320,7 @@ export function upsertExpert(db, e) {
   if (row) {
     db.prepare(
       `update experts set name=?, headline=?, bio=?, topics=?, years=?, rate_vnd=?, accept_questions=?, token=? where id=?`
-    ).run(e.name, e.headline ?? '', e.bio ?? '', JSON.stringify(e.topics ?? []), e.years ?? 0, e.rate_vnd ?? 600000, e.accept_questions === false ? 0 : 1, e.token, row.id);
+    ).run(e.name, e.headline ?? '', e.bio ?? '', JSON.stringify(e.topics ?? []), e.years ?? 0, e.rate_vnd ?? 600000, e.accept_questions === false || e.accept_questions === 0 ? 0 : 1, e.token, row.id);
     return row.id;
   }
   const info = db
@@ -317,8 +328,125 @@ export function upsertExpert(db, e) {
       `insert into experts (slug, name, headline, bio, topics, years, rate_vnd, accept_questions, token, created_at)
        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(e.slug, e.name, e.headline ?? '', e.bio ?? '', JSON.stringify(e.topics ?? []), e.years ?? 0, e.rate_vnd ?? 600000, e.accept_questions === false ? 0 : 1, e.token, nowIso());
+    .run(e.slug, e.name, e.headline ?? '', e.bio ?? '', JSON.stringify(e.topics ?? []), e.years ?? 0, e.rate_vnd ?? 600000, e.accept_questions === false || e.accept_questions === 0 ? 0 : 1, e.token, nowIso());
   return Number(info.lastInsertRowid);
+}
+
+/**
+ * Every practitioner, paused ones included. `listExperts` is the *public* list and deliberately hides
+ * a paused profile; an operator looking at their roster needs to see who is switched off.
+ */
+export function allExperts(db) {
+  return db
+    .prepare('select * from experts order by status, name collate nocase')
+    .all()
+    .map((r) => ({ ...r, topics: JSON.parse(r.topics || '[]') }));
+}
+
+export function expertById(db, id) {
+  const row = db.prepare('select * from experts where id = ?').get(id);
+  return row ? { ...row, topics: JSON.parse(row.topics || '[]') } : null;
+}
+
+export function updateExpert(db, id, e) {
+  return db
+    .prepare(
+      `update experts set name = ?, headline = ?, bio = ?, topics = ?, years = ?, rate_vnd = ?,
+        accept_questions = ?, status = ? where id = ?`
+    )
+    .run(
+      e.name, e.headline ?? '', e.bio ?? '', JSON.stringify(e.topics ?? []), e.years ?? 0,
+      e.rate_vnd ?? 600000, e.accept_questions ?? 1, e.status ?? 'active', id
+    ).changes;
+}
+
+export function setExpertField(db, id, column, value) {
+  const allowed = ['accept_questions', 'status', 'token', 'rate_vnd'];
+  if (!allowed.includes(column)) throw new Error(`refusing to write experts.${column}`);
+  return db.prepare(`update experts set ${column} = ? where id = ?`).run(value, id).changes;
+}
+
+export function linkExpertUser(db, expertId, userId) {
+  return db.prepare('update experts set user_id = ? where id = ?').run(userId, expertId).changes;
+}
+
+export function expertByUser(db, userId) {
+  const row = db.prepare('select * from experts where user_id = ?').get(userId);
+  return row ? { ...row, topics: JSON.parse(row.topics || '[]') } : null;
+}
+
+// --- invitations -----------------------------------------------------------
+// A single-use link that lets a practitioner set their own password. Vetting stays a human act: there
+// is no open registration, because the value of the corpus is that it comes from people who ran the
+// line, and an invitation is the operator saying "this one did".
+
+export const INVITE_DAYS = 7;
+
+export function createInvite(db, { token, email, name = '', expertId, createdBy = '', days = INVITE_DAYS }) {
+  const at = new Date();
+  const info = db
+    .prepare(
+      `insert into invites (token, email, name, expert_id, created_at, expires_at, created_by)
+       values (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      token, String(email).trim().toLowerCase(), name, expertId ?? null,
+      at.toISOString(), new Date(at.getTime() + days * 86400_000).toISOString(), createdBy
+    );
+  return inviteById(db, Number(info.lastInsertRowid));
+}
+
+export function inviteById(db, id) {
+  return db.prepare('select * from invites where id = ?').get(id);
+}
+
+export function inviteByToken(db, token) {
+  return db.prepare('select * from invites where token = ?').get(String(token ?? ''));
+}
+
+/** Pending, accepted or expired — computed, not stored, so there is one source of truth for time. */
+export function inviteState(invite, at = new Date()) {
+  if (!invite) return 'unknown';
+  if (invite.accepted_at) return 'accepted';
+  if (invite.expires_at <= at.toISOString()) return 'expired';
+  return 'pending';
+}
+
+export function acceptInvite(db, inviteId) {
+  return db.prepare('update invites set accepted_at = ? where id = ? and accepted_at is null')
+    .run(nowIso(), inviteId).changes;
+}
+
+export function listInvites(db, limit = 100) {
+  return db
+    .prepare(
+      `select i.*, e.name as expert_name, e.slug as expert_slug from invites i
+       left join experts e on e.id = i.expert_id order by i.id desc limit ?`
+    )
+    .all(limit);
+}
+
+export function pendingInviteForExpert(db, expertId) {
+  return db
+    .prepare('select * from invites where expert_id = ? and accepted_at is null order by id desc limit 1')
+    .get(expertId);
+}
+
+/** What each practitioner is actually doing — the numbers an operator looks at before changing a rate. */
+export function expertStats(db) {
+  const rows = db
+    .prepare(
+      `select e.id,
+        (select count(*) from notes n where n.expert_id = e.id and n.status = 'published') as notes,
+        (select count(*) from questions q where q.expert_id = e.id) as questions,
+        (select count(*) from answers a where a.expert_id = e.id) as answers,
+        (select count(*) from bookings b where b.expert_id = e.id) as bookings,
+        (select coalesce(sum(b.price_vnd), 0) from bookings b where b.expert_id = e.id and b.status = 'completed') as booked_vnd,
+        (select coalesce(sum(b.payout_vnd), 0) from bookings b where b.expert_id = e.id and b.status = 'completed') as payout_vnd
+       from experts e`
+    )
+    .all();
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
 export function expertByToken(db, token) {
@@ -329,7 +457,10 @@ export function expertByToken(db, token) {
 }
 
 export function expertsForTopic(db, topic) {
-  const rows = db.prepare(`select * from experts where status = 'active'`).all();
+  // `accept_questions` is the switch for "stop sending me new questions". It existed as a column and
+  // was written by the seeder, but routing never read it — an operator could switch a practitioner off
+  // and questions would keep arriving, which is worse than having no switch at all.
+  const rows = db.prepare(`select * from experts where status = 'active' and accept_questions = 1`).all();
   return rows
     .map((r) => ({ ...r, topics: JSON.parse(r.topics || '[]') }))
     .filter((r) => r.topics.includes(topic))

@@ -143,7 +143,7 @@ const CSS = `
   --color-band:#1a1614; --color-band-muted:#c9c2bb; --color-band-card:#241f1c; --color-band-border:#3a322d;
   --color-graphite:#334155; --color-graphite-tint:#eef1f5;
   --color-destructive:#b91c1c; --color-on-destructive:#ffffff;
-  --color-ok:#15803d;
+  --color-ok:#15803d; --color-ok-text:#166534;
   --color-ring:#ea580c;
   --shadow-sm:0 1px 2px rgba(26,13,3,.06);
   --shadow-md:0 6px 18px rgba(26,13,3,.08);
@@ -172,7 +172,7 @@ const CSS = `
     --color-band:#0f0d0c; --color-band-muted:#c9c2bb; --color-band-card:#1b1715; --color-band-border:#332c28;
     --color-graphite:#cbd5e1; --color-graphite-tint:#1c232b;
     --color-destructive:#fca5a5; --color-on-destructive:#3b0a0a;
-    --color-ok:#4ade80;
+    --color-ok:#4ade80; --color-ok-text:#4ade80;
     --color-ring:#fb923c;
     --shadow-sm:0 1px 2px rgba(0,0,0,.4);
     --shadow-md:0 6px 18px rgba(0,0,0,.5);
@@ -262,7 +262,7 @@ nav.site button.link:hover{background:var(--color-muted)}
 @media (min-width:820px){.cols.three{grid-template-columns:repeat(3,1fr)}.cols.three > * + *{border-left:1px solid var(--color-border);padding-left:var(--space-5)}}
 .badge{display:inline-flex;align-items:center;gap:6px;background:var(--color-muted);color:var(--color-muted-foreground);border-radius:var(--radius-pill);padding:5px 12px;font-size:12.5px;font-weight:550;white-space:nowrap}
 .badge.tag{text-transform:uppercase;letter-spacing:.1em;font-size:11px;background:transparent;border:1px solid var(--color-border-strong);color:var(--color-muted-foreground)}
-.badge.ok{background:var(--color-graphite-tint);color:var(--color-ok)}
+.badge.ok{background:var(--color-graphite-tint);color:var(--color-ok-text)}
 .badge.warn{background:var(--color-accent-tint);color:var(--color-accent-ink)}
 .badge.bad{background:color-mix(in srgb,var(--color-destructive) 14%,transparent);color:var(--color-destructive)}
 a.badge{text-decoration:none;padding:11px 14px;min-height:44px}
@@ -331,6 +331,9 @@ ol.steps li:last-child{border-bottom:0}
 ol.steps li::before{content:counter(step);flex:none;width:26px;height:26px;border-radius:50%;background:var(--color-muted);color:var(--color-muted-foreground);display:grid;place-items:center;font-size:13px;font-weight:700}
 ol.steps li.here::before{background:var(--color-accent);color:var(--color-on-accent)}
 table{width:100%;border-collapse:collapse;font-size:14.5px}
+.table-wrap{overflow-x:auto;max-width:100%}
+/* an invitation link is a long unbroken token: let it wrap rather than widen the card */
+.flash .mono,.card .mono{overflow-wrap:anywhere}
 th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--color-border);vertical-align:top}
 th{color:var(--color-muted-foreground);font-weight:600;font-size:13px}
 .kv{display:grid;grid-template-columns:minmax(130px,190px) minmax(0,1fr);gap:2px var(--space-4);font-size:14.5px;margin:0}
@@ -1419,6 +1422,8 @@ export function interviewPage({ expert, interview, step, question, answers, done
 
 const ADMIN_NAV = [
   ['/admin', 'Overview', 'scale'],
+  ['/admin/experts', 'Practitioners', 'people'],
+  ['/admin/invites', 'Invitations', 'book'],
   ['/admin/settings', 'Settings', 'rules'],
   ['/admin/audit', 'Audit', 'clock']
 ];
@@ -1522,8 +1527,8 @@ export function adminOverviewPage({ admin, stats, settings, events = [], flash =
 <section class="tight"><div class="wrap">
   <h2>What just happened</h2>
   <p class="muted small">The twenty most recent events. The full trail is behind Audit.</p>
-  <table><thead><tr><th>When</th><th>What</th><th>Ref</th><th>Detail</th></tr></thead>
-  <tbody>${rows || '<tr><td colspan="4" class="muted">Nothing recorded yet.</td></tr>'}</tbody></table>
+  <div class="table-wrap"><table><thead><tr><th>When</th><th>What</th><th>Ref</th><th>Detail</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="4" class="muted">Nothing recorded yet.</td></tr>'}</tbody></table></div>
 </div></section>`,
   });
 }
@@ -1573,9 +1578,211 @@ export function adminAuditPage({ admin, kind = '', events = [], kinds = [] }) {
     body: `
 <section class="tight"><div class="wrap">
   <p class="row tight-gap">${chips}</p>
-  <table><thead><tr><th>When</th><th>What</th><th>Ref</th><th>Detail</th></tr></thead>
-  <tbody>${rows || '<tr><td colspan="4" class="muted">Nothing recorded for this filter.</td></tr>'}</tbody></table>
+  <div class="table-wrap"><table><thead><tr><th>When</th><th>What</th><th>Ref</th><th>Detail</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="4" class="muted">Nothing recorded for this filter.</td></tr>'}</tbody></table></div>
   <p class="small muted">Writes record the operator's email in Detail — the whole point of the trail is answering “who changed this”.</p>
+</div></section>`,
+  });
+}
+
+export function adminExpertsPage({ admin, experts = [], stats = new Map(), pending = new Map(), topics = [], settings = {}, errors = {}, draft = {}, flash = '' }) {
+  const topicOptions = topics.map(([slug]) => slug).join(', ');
+  const field = (name, label, value, extra = {}) => {
+    const id = `ex-${name}`;
+    return `<div class="field">
+  <label for="${id}">${esc(label)}</label>
+  ${extra.hint ? `<p class="hint" id="${id}-hint" style="margin-top:-4px">${esc(extra.hint)}</p>` : ''}
+  <input id="${id}" name="${name}" value="${esc(String(value ?? ''))}"${extra.type ? ` type="${extra.type}"` : ''}
+    ${errors[name] ? 'aria-invalid="true" aria-describedby="' + id + '-err"' : extra.hint ? `aria-describedby="${id}-hint"` : ''}>
+  ${errors[name] ? `<p class="field-error" id="${id}-err">${icon('warn')} ${esc(errors[name])}</p>` : ''}
+</div>`;
+  };
+
+  const rows = experts
+    .map((e) => {
+      const s = stats.get(e.id) ?? {};
+      const inv = pending.get(e.id);
+      const state = e.status !== 'active' ? 'paused' : e.accept_questions ? 'accepting questions' : 'not accepting questions';
+      return `<tr>
+  <td><a href="/admin/experts/${e.id}">${esc(e.name)}</a><div class="small muted">${esc(e.headline || 'no headline')}</div></td>
+  <td>${e.topics.map((t) => `<span class="badge">${esc(topicLabel(t))}</span>`).join(' ')}</td>
+  <td class="mono">${formatVnd(e.rate_vnd)}</td>
+  <td>${s.notes ?? 0} note(s)<div class="small muted">${s.questions ?? 0} asked · ${s.answers ?? 0} answered</div></td>
+  <td>${s.bookings ?? 0}<div class="small muted">${formatVnd(s.booked_vnd ?? 0)} quoted</div></td>
+  <td><span class="badge${e.accept_questions && e.status === 'active' ? ' ok' : ' warn'}">${esc(state)}</span>
+    ${inv ? `<div class="small muted">invited, pending</div>` : e.user_id ? '<div class="small muted">has an account</div>' : '<div class="small muted">no account yet</div>'}</td>
+</tr>`;
+    })
+    .join('');
+
+  return adminShell({
+    admin, active: '/admin/experts', eyebrow: 'Operator console', flash,
+    title: 'Practitioners', 
+    body: `
+<section class="tight"><div class="wrap">
+  <p class="muted">A practitioner is who a refused question is routed to, and where paid sessions come from. An account is created only by invitation.</p>
+  <div class="table-wrap"><table><thead><tr><th>Who</th><th>Topics</th><th>Rate</th><th>Notes</th><th>Sessions</th><th>State</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="6" class="muted">Nobody yet.</td></tr>'}</tbody></table></div>
+</div></section>
+<section class="tight"><div class="wrap narrow">
+  <h2>Add a practitioner</h2>
+  <p class="muted small">Adding someone puts them on the roster and in routing. They cannot sign in until you invite them.</p>
+  <form method="post" action="/admin/experts" class="card">
+    ${field('name', 'Name', draft.name)}
+    ${field('headline', 'Headline', draft.headline, { hint: 'One line: what they are, and where. Shown on /experts.' })}
+    ${field('topics', 'Topics', draft.topics ?? '', { hint: `Comma separated. Known topics: ${topicOptions}` })}
+    ${field('years', 'Years of experience', draft.years ?? '', { hint: 'Whole years, 0–60.', type: 'text' })}
+    ${field('rate_vnd', 'Rate, VND per hour', draft.rate_vnd ?? settings.default_rate_vnd ?? '', { hint: 'Whole VND. The booking price is derived from this.' })}
+    <div class="field"><label for="ex-bio">Bio <span class="muted" style="font-weight:400">(optional)</span></label>
+      <textarea id="ex-bio" name="bio">${esc(String(draft.bio ?? ''))}</textarea>
+      ${errors.bio ? `<p class="field-error">${icon('warn')} ${esc(errors.bio)}</p>` : ''}</div>
+    <label class="row" for="ex-accept" style="gap:10px;align-items:center"><input id="ex-accept" type="checkbox" name="accept_questions" value="on" checked style="width:auto"> Accept new questions</label>
+    <div class="row"><button class="btn" type="submit">${icon('check')}Add practitioner</button></div>
+  </form>
+</div></section>`,
+  });
+}
+
+export function adminExpertPage({ admin, expert, stats = {}, invite = null, topics = [], errors = {}, draft = {}, flash = '', inviteLink = '' }) {
+  const known = topics.map(([slug]) => slug).join(', ');
+  const field = (name, label, value, hint = '') => {
+    const id = `ex-${name}`;
+    return `<div class="field">
+  <label for="${id}">${esc(label)}</label>
+  ${hint ? `<p class="hint" id="${id}-hint" style="margin-top:-4px">${esc(hint)}</p>` : ''}
+  <input id="${id}" name="${name}" value="${esc(String(value ?? ''))}"
+    ${errors[name] ? 'aria-invalid="true" aria-describedby="' + id + '-err"' : hint ? `aria-describedby="${id}-hint"` : ''}>
+  ${errors[name] ? `<p class="field-error" id="${id}-err">${icon('warn')} ${esc(errors[name])}</p>` : ''}
+</div>`;
+  };
+  const s = stats ?? {};
+  return adminShell({
+    admin, active: '/admin/experts', eyebrow: 'Operator console', flash,
+    title: expert.name,
+    body: `
+<section class="tight"><div class="wrap">
+  <div class="grid four">
+    <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">Published notes</p><p style="margin:0;font-size:30px;font-weight:700">${esc(String(s.notes ?? 0))}</p></div>
+    <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">Questions routed</p><p style="margin:0;font-size:30px;font-weight:700">${esc(String(s.questions ?? 0))}</p><p class="small muted" style="margin:0">${esc(String(s.answers ?? 0))} answered</p></div>
+    <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">Sessions</p><p style="margin:0;font-size:30px;font-weight:700">${esc(String(s.bookings ?? 0))}</p><p class="small muted" style="margin:0">${formatVnd(s.payout_vnd ?? 0)} paid out on completed</p></div>
+    <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">State</p>
+      <p style="margin:0;font-size:17px;font-weight:600">${expert.accept_questions && expert.status === 'active' ? 'Accepting questions' : 'Not accepting questions'}</p>
+      <p class="small muted" style="margin:0">${expert.user_id ? 'Has an account' : invite ? 'Invited, not accepted yet' : 'No account yet'}</p></div>
+  </div>
+</div></section>
+<section class="tight"><div class="wrap narrow">
+  <h2>What a question is routed by</h2>
+  <form method="post" action="/admin/experts/${expert.id}" class="card">
+    ${field('name', 'Name', draft.name ?? expert.name)}
+    ${field('headline', 'Headline', draft.headline ?? expert.headline)}
+    ${field('topics', 'Topics', draft.topics ?? expert.topics.join(', '), `Comma separated. Known topics: ${known}`)}
+    ${field('years', 'Years of experience', draft.years ?? expert.years, 'Whole years, 0–60.')}
+    ${field('rate_vnd', 'Rate, VND per hour', draft.rate_vnd ?? expert.rate_vnd, 'Whole VND. Changing this changes what new bookings cost.')}
+    <div class="field"><label for="ex-bio">Bio</label><textarea id="ex-bio" name="bio">${esc(String(draft.bio ?? expert.bio ?? ''))}</textarea></div>
+    <label class="row" for="ex-accept" style="gap:10px;align-items:center"><input id="ex-accept" type="checkbox" name="accept_questions" value="on"${expert.accept_questions ? ' checked' : ''} style="width:auto"> Accept new questions</label>
+    <div class="row"><button class="btn" type="submit">${icon('check')}Save</button></div>
+  </form>
+</div></section>
+<section class="tight"><div class="wrap narrow">
+  <h2>The desk</h2>
+  <div class="card">
+    <p style="margin:0">Desk link: <a class="mono" href="/c/${esc(expert.token)}">/c/${esc(expert.token)}</a></p>
+    <p class="small muted" style="margin:0">A link is a password that cannot be rotated or lost safely. Prefer the account below; keep this for when someone loses theirs.</p>
+    <form method="post" action="/admin/experts/${expert.id}/rotate"><button class="btn alt sm" type="submit">${icon('check')}Generate a new desk link</button></form>
+  </div>
+</div></section>
+<section class="tight"><div class="wrap narrow">
+  <h2>Account</h2>
+  <div class="card">
+    ${inviteLink ? `<p class="flash" role="status">${icon('check')} Invitation link (send it to them — it works once, in seven days): <span class="mono">${esc(inviteLink)}</span></p>` : ''}
+    ${expert.user_id ? '<p style="margin:0">This practitioner has an account and can sign in at <a href="/signin">/signin</a>. If they lose the password, generate a new desk link above — a fresh invitation to the same address would be refused, and there is no reset by email yet.</p>' : invite ? `<p style="margin:0">A pending invitation for <strong>${esc(invite.email)}</strong> (expires ${esc((invite.expires_at ?? '').slice(0, 10))}). Creating another replaces it as the live one.</p>` : '<p style="margin:0">No account yet. An account is created only by invitation.</p>'}
+    ${expert.user_id ? '' : `<form method="post" action="/admin/experts/${expert.id}/invite">`}
+      <div class="form-row two">
+        <div class="field"><label for="inv-email">Their email</label>
+          <input id="inv-email" name="email" type="email" value="${esc(String(draft.email ?? invite?.email ?? ''))}"${errors.email ? ' aria-invalid="true"' : ''}>
+          ${errors.email ? `<p class="field-error">${icon('warn')} ${esc(errors.email)}</p>` : ''}</div>
+        <div class="field"><label for="inv-name">Their name</label>
+          <input id="inv-name" name="name" value="${esc(String(draft.name ?? invite?.name ?? expert.name))}"></div>
+      </div>
+      <div class="row"><button class="btn" type="submit">${icon('book')}Create an invitation</button>
+        <span class="muted small">They set their own password. Vetting stays your call — there is no open registration.</span></div>
+    ${expert.user_id ? '' : '</form>'}
+  </div>
+</div></section>`,
+  });
+}
+
+export function adminInvitesPage({ admin, invites = [], flash = '' }) {
+  const rows = invites
+    .map((i) => `<tr>
+  <td class="mono">${esc(i.email)}</td>
+  <td>${esc(i.expert_name ?? '—')}</td>
+  <td><span class="badge${i.state === 'accepted' ? ' ok' : i.state === 'pending' ? '' : ' warn'}">${esc(i.state)}</span></td>
+  <td class="small muted">${esc((i.created_at ?? '').slice(0, 10))}</td>
+  <td class="small muted">${esc((i.expires_at ?? '').slice(0, 10))}</td>
+  <td class="small muted">${esc(i.created_by)}</td>
+  ${''}
+</tr>`)
+    .join('');
+  return adminShell({
+    admin, active: '/admin/invites', eyebrow: 'Operator console', flash,
+    title: 'Invitations',
+    body: `
+<section class="tight"><div class="wrap">
+  <p class="muted">An invitation is the only way a practitioner account is created. It works once, and it expires in seven days.</p>
+  <div class="table-wrap"><table><thead><tr><th>Email</th><th>Practitioner</th><th>State</th><th>Created</th><th>Expires</th><th>By</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="6" class="muted">No invitations yet — create one from a practitioner page.</td></tr>'}</tbody></table></div>
+</div></section>`,
+  });
+}
+
+export function invitePage({ invite, expert, errors = {}, draft = {} }) {
+  return layout({
+    title: 'Set your password',
+    nav: false,
+    body: `
+<section class="page-head"><div class="wrap narrow">
+  <p class="eyebrow">Invitation</p>
+  <h1 style="font-size:clamp(26px,3.4vw,40px)">Your desk at Gemba</h1>
+  <p class="muted">${expert ? `You have been invited as a practitioner${expert.headline ? ` — ${esc(expert.headline)}` : ''}.` : 'You have been invited as a practitioner.'} Set a password and your desk is yours.</p>
+</div></section>
+<section class="tight"><div class="wrap narrow">
+  <form method="post" action="/invite/${esc(invite.token)}" class="card">
+    <div class="field"><label for="iv-name">Your name</label>
+      <input id="iv-name" name="name" value="${esc(String(draft.name ?? invite.name ?? ''))}"${errors.name ? ' aria-invalid="true"' : ''}>
+      ${errors.name ? `<p class="field-error">${icon('warn')} ${esc(errors.name)}</p>` : ''}</div>
+    <div class="field"><label for="iv-email">Your email</label>
+      <input id="iv-email" value="${esc(invite.email)}" readonly>
+      <p class="hint" style="margin-top:-4px">The invitation was sent to this address; it cannot be changed here.</p></div>
+    <div class="field"><label for="iv-password">Choose a password</label>
+      <input id="iv-password" name="password" type="password" autocomplete="new-password"${errors.password ? ' aria-invalid="true"' : ''}>
+      <p class="hint" style="margin-top:-4px">At least 10 characters. A sentence you can remember is stronger than a short jumble you cannot.</p>
+      ${errors.password ? `<p class="field-error">${icon('warn')} ${esc(errors.password)}</p>` : ''}</div>
+    <div class="field"><label for="iv-password2">And again</label>
+      <input id="iv-password2" name="password2" type="password" autocomplete="new-password"${errors.password2 ? ' aria-invalid="true"' : ''}>
+      ${errors.password2 ? `<p class="field-error">${icon('warn')} ${esc(errors.password2)}</p>` : ''}</div>
+    <div class="row"><button class="btn" type="submit">${icon('check')}Set the password and open my desk</button>
+      <span class="muted small">There is no password reset by email yet — that is why you type it twice.</span></div>
+  </form>
+</div></section>`,
+  });
+}
+
+export function inviteDeadPage({ state, email = '' }) {
+  const message = state === 'accepted'
+    ? 'This invitation has already been used. Sign in instead — or ask the operator for a new one.'
+    : state === 'expired'
+      ? 'This invitation has expired. Invitations last seven days; ask the operator for a new one.'
+      : 'This invitation is not one we know about.';
+  return layout({
+    title: 'This invitation is no longer valid',
+    nav: false,
+    body: `
+<section class="page-head"><div class="wrap narrow">
+  <p class="eyebrow">${esc(state === 'unknown' ? '404' : state)}</p>
+  <h1 style="font-size:clamp(26px,3.4vw,40px)">${esc(message.split('.')[0])}.</h1>
+  <p class="muted">${esc(message)}</p>
+  <p class="row" style="margin-top:var(--space-5)"><a class="btn" href="/signin">Sign in</a> <a class="btn ghost" href="/">Back to the site</a></p>
 </div></section>`,
   });
 }
@@ -1623,8 +1830,8 @@ export function adminPage({ token, stats, pendingBookings, blockedNotes, openQue
   <div class="wrap">
     <div class="card">
       <h2 style="font-size:24px">Bookings to reconcile</h2>
-      <table><thead><tr><th>Code</th><th>Practitioner</th><th>Contact</th><th>Time</th><th>Price</th><th>Status</th><th></th></tr></thead>
-      <tbody>${bRows || '<tr><td colspan="7" class="muted">No bookings.</td></tr>'}</tbody></table>
+      <div class="table-wrap"><table><thead><tr><th>Code</th><th>Practitioner</th><th>Contact</th><th>Time</th><th>Price</th><th>Status</th><th></th></tr></thead>
+      <tbody>${bRows || '<tr><td colspan="7" class="muted">No bookings.</td></tr>'}</tbody></table></div>
       <p class="hint">Money counts as received only when you reconcile the bank statement here. The system never marks a booking paid by itself.</p>
     </div>
     <div class="card">
