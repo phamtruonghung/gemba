@@ -12,6 +12,20 @@
 # a successful migration does nothing.
 set -euo pipefail
 
+# Cleanup mode, called by install.sh *after* a successful install: at that point the new instance is
+# verified healthy, so what remains of the old one is a second copy of the app and a config file
+# carrying the same secrets under a name nothing uses. Keeping these paths in one file is deliberate —
+# install.sh must not have to spell the old name to be able to clean it up.
+if [ "${1:-}" = "--cleanup" ]; then
+  for legacy in /opt/xuong /etc/xuong /var/lib/xuong; do
+    if [ -e "$legacy" ]; then
+      rm -rf "$legacy"
+      echo "removed legacy $legacy"
+    fi
+  done
+  exit 0
+fi
+
 OLD_ENV_DIR=/etc/xuong
 OLD_DATA_DIR=/var/lib/xuong
 OLD_APP_DIR=/opt/xuong
@@ -53,9 +67,24 @@ chmod 700 "$NEW_ENV_DIR"
 # 2. Config: keys are renamed, values are carried over exactly. An existing new-style env file wins,
 #    so a re-run cannot overwrite a live key with a stale one.
 if [ -f "$OLD_ENV_DIR/xuong.env" ] && [ ! -f "$NEW_ENV_DIR/gemba.env" ]; then
-  sed 's/^XUONG_/GEMBA_/' "$OLD_ENV_DIR/xuong.env" > "$NEW_ENV_DIR/gemba.env"
+  # Keys *and* values: the prefix rewrite alone leaves GEMBA_DATA_DIR pointing at the old directory,
+  # and the app then creates a second, empty database there while the real one sits in the new path.
+  # Observed on the first live migration: two databases, one of them holding only the installer's own
+  # probe question, and the health check reading the wrong file.
+  sed -e 's/^XUONG_/GEMBA_/' \
+      -e 's|/var/lib/xuong|/var/lib/gemba|g' \
+      -e 's|/etc/xuong|/etc/gemba|g' \
+      -e 's|/opt/xuong|/opt/gemba|g' \
+      -e 's|xuong\.db|gemba.db|g' \
+      "$OLD_ENV_DIR/xuong.env" > "$NEW_ENV_DIR/gemba.env"
   chmod 600 "$NEW_ENV_DIR/gemba.env"
-  echo "config moved to $NEW_ENV_DIR/gemba.env (XUONG_* -> GEMBA_*)"
+  # The old file holds the same secrets under the old key names. Leaving it behind is a stale copy of
+  # a credential plus a file that answers to a name the product no longer uses: remove it once the new
+  # one is written and non-empty.
+  if [ -s "$NEW_ENV_DIR/gemba.env" ]; then
+    rm -f "$OLD_ENV_DIR/xuong.env"
+    echo "config moved to $NEW_ENV_DIR/gemba.env (XUONG_* -> GEMBA_*), old file removed"
+  fi
 fi
 
 # 3. State: the database with its write-ahead log and shared memory. The WAL is moved first — the
@@ -82,8 +111,9 @@ if [ -f "/etc/systemd/system/$OLD_UNIT" ]; then
   echo "removed /etc/systemd/system/$OLD_UNIT"
 fi
 
-# 5. Old directories: removed only when empty, so anything the migration did not claim is left for a
-#    human rather than deleted.
+# 5. Old directories: the state is already moved, and install.sh removes the legacy code directory at
+#    the end of a successful install (deploy/install.sh step 8). What is left here is removed only when
+#    empty, so anything the migration did not claim stays for a human rather than being deleted.
 for d in "$OLD_DATA_DIR" "$OLD_ENV_DIR" "$OLD_APP_DIR"; do
   if [ -d "$d" ]; then
     rmdir "$d" 2>/dev/null && echo "removed empty $d" || echo "kept $d (still holds files: $(ls -A "$d" | tr '\n' ' '))"

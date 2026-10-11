@@ -77,8 +77,23 @@ test('the migration script is the only way the old paths are still reachable', (
     assert.ok(mig.includes(legacy), `the migration knows about ${legacy}`);
   }
   assert.match(mig, /XUONG_/, 'and it renames the old environment keys');
-  assert.match(mig, /sed 's\/\^XUONG_\/GEMBA_\//, 'by prefix rewrite, not by hand');
+  assert.match(mig, /sed -e 's\/\^XUONG_\/GEMBA_\/'/, 'by prefix rewrite, not by hand');
+  assert.match(mig, /--cleanup/, 'and it owns the legacy paths for cleanup as well');
   // install.sh must call it, or a legacy host keeps a dead unit and an orphaned database
   const install = readFileSync(join(ROOT, 'deploy/install.sh'), 'utf8');
   assert.match(install, /migrate-rename\.sh/, 'install.sh runs the migration');
+  assert.match(install, /migrate-rename\.sh" --cleanup/, 'and asks it to clean up after a good install');
+});
+
+test('the migration rewrites paths, not just key names, and the installer refuses a split instance', () => {
+  // The first live migration renamed the XUONG_* keys but left GEMBA_DATA_DIR=/var/lib/xuong, so the
+  // app created a second database in the old directory while the migrated one sat unused. A rename
+  // that moves a file and not the pointer to it is worse than no rename: both look installed.
+  const mig = readFileSync(join(ROOT, 'deploy/migrate-rename.sh'), 'utf8');
+  for (const rewrite of ['s|/var/lib/xuong|/var/lib/gemba|g', 's|/etc/xuong|/etc/gemba|g', 's|/opt/xuong|/opt/gemba|g']) {
+    assert.ok(mig.includes(rewrite), `the migration rewrites ${rewrite}`);
+  }
+  const install = readFileSync(join(ROOT, 'deploy/install.sh'), 'utf8');
+  assert.match(install, /GEMBA_DATA_DIR/, 'and the installer reads the configured data directory');
+  assert.match(install, /refusing to continue/, 'and refuses to run against a config that points elsewhere');
 });
