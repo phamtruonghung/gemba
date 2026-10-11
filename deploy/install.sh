@@ -39,6 +39,11 @@ fi
 
 say "2. application code -> $APP_DIR"
 mkdir -p "$APP_DIR"
+# Unpacking over the previous tree leaves files that the source no longer has: after the corpus was
+# renamed, /opt/xuong/seed/corpus held both the old Vietnamese notes and the new English ones, and the
+# seed read all of them. Clear everything except data/ first (the legacy database lives there, and
+# step 4 migrates it), so the installed tree is exactly the source tree.
+find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name data -exec rm -rf {} +
 # The database never lives inside the checkout: a redeploy would otherwise drop live state.
 tar czf - -C "$SRC_DIR" --exclude=data --exclude=.git --exclude='*.db*' . | tar xzf - -C "$APP_DIR"
 echo "files: $(find "$APP_DIR" -type f | wc -l), version $(python3 -c "import json;print(json.load(open('$APP_DIR/package.json'))['version'])")"
