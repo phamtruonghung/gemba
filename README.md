@@ -81,7 +81,7 @@ the refusal marker are enforced by tests.
 | `GEMBA_LLM_KEY` | — | API key for the answer model; absent ⇒ labelled extractive mode |
 | `GEMBA_LLM_BASE_URL` | OpenCode (`/zen/go/v1`) | OpenAI-compatible chat-completions base URL |
 | `GEMBA_LLM_MODEL` | `deepseek-v4.1-flash` | model id, derived from the gateway when unset (`deepseek/...` for OpenRouter) |
-| `GEMBA_LLM_SESSION` | minted at install | the OpenCode gateway routes by this header and answers `400 MissingSessionID` without it |
+| `GEMBA_LLM_SESSION` | minted at install | the OpenCode gateway routes by this header; without it the call is refused (`400` from the API, or `403` with Cloudflare error `1010` through the edge) |
 | `GEMBA_LLM_TIMEOUT_MS` | `90000` | per-request timeout |
 | `GEMBA_BANK_BIN` / `GEMBA_BANK_ACCOUNT` | — | VietQR recipient; unset ⇒ the booking page shows the amount with no QR |
 
