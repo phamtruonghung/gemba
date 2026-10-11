@@ -85,6 +85,19 @@ if (retired.length) {
   console.log(`retired ${retired.length} note(s) this deployment no longer ships: ${retired.map((n) => n.slug).join(', ')}`);
 }
 
+// An operator account, when the environment asks for one. The installer passes a generated password
+// here rather than storing it anywhere the running app can read it back.
+if (process.env.GEMBA_ADMIN_EMAIL && process.env.GEMBA_ADMIN_PASSWORD) {
+  const { hashPassword } = await import('../src/auth.mjs');
+  const { upsertAdmin } = await import('../src/db.mjs');
+  const { user, created } = upsertAdmin(db, {
+    email: process.env.GEMBA_ADMIN_EMAIL,
+    name: process.env.GEMBA_ADMIN_NAME || 'Operator',
+    password_hash: await hashPassword(process.env.GEMBA_ADMIN_PASSWORD)
+  });
+  console.log(`operator account ${created ? 'created' : 'reset'}: ${user.email}`);
+}
+
 logEvent(db, 'seed', '', `experts=${experts.length} notes=${files.length} published=${published} blocked=${blocked} retired=${retired.length}`);
 const s = stats(db);
 console.log(`notes: ${published} published / ${blocked} blocked of ${files.length}`);

@@ -11,6 +11,7 @@ import { buildIndex, search, coverage } from './retrieval.mjs';
 import { askFromCorpus, llmConfig } from './llm.mjs';
 import { quote, formatVnd, MIN_MINUTES, transferInstruction, suggestRateVnd } from './pricing.mjs';
 import { questionAt, draftNoteFromInterview, slugify, SCRIPT } from './interview.mjs';
+import { loadSettings, checkSettings, saveSettings, SETTING_KEYS } from './settings.mjs';
 import * as views from './views.mjs';
 import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, newSessionId, sessionExpiry, hashPassword, verifyPassword, checkEmail, checkPassword, checkName, SESSION_COOKIE } from './auth.mjs';
 
@@ -162,7 +163,13 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (path === '/healthz') return sendJson(200, { ok: true, notes: index.n, llm: config.llm.enabled ? 'configured' : 'none' });
 
     // --- front gate: optional HTTP basic auth ------------------------------
-    if (!basicAuthOk(req.headers.authorization, config)) {
+    // The gate exists for the *anonymous* surface: a public tunnel where every question spends a model
+    // call. It is not a second password for people who already have an account — a shared password in
+    // front of per-user accounts is the weakest link, and one that every expert has to hold is one that
+    // leaks. So a request carrying a valid session passes, and the paths that exist *to* authenticate
+    // stay open (otherwise nobody could ever sign in to become authenticated).
+    const gateExempt = /^\/(signin|signup|admin\/login|invite\/[^/]+)$/.test(path);
+    if (!gateExempt && !account && !basicAuthOk(req.headers.authorization, config)) {
       res.writeHead(401, {
         'www-authenticate': 'Basic realm="gemba", charset="UTF-8"',
         'content-type': 'text/html; charset=utf-8',
@@ -220,6 +227,16 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const email = String(form.email ?? '').trim();
       const password = String(form.password ?? '');
       const found = dbm.userByEmail(db, email);
+      // A locked account is refused *after* the password check, not before: the person proved they own
+      // the account, and "this account is locked — ask the operator" is a message they can act on,
+      // where "wrong password" would send them round a loop that cannot succeed.
+      if (found && (found.status ?? 'active') !== 'active' && (await verifyPassword(password, found.password_hash))) {
+        dbm.logEvent(db, 'signin_locked', '', `user=${found.id}`);
+        return send(403, views.signInPage({
+          email, field: 'password', keep: String(form.keep ?? ''), user,
+          error: 'This account is locked. Ask the operator to unlock it.'
+        }));
+      }
       // One message for both failures. Saying "no account with that email" tells a stranger which
       // addresses have accounts here, which is the whole of what they wanted to know.
       if (!found || !(await verifyPassword(password, found.password_hash))) {
@@ -281,6 +298,81 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         sessions: dbm.countSessions(db, account.id),
         flash: url.searchParams.get('welcome') === '1' ? 'Account created — everything you ask from now on is kept here.' : ''
       }));
+    }
+
+    // --- operator: /admin, behind a session rather than a token in a URL ---
+    // /qt/<token> stays exactly as it was (read, plus the two booking transitions): the operator has
+    // that link bookmarked, and reconciling a payment is not the same power as creating people or
+    // moving prices.
+    if (path === '/admin/login') {
+      if (method === 'POST') {
+        const email = String(form.email ?? '').trim();
+        const password = String(form.password ?? '');
+        const found = dbm.userByEmail(db, email);
+        if (!found || !(await verifyPassword(password, found.password_hash))) {
+          dbm.logEvent(db, 'admin_login_failed', '', `email=${email.slice(0, 60)}`);
+          return send(401, views.adminLoginPage({ email, error: 'That email and password do not match an operator account.' }));
+        }
+        if (found.role !== 'admin') {
+          dbm.logEvent(db, 'admin_login_refused', '', `user=${found.id} reason=role`);
+          return send(403, views.adminLoginPage({ email, error: 'That account is not an operator account.' }));
+        }
+        if ((found.status ?? 'active') !== 'active') {
+          dbm.logEvent(db, 'admin_login_refused', '', `user=${found.id} reason=locked`);
+          return send(403, views.adminLoginPage({ email, error: 'That account is locked.' }));
+        }
+        const id = newSessionId();
+        dbm.createSession(db, { id, userId: found.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
+        dbm.touchUser(db, found.id);
+        dbm.logEvent(db, 'admin_login', '', `actor=${found.email}`);
+        return withCookie('/admin', id, isSecureRequest(req));
+      }
+      if (account?.role === 'admin') return redirect('/admin');
+      return send(200, views.adminLoginPage({ email: '', error: '' }));
+    }
+    if (path === '/admin/logout' && method === 'POST') {
+      if (account) dbm.logEvent(db, 'admin_logout', '', `actor=${account.email}`);
+      if (sessionId) dbm.deleteSession(db, sessionId);
+      res.writeHead(303, { location: '/admin/login', 'set-cookie': clearedSessionCookie({ secure: isSecureRequest(req) }) });
+      return res.end();
+    }
+    if (path === '/admin' || path.startsWith('/admin/')) {
+      if (!account || account.role !== 'admin') return redirect(`/admin/login?next=${encodeURIComponent(path)}`);
+      const actor = account.email;
+      if (path === '/admin') {
+        return send(200, views.adminOverviewPage({
+          admin: account,
+          stats: dbm.stats(db),
+          settings: loadSettings(db),
+          events: dbm.recentEvents(db, { limit: 20 }),
+          flash: url.searchParams.get('saved') === '1' ? 'Saved.' : ''
+        }));
+      }
+      if (path === '/admin/settings') {
+        if (method === 'POST') {
+          const check = checkSettings(form);
+          if (!check.ok) {
+            // Show back what was typed, not what is stored: the operator needs to see the typo.
+            const shown = { ...loadSettings(db) };
+            for (const key of SETTING_KEYS) if (form[key] !== undefined) shown[key] = String(form[key]);
+            return send(400, views.adminSettingsPage({ admin: account, settings: shown, errors: check.errors, flash: '' }));
+          }
+          const changed = saveSettings(db, check.values, { actor });
+          dbm.logEvent(db, 'setting', Object.keys(check.values).join(','), `actor=${actor} changed=${changed.join(' ') || 'nothing'}`);
+          return redirect('/admin/settings?saved=1');
+        }
+        return send(200, views.adminSettingsPage({
+          admin: account, settings: loadSettings(db), errors: {},
+          flash: url.searchParams.get('saved') === '1' ? 'Saved. Prices use these immediately.' : ''
+        }));
+      }
+      if (path === '/admin/audit') {
+        const kind = url.searchParams.get('kind') ?? '';
+        return send(200, views.adminAuditPage({
+          admin: account, kind, events: dbm.recentEvents(db, { limit: 200, kind }), kinds: dbm.eventKinds(db)
+        }));
+      }
+      return fail(404, 'No such operator page.');
     }
 
     // --- pages -------------------------------------------------------------
@@ -363,9 +455,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const expert = dbm.listExperts(db).find((e) => e.slug === expertSlug);
       if (!expert) return fail(400, 'No valid expert selected.');
       const minutes = Number(form.minutes ?? 45);
+      const moneySettings = loadSettings(db);
       let money;
       try {
-        money = quote(expert.rate_vnd, minutes);
+        money = quote(expert.rate_vnd, minutes, moneySettings.platform_take_rate / 100, moneySettings.min_minutes);
       } catch (err) {
         return fail(400, String(err.message));
       }

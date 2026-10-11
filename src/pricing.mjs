@@ -20,8 +20,9 @@ export function split(priceVnd, takeRate = PLATFORM_TAKE_RATE) {
   return { price_vnd: priceVnd, fee_vnd: fee, payout_vnd: priceVnd - fee };
 }
 
-export function quote(rateVnd, minutes = DEFAULT_MINUTES, takeRate = PLATFORM_TAKE_RATE) {
-  if (minutes < MIN_MINUTES) throw new Error(`minimum ${MIN_MINUTES} minutes`);
+export function quote(rateVnd, minutes = DEFAULT_MINUTES, takeRate = PLATFORM_TAKE_RATE, minMinutes = MIN_MINUTES) {
+  if (!Number.isInteger(minutes)) throw new Error('minutes must be a whole number');
+  if (minutes < minMinutes) throw new Error(`minimum ${minMinutes} minutes`);
   return { minutes, ...split(priceFor(rateVnd, minutes), takeRate) };
 }
 
