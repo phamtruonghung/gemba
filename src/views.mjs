@@ -331,6 +331,7 @@ ol.steps li:last-child{border-bottom:0}
 ol.steps li::before{content:counter(step);flex:none;width:26px;height:26px;border-radius:50%;background:var(--color-muted);color:var(--color-muted-foreground);display:grid;place-items:center;font-size:13px;font-weight:700}
 ol.steps li.here::before{background:var(--color-accent);color:var(--color-on-accent)}
 table{width:100%;border-collapse:collapse;font-size:14.5px}
+select{max-width:100%}
 .table-wrap{overflow-x:auto;max-width:100%}
 /* an invitation link is a long unbroken token: let it wrap rather than widen the card */
 .flash .mono,.card .mono{overflow-wrap:anywhere}
@@ -1423,6 +1424,8 @@ export function interviewPage({ expert, interview, step, question, answers, done
 const ADMIN_NAV = [
   ['/admin', 'Overview', 'scale'],
   ['/admin/experts', 'Practitioners', 'people'],
+  ['/admin/bookings', 'Bookings', 'clock'],
+  ['/admin/accounts', 'Accounts', 'account'],
   ['/admin/invites', 'Invitations', 'book'],
   ['/admin/settings', 'Settings', 'rules'],
   ['/admin/audit', 'Audit', 'clock']
@@ -1712,6 +1715,155 @@ export function adminExpertPage({ admin, expert, stats = {}, invite = null, topi
   });
 }
 
+export function adminAccountsPage({ admin, users = [], q = '', errors = {}, draft = {}, flash = '' }) {
+  const roleBadge = (u) => (u.role === 'admin' ? 'brand' : u.role === 'expert' ? 'ok' : '');
+  const rows = users
+    .map((u) => `<tr>
+  <td>${esc(u.name || '—')}<div class="small muted mono">${esc(u.email)}</div></td>
+  <td><span class="badge ${roleBadge(u)}">${esc(u.role)}</span></td>
+  <td><span class="badge${u.status === 'active' ? ' ok' : ' warn'}">${esc(u.status)}</span></td>
+  <td>${u.live_sessions ?? 0}<div class="small muted">${u.last_signin ? 'last ' + esc(String(u.last_signin).slice(0, 10)) : 'never signed in'}</div></td>
+  <td class="small muted">${esc(String(u.created_at ?? '').slice(0, 10))}</td>
+  <td>${u.expert_id ? `<a href="/admin/experts/${u.expert_id}">${esc(u.expert_name ?? 'profile')}</a>` : '<span class="muted">—</span>'}</td>
+  <td class="row tight-gap" style="flex-wrap:wrap">
+    <form method="post" action="/admin/accounts/${u.id}/role" class="row tight-gap" style="align-items:center">
+      <label class="sr-only" for="role-${u.id}">Role for ${esc(u.email)}</label>
+      <select id="role-${u.id}" name="role" style="width:auto;max-width:100%">
+        ${['asker', 'expert', 'admin'].map((r) => `<option value="${r}"${u.role === r ? ' selected' : ''}>${r}</option>`).join('')}
+      </select>
+      <button class="btn alt sm" type="submit">Set role</button>
+    </form>
+    ${u.status === 'active'
+      ? `<form method="post" action="/admin/accounts/${u.id}/lock"><button class="btn ghost sm" type="submit">Lock</button></form>`
+      : `<form method="post" action="/admin/accounts/${u.id}/unlock"><button class="btn alt sm" type="submit">Unlock</button></form>`}
+    <form method="post" action="/admin/accounts/${u.id}/signout"><button class="btn ghost sm" type="submit">Sign out everywhere</button></form>
+  </td>
+</tr>`)
+    .join('');
+
+  return adminShell({
+    admin, active: '/admin/accounts', eyebrow: 'Operator console', flash,
+    title: 'Accounts',
+    body: `
+<section class="tight"><div class="wrap">
+  <p class="muted">${users.length} account${users.length === 1 ? '' : 's'}${q ? ` matching “${esc(q)}”` : ''}. Locking an account also ends every session it is holding — a lock that leaves someone working would only be a claim about the future.</p>
+  <form method="get" action="/admin/accounts" class="row" style="margin-bottom:var(--space-4)">
+    <div class="field" style="margin:0;flex:1"><label class="sr-only" for="q">Search accounts</label>
+      <input id="q" name="q" value="${esc(q)}" placeholder="email or name"></div>
+    <button class="btn alt" type="submit">Search</button>
+  </form>
+  <div class="table-wrap"><table><thead><tr><th>Who</th><th>Role</th><th>State</th><th>Sessions</th><th>Created</th><th>Practitioner</th><th>Actions</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="7" class="muted">No accounts.</td></tr>'}</tbody></table></div>
+</div></section>
+<section class="tight"><div class="wrap narrow">
+  <h2>Invite an operator</h2>
+  <div class="card">
+    <p style="margin:0">An operator is invited the same way a practitioner is: a single-use link, seven days, and they choose their own password. Nobody should have a password picked for them, and no invitation should outlive the reason for it.</p>
+    <form method="post" action="/admin/accounts">
+      <div class="form-row two">
+        <div class="field"><label for="ac-email">Their email</label>
+          <input id="ac-email" name="email" type="email" value="${esc(String(draft.email ?? ''))}"${errors.email ? ' aria-invalid="true"' : ''}>
+          ${errors.email ? `<p class="field-error">${icon('warn')} ${esc(errors.email)}</p>` : ''}</div>
+        <div class="field"><label for="ac-name">Their name</label>
+          <input id="ac-name" name="name" value="${esc(String(draft.name ?? ''))}">${errors.name ? `<p class="field-error">${icon('warn')} ${esc(errors.name)}</p>` : ''}</div>
+      </div>
+      <div class="field"><label for="ac-role">What they are</label>
+        <select id="ac-role" name="role" style="width:auto" aria-describedby="ac-role-hint">
+          <option value="admin">operator</option>
+          <option value="expert">practitioner</option>
+        </select>
+        <p class="hint" id="ac-role-hint" style="margin-top:-4px">An operator reaches the console: prices, people and the audit trail. A practitioner gets a desk — link the account from the <a href="/admin/experts">practitioners page</a> afterwards.</p></div>
+      <div class="row"><button class="btn" type="submit">${icon('book')}Create the invitation</button></div>
+    </form>
+  </div>
+</div></section>`,
+  });
+}
+
+export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue = [], refunds = [], status = '', flash = '' }) {
+  const label = { requested: 'requested', awaiting_payment: 'awaiting payment', paid: 'paid', completed: 'done', cancelled: 'cancelled' };
+  const rows = bookings
+    .map((b) => {
+      const open = ['requested', 'awaiting_payment', 'paid'].includes(b.status);
+      return `<tr>
+  <td class="mono">${esc(b.ref)}</td>
+  <td>${esc(b.expert_name ?? '—')}</td>
+  <td>${esc(b.asker)}<div class="small muted mono">${esc(b.contact)}</div></td>
+  <td>${esc(String(b.starts_at).slice(0, 16).replace('T', ' '))}<div class="small muted">${esc(String(b.minutes))} min</div></td>
+  <td class="mono">${formatVnd(b.price_vnd)}<div class="small muted">fee ${formatVnd(b.fee_vnd)} · payout ${formatVnd(b.payout_vnd)}</div></td>
+  <td><span class="badge${b.status === 'completed' ? ' ok' : b.status === 'cancelled' ? ' warn' : ''}">${esc(label[b.status] ?? b.status)}</span>
+    ${b.status === 'cancelled' && b.refund_vnd > 0 ? `<div class="small" style="color:var(--color-ok-text)">refund ${formatVnd(b.refund_vnd)} owed</div>` : ''}
+    ${b.cancel_reason ? `<div class="small muted">${esc(b.cancel_reason)}</div>` : ''}</td>
+  <td>
+    ${open ? `<div class="row tight-gap" style="flex-wrap:wrap">
+      ${b.status === 'paid'
+        ? `<form method="post" action="/admin/bookings/${esc(b.ref)}/completed"><button class="btn alt sm" type="submit">Session done</button></form>`
+        : `<form method="post" action="/admin/bookings/${esc(b.ref)}/paid"><button class="btn alt sm" type="submit">Payment received</button></form>`}
+      <form method="post" action="/admin/bookings/${esc(b.ref)}/reschedule" class="row tight-gap" style="align-items:center">
+        <label class="sr-only" for="rs-${esc(b.ref)}">New time for ${esc(b.ref)}</label>
+        <input id="rs-${esc(b.ref)}" name="starts_at" value="${esc(String(b.starts_at).slice(0, 16))}" style="width:170px">
+        <label class="sr-only" for="rm-${esc(b.ref)}">Minutes for ${esc(b.ref)}</label>
+        <input id="rm-${esc(b.ref)}" name="minutes" value="${esc(String(b.minutes))}" style="width:70px">
+        <button class="btn ghost sm" type="submit">Move</button>
+      </form>
+      <form method="post" action="/admin/bookings/${esc(b.ref)}/cancel" class="row tight-gap" style="align-items:center">
+        <label class="sr-only" for="cr-${esc(b.ref)}">Reason for cancelling ${esc(b.ref)}</label>
+        <input id="cr-${esc(b.ref)}" name="reason" placeholder="why" style="width:130px">
+        <button class="btn ghost sm" type="submit">Cancel</button>
+      </form>
+    </div>` : '<span class="muted small">nothing to do</span>'}
+  </td>
+</tr>`;
+    })
+    .join('');
+
+  const chips = ['', 'requested', 'awaiting_payment', 'paid', 'completed', 'cancelled']
+    .map((s) => {
+      const n = s === '' ? Object.values(counts).reduce((a, c) => a + c, 0) : counts[s] ?? 0;
+      return `<a class="badge${status === s ? ' brand' : ''}" href="/admin/bookings${s ? '?status=' + s : ''}">${esc(s === '' ? 'all' : label[s] ?? s)} ${n}</a>`;
+    })
+    .join(' ');
+
+  const revenueRows = revenue
+    .filter((r) => r.bookings > 0)
+    .map((r) => `<tr>
+  <td>${esc(r.name)}</td>
+  <td>${r.bookings}</td>
+  <td class="mono">${formatVnd(r.paid_out_vnd)}</td>
+  <td class="mono">${formatVnd(r.fee_vnd)}</td>
+  <td class="mono">${formatVnd(r.pending_vnd)}</td>
+</tr>`)
+    .join('');
+
+  const refundRows = refunds
+    .map((b) => `<tr><td class="mono">${esc(b.ref)}</td><td>${esc(b.expert_name ?? '—')}</td>
+      <td>${esc(b.contact)}</td><td class="mono">${formatVnd(b.refund_vnd)}</td>
+      <td class="small muted">${esc(b.cancel_reason)}</td></tr>`)
+    .join('');
+
+  return adminShell({
+    admin, active: '/admin/bookings', eyebrow: 'Operator console', flash,
+    title: 'Bookings',
+    body: `
+<section class="tight"><div class="wrap">
+  <p class="row" style="gap:8px;flex-wrap:wrap">${chips}</p>
+  <div class="table-wrap"><table><thead><tr><th>Ref</th><th>Practitioner</th><th>Client</th><th>When</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="7" class="muted">No bookings in this view.</td></tr>'}</tbody></table></div>
+</div></section>
+${refunds.length ? `<section class="tight"><div class="wrap">
+  <h2>Refunds owed</h2>
+  <p class="muted">Sessions cancelled after the client paid. The platform instructs payment and never holds it, so these are instructions to send back — not money waiting here.</p>
+  <div class="table-wrap"><table><thead><tr><th>Ref</th><th>Practitioner</th><th>Client</th><th>Amount</th><th>Reason</th></tr></thead><tbody>${refundRows}</tbody></table></div>
+</div></section>` : ''}
+<section class="tight"><div class="wrap">
+  <h2>What practitioners have earned</h2>
+  <p class="muted">Completed sessions only, plus what is still moving through the pipeline.</p>
+  <div class="table-wrap"><table><thead><tr><th>Practitioner</th><th>Sessions</th><th>Paid out</th><th>Platform fee</th><th>In flight</th></tr></thead>
+  <tbody>${revenueRows || '<tr><td colspan="5" class="muted">No sessions yet.</td></tr>'}</tbody></table></div>
+</div></section>`,
+  });
+}
+
 export function adminInvitesPage({ admin, invites = [], flash = '' }) {
   const rows = invites
     .map((i) => `<tr>
@@ -1744,7 +1896,9 @@ export function invitePage({ invite, expert, errors = {}, draft = {} }) {
 <section class="page-head"><div class="wrap narrow">
   <p class="eyebrow">Invitation</p>
   <h1 style="font-size:clamp(26px,3.4vw,40px)">Your desk at Gemba</h1>
-  <p class="muted">${expert ? `You have been invited as a practitioner${expert.headline ? ` — ${esc(expert.headline)}` : ''}.` : 'You have been invited as a practitioner.'} Set a password and your desk is yours.</p>
+  <p class="muted">${invite.role === 'admin'
+    ? 'You have been invited as an operator: after this you will be able to sign in to the console at any time.'
+    : expert ? `You have been invited as a practitioner${expert.headline ? ` — ${esc(expert.headline)}` : ''}.` : 'You have been invited as a practitioner.'} Set a password${invite.role === 'admin' ? '' : ' and your desk is yours'}.</p>
 </div></section>
 <section class="tight"><div class="wrap narrow">
   <form method="post" action="/invite/${esc(invite.token)}" class="card">

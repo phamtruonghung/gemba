@@ -333,3 +333,15 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
     why the invitation form is hidden once a practitioner has an account (an invitation to that
     address could only be refused) and why `/desk` sends an asker somewhere useful instead of showing
     an empty workspace.
+
+22. **Cancelling a paid session is money owed back, not a status change.** The platform instructs payment
+    and never holds it (ADR-0008), so `/admin/bookings` records `refund_vnd` and shows a *Refunds owed*
+    list: an instruction for the operator to send, never a claim that the platform reversed a transfer
+    it never made. A cancelled paid session that quietly lost its amount would become free.
+23. **An error handler that can throw is a way to lose the whole server.** The request handler's outer
+    catch called `fail`, which lives inside the request closure and is not in scope there — so the first
+    unhandled error threw a second error while handling the first, killed the process, and left every
+    later request hanging on a socket nobody was listening to while the original error was never
+    printed. It stayed invisible because no handler had ever thrown. A guard that refuses an illegal
+    booking transition is exactly the kind of error this protects: it now becomes a message on the page
+    and the process keeps serving.

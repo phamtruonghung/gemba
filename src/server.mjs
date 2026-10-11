@@ -484,6 +484,157 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         }
         return fail(404, 'No such operator page.');
       }
+      // --- accounts: who exists, what they are, and stopping them ----------
+      if (path === '/admin/accounts' && method === 'POST') {
+        // An operator account is invited, never handed a password the first operator picked: the
+        // person who will use it chooses it, and the invitation is single-use like any other.
+        const check = checkInvite(form, { fallbackName: '' });
+        const role = form.role === 'admin' ? 'admin' : 'expert';
+        if (!check.ok) {
+          return send(400, views.adminAccountsPage({
+            admin: account, users: dbm.allUsers(db), q: '', flash: '',
+            errors: check.errors, draft: form
+          }));
+        }
+        if (dbm.userByEmail(db, check.values.email)) {
+          return send(409, views.adminAccountsPage({
+            admin: account, users: dbm.allUsers(db), q: '', flash: '',
+            errors: { email: 'That address already has an account here.' }, draft: form
+          }));
+        }
+        const token = randomBytes(24).toString('base64url');
+        dbm.createInvite(db, { token, email: check.values.email, name: check.values.name, expertId: null, role, createdBy: actor });
+        dbm.logEvent(db, 'account', `invite:${role}`, `actor=${actor} invited=${check.values.email}`);
+        return redirect(`/admin/invites?invited=${encodeURIComponent(check.values.email)}`);
+      }
+      if (path === '/admin/accounts') {
+        return send(200, views.adminAccountsPage({
+          admin: account, users: dbm.allUsers(db, { q: url.searchParams.get('q') ?? '' }),
+          q: url.searchParams.get('q') ?? '', errors: {}, draft: {},
+          flash: url.searchParams.get('locked') ? 'Account locked and signed out everywhere.'
+            : url.searchParams.get('unlocked') ? 'Account unlocked.'
+            : url.searchParams.get('role') ? 'Role changed.'
+            : url.searchParams.get('signout') ? 'Every session for that account was ended.' : ''
+        }));
+      }
+      const accMatch = /^\/admin\/accounts\/(\d+)\/(role|lock|unlock|signout)$/.exec(path);
+      if (accMatch && method === 'POST') {
+        const target = dbm.userById(db, Number(accMatch[1]));
+        if (!target) return fail(404, 'No such account.');
+        const action = accMatch[2];
+        const self = target.id === account.id;
+        const lastAdmin = target.role === 'admin' && target.status === 'active' && dbm.countActiveAdmins(db) <= 1;
+
+        if (action === 'lock') {
+          // Locking the account you are signed in as is a mistake nobody can undo from inside the
+          // console, and locking the last operator locks everybody out of it. Both are refused.
+          if (self) return fail(400, 'You cannot lock the account you are signed in as.');
+          if (lastAdmin) return fail(400, 'That is the last operator who can sign in. Invite another operator first.');
+          dbm.setUserStatus(db, target.id, 'locked');
+          // A lock that leaves live sessions running is a claim about the future, not about now.
+          const ended = dbm.deleteSessionsForUser(db, target.id);
+          dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} locked=${target.email} sessions_ended=${ended}`);
+          return redirect('/admin/accounts?locked=1');
+        }
+        if (action === 'unlock') {
+          dbm.setUserStatus(db, target.id, 'active');
+          dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} unlocked=${target.email}`);
+          return redirect('/admin/accounts?unlocked=1');
+        }
+        if (action === 'role') {
+          const role = String(form.role ?? '');
+          if (!['asker', 'expert', 'admin'].includes(role)) return fail(400, 'Choose a role.');
+          if (self) return fail(400, 'You cannot change your own role.');
+          if (role !== 'admin' && lastAdmin) return fail(400, 'That is the last operator who can sign in.');
+          if (role === 'expert' && !dbm.expertByUser(db, target.id)) {
+            return fail(400, 'An expert account needs a practitioner row — invite them from the practitioners page instead.');
+          }
+          dbm.setUserRole(db, target.id, role);
+          dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} role ${target.role}->${role} for=${target.email}`);
+          return redirect('/admin/accounts?role=1');
+        }
+        if (action === 'signout') {
+          const ended = dbm.deleteSessionsForUser(db, target.id);
+          dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} signed_out_everywhere=${target.email} sessions_ended=${ended}`);
+          return redirect('/admin/accounts?signout=1');
+        }
+        return fail(404, 'No such action.');
+      }
+
+      // --- bookings: reconcile, move, or cancel with the money accounted for ---
+      if (path === '/admin/bookings') {
+        const status = url.searchParams.get('status') ?? '';
+        return send(200, views.adminBookingsPage({
+          admin: account, bookings: dbm.allBookings(db, { status }),
+          counts: dbm.bookingStatusCounts(db), revenue: dbm.revenueByExpert(db),
+          refunds: dbm.refundsOwed(db), status,
+          flash: url.searchParams.get('paid') ? `Booking ${url.searchParams.get('paid')} marked as paid.`
+            : url.searchParams.get('completed') ? `Booking ${url.searchParams.get('completed')} marked as done.`
+            : url.searchParams.get('moved') ? `Booking ${url.searchParams.get('moved')} moved and re-quoted.`
+            : url.searchParams.get('cancelled') ? `Booking ${url.searchParams.get('cancelled')} cancelled.`
+            : url.searchParams.get('err') ? url.searchParams.get('err') : ''
+        }));
+      }
+      const bkMatch = /^\/admin\/bookings\/([^/]+)\/(paid|completed|cancel|reschedule)$/.exec(path);
+      if (bkMatch && method === 'POST') {
+        const ref = decodeURIComponent(bkMatch[1]);
+        const b = dbm.bookingByRef(db, ref);
+        if (!b) return fail(404, 'No such booking.');
+        const action = bkMatch[2];
+
+        if (action === 'paid' || action === 'completed') {
+          // `setBookingStatus` guards the transitions (requested -> awaiting_payment -> paid ->
+          // completed), so a client who transferred without ever opening their booking page is moved
+          // through the middle state rather than skipping it — the same two steps the token console
+          // takes. Skipping it here would throw where an operator least expects a crash.
+          const allowedFrom = action === 'paid' ? ['requested', 'awaiting_payment'] : ['paid'];
+          if (!allowedFrom.includes(b.status)) {
+            return redirect(`/admin/bookings?err=${encodeURIComponent(`Booking ${ref} is ${b.status}; it cannot be marked ${action} from there.`)}`);
+          }
+          if (b.status === 'requested') dbm.setBookingStatus(db, ref, 'awaiting_payment');
+          dbm.setBookingStatus(db, ref, action === 'paid' ? 'paid' : 'completed');
+          dbm.logEvent(db, 'booking', ref, `actor=${actor} ${action} ${b.price_vnd}`);
+          return redirect(`/admin/bookings?${action}=${encodeURIComponent(ref)}`);
+        }
+
+        if (action === 'reschedule') {
+          const startsAt = String(form.starts_at ?? '').trim();
+          const when = new Date(startsAt);
+          if (!startsAt || Number.isNaN(when.getTime())) {
+            return redirect(`/admin/bookings?err=${encodeURIComponent('That start time is not a date the system can read.')}`);
+          }
+          const settings = loadSettings(db);
+          const expert = dbm.expertById(db, b.expert_id);
+          const minutes = Number(form.minutes ?? b.minutes);
+          let money;
+          try {
+            money = quote(expert?.rate_vnd ?? b.price_vnd, minutes, settings.platform_take_rate / 100, settings.min_minutes);
+          } catch (err) {
+            return redirect(`/admin/bookings?err=${encodeURIComponent(String(err.message))}`);
+          }
+          dbm.rescheduleBooking(db, ref, {
+            startsAt: when.toISOString(), minutes: money.minutes,
+            priceVnd: money.price_vnd, feeVnd: money.fee_vnd, payoutVnd: money.payout_vnd
+          });
+          dbm.logEvent(db, 'booking', ref, `actor=${actor} rescheduled to ${when.toISOString().slice(0, 16)} ${money.minutes}p price ${b.price_vnd}->${money.price_vnd}`);
+          return redirect(`/admin/bookings?moved=${encodeURIComponent(ref)}`);
+        }
+
+        if (action === 'cancel') {
+          if (b.status === 'cancelled') return redirect('/admin/bookings?err=' + encodeURIComponent('That booking is already cancelled.'));
+          const reason = String(form.reason ?? '').trim();
+          // A cancellation after payment is not a status change, it is money owed back. The platform
+          // instructs payment and never holds it (ADR-0008), so this records the amount the operator
+          // has to send back rather than pretending a transfer can be reversed.
+          const alreadyPaid = ['paid', 'completed'].includes(b.status);
+          const refundVnd = alreadyPaid ? b.price_vnd : 0;
+          dbm.cancelBooking(db, ref, { reason, refundVnd });
+          dbm.logEvent(db, 'booking', ref, `actor=${actor} cancel reason="${reason.slice(0, 80)}" refund_owed=${refundVnd}`);
+          return redirect(`/admin/bookings?cancelled=${encodeURIComponent(ref)}`);
+        }
+        return fail(404, 'No such booking action.');
+      }
+
       if (path === '/admin/invites') {
         return send(200, views.adminInvitesPage({
           admin: account, invites: dbm.listInvites(db).map((i) => ({ ...i, state: dbm.inviteState(i) })),
@@ -640,15 +791,17 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           email: invite.email,
           name: check.values.name,
           password_hash: await hashPassword(check.values.password),
-          role: 'expert'
+          // The role comes from the invitation row, never from the form: a field on the page cannot
+          // promote the account it is creating into an operator.
+          role: invite.role === 'admin' ? 'admin' : 'expert'
         });
         if (invite.expert_id) dbm.linkExpertUser(db, invite.expert_id, created.id);
         dbm.acceptInvite(db, invite.id);
-        dbm.logEvent(db, 'invite_accepted', `expert:${invite.expert_id ?? '-'}`, `actor=${invite.email} role=expert`);
+        dbm.logEvent(db, 'invite_accepted', `expert:${invite.expert_id ?? '-'}`, `actor=${invite.email} role=${created.role}`);
         const id = newSessionId();
         dbm.createSession(db, { id, userId: created.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
         dbm.touchUser(db, created.id);
-        return withCookie('/desk', id, isSecureRequest(req));
+        return withCookie(created.role === 'admin' ? '/admin' : '/desk', id, isSecureRequest(req));
       }
       return send(200, views.invitePage({ invite, expert, errors: {}, draft: {} }));
     }
@@ -810,8 +963,19 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       }
       await handle(req, res, { form, json });
     } catch (err) {
-      res.writeHead(500, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(fail(500, String(err?.message ?? err)));
+      // `send`/`fail` live inside the request closure and are not in scope here. Calling `fail` from
+      // this catch used to throw a second error *while handling the first*, which took the whole
+      // process down: every later request then hung on a socket nobody was listening to, and the
+      // original error was never printed. A 500 handler that can kill the server is worse than no
+      // 500 handler.
+      const message = String(err?.stack ?? err?.message ?? err);
+      console.error('unhandled error:', message);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end(`500 — the request could not be completed.\n\n${message}\n`);
+      } else {
+        res.end();
+      }
     }
   });
 
