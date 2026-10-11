@@ -95,7 +95,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
   async function runAsk({ text, plant_type = '', asker = '', contact = '', topic = '' }) {
     const hits = search(text, index, 5);
     const cov = coverage(text, hits, index);
-    const inferredTopic = topic || hits[0]?.note?.topic || 'khac';
+    const inferredTopic = topic || hits[0]?.note?.topic || 'other';
     const ai = await askFromCorpus({ question: text, hits, plantType: plant_type, coverageVerdict: cov, cfg: config.llm });
     const q = dbm.insertQuestion(db, {
       asker,
@@ -195,19 +195,19 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         questions: dbm.recentQuestions(db, 8)
       }));
     }
-    if (path === '/cach-lam') return send(200, views.howItWorksPage());
-    if (path === '/chuyen-gia') return send(200, views.expertListPage({ experts: dbm.listExperts(db), topics: views.topicList() }));
-    if (path === '/kho') return send(200, views.corpusPage({ notes: (() => { const t = url.searchParams.get('topic'); const all = dbm.publishedNotes(db); return t ? all.filter((n) => n.topic === t) : all; })(), topic: url.searchParams.get('topic') ?? '', topics: views.topicList() }));
-    if (path.startsWith('/ghi-chu/')) {
-      const slug = decodeURIComponent(path.slice('/ghi-chu/'.length));
+    if (path === '/how-it-works') return send(200, views.howItWorksPage());
+    if (path === '/experts') return send(200, views.expertListPage({ experts: dbm.listExperts(db), topics: views.topicList() }));
+    if (path === '/library') return send(200, views.corpusPage({ notes: (() => { const t = url.searchParams.get('topic'); const all = dbm.publishedNotes(db); return t ? all.filter((n) => n.topic === t) : all; })(), topic: url.searchParams.get('topic') ?? '', topics: views.topicList() }));
+    if (path.startsWith('/notes/')) {
+      const slug = decodeURIComponent(path.slice('/notes/'.length));
       const note = dbm.noteBySlug(db, slug);
-      if (!note || note.status !== 'published') return send(404, views.errorPage({ code: 404, message: 'Không tìm thấy ghi chú này trong kho.' }));
+      if (!note || note.status !== 'published') return send(404, views.errorPage({ code: 404, message: 'No such note in the library.' }));
       const expert = note.expert_id ? dbm.listExperts(db).find((e) => e.id === note.expert_id) : null;
       return send(200, views.notePage({ note, expert }));
     }
-    if (path === '/hoi' && method === 'POST') {
+    if (path === '/ask' && method === 'POST') {
       const text = String(form.q ?? '').trim();
-      if (!text) return send(400, views.errorPage({ code: 400, message: 'Chưa nhập câu hỏi.' }));
+      if (!text) return send(400, views.errorPage({ code: 400, message: 'No question was entered.' }));
       const out = await runAsk({ text, plant_type: form.plant_type ?? '', asker: form.asker ?? '', contact: form.contact ?? '', topic: form.topic ?? '' });
       return redirect(`/q/${out.question.ref}`);
     }
@@ -216,7 +216,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const qMatch = /^\/q\/([^/]+)$/.exec(path);
     if (qMatch) {
       const q = dbm.questionByRef(db, decodeURIComponent(qMatch[1]));
-      if (!q) return send(404, views.errorPage({ code: 404, message: 'Không tìm thấy câu hỏi.' }));
+      if (!q) return send(404, views.errorPage({ code: 404, message: 'No such question.' }));
       const ids = JSON.parse(q.ai_citations);
       const cited = ids.map((id) => dbm.publishedNotes(db).find((n) => n.id === id)).filter(Boolean);
       return send(200, views.questionPage({
@@ -228,25 +228,25 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         bankConfigured: Boolean(config.bankBin && config.bankAccount)
       }));
     }
-    const escMatch = /^\/q\/([^/]+)\/hoi-chuyen-gia$/.exec(path);
+    const escMatch = /^\/q\/([^/]+)\/ask-expert$/.exec(path);
     if (escMatch && method === 'POST') {
       const ref = decodeURIComponent(escMatch[1]);
       const q = dbm.questionByRef(db, ref);
-      if (!q) return send(404, views.errorPage({ code: 404, message: 'Không tìm thấy câu hỏi.' }));
+      if (!q) return send(404, views.errorPage({ code: 404, message: 'No such question.' }));
       if (q.contact === '' && (form.contact ?? '')) {
         db.prepare('update questions set contact = ?, asker = ? where ref = ?').run(String(form.contact), String(form.asker ?? ''), ref);
       }
       escalate()(ref, form.contact);
       return redirect(`/q/${ref}`);
     }
-    const bookFromQ = /^\/q\/([^/]+)\/dat-lich$/.exec(path);
+    const bookFromQ = /^\/q\/([^/]+)\/book$/.exec(path);
     if (bookFromQ && method === 'POST') return createBooking(send, redirect, { ref: decodeURIComponent(bookFromQ[1]), form });
-    if (path === '/dat-lich' && method === 'POST') return createBooking(send, redirect, { ref: '', form });
+    if (path === '/book' && method === 'POST') return createBooking(send, redirect, { ref: '', form });
 
     function createBooking(send, redirect, { ref, form }) {
       const expertSlug = String(form.expert ?? '');
       const expert = dbm.listExperts(db).find((e) => e.slug === expertSlug);
-      if (!expert) return send(400, views.errorPage({ code: 400, message: 'Chưa chọn chuyên gia hợp lệ.' }));
+      if (!expert) return send(400, views.errorPage({ code: 400, message: 'No valid expert selected.' }));
       const minutes = Number(form.minutes ?? 45);
       let money;
       try {
@@ -257,9 +257,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const q = ref ? dbm.questionByRef(db, ref) : null;
       const b = dbm.insertBooking(db, {
         expert_id: expert.id,
-        asker: String(form.asker ?? '').trim() || 'khách',
+        asker: String(form.asker ?? '').trim() || 'guest',
         contact: String(form.contact ?? '').trim(),
-        topic: String(form.topic ?? q?.topic ?? 'khac'),
+        topic: String(form.topic ?? q?.topic ?? 'other'),
         agenda: String(form.agenda ?? q?.text ?? '').slice(0, 1000),
         starts_at: String(form.starts_at ?? '').trim(),
         minutes: money.minutes,
@@ -274,17 +274,17 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const bMatch = /^\/b\/([^/]+)$/.exec(path);
     if (bMatch) {
       const b = dbm.bookingByRef(db, decodeURIComponent(bMatch[1]));
-      if (!b) return send(404, views.errorPage({ code: 404, message: 'Không tìm thấy đơn.' }));
+      if (!b) return send(404, views.errorPage({ code: 404, message: 'No such booking.' }));
       const instruction = config.bankBin && config.bankAccount
         ? transferInstruction({ bankBin: config.bankBin, account: config.bankAccount, amountVnd: b.price_vnd, ref: b.ref })
         : null;
       return send(200, views.bookingPage({ b, instruction, bankConfigured: Boolean(instruction) }));
     }
-    const paidMatch = /^\/b\/([^/]+)\/da-chuyen$/.exec(path);
+    const paidMatch = /^\/b\/([^/]+)\/transferred$/.exec(path);
     if (paidMatch && method === 'POST') {
       const ref = decodeURIComponent(paidMatch[1]);
       const b = dbm.bookingByRef(db, ref);
-      if (!b) return send(404, views.errorPage({ code: 404, message: 'Không tìm thấy đơn.' }));
+      if (!b) return send(404, views.errorPage({ code: 404, message: 'No such booking.' }));
       if (b.status === 'requested') dbm.setBookingStatus(db, ref, 'awaiting_payment');
       return redirect(`/b/${ref}`);
     }
@@ -295,7 +295,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const token = decodeURIComponent(cMatch[1]);
       const sub = cMatch[2] ?? '';
       const expert = dbm.expertByToken(db, token);
-      if (!expert) return send(404, views.errorPage({ code: 404, message: 'Liên kết không hợp lệ.' }));
+      if (!expert) return send(404, views.errorPage({ code: 404, message: 'This link is not valid.' }));
 
       if (sub === '' && method === 'GET') {
         return send(200, views.expertWorkspacePage({
@@ -305,15 +305,15 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           bookings: dbm.bookingsFor(db, { expertId: expert.id })
         }));
       }
-      if (sub === '/tra-loi' && method === 'POST') {
+      if (sub === '/answer' && method === 'POST') {
         const ref = String(form.ref ?? '');
         const text = String(form.body ?? '').trim();
         if (ref && text) dbm.addAnswer(db, { questionRef: ref, expertId: expert.id, body: text });
         return redirect(`/c/${expert.token}`);
       }
-      if (sub === '/ghi-chu' && method === 'POST') {
+      if (sub === '/note' && method === 'POST') {
         const title = String(form.title ?? '').trim();
-        const topic = String(form.topic ?? 'khac');
+        const topic = String(form.topic ?? 'other');
         const text = String(form.body ?? '');
         const attested = form.attested === '1' || form.attested === 'on';
         const decision = decidePublication({ title, body: text }, { attested, rules });
@@ -333,20 +333,20 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         if (!decision.publish) {
           return send(422, views.blockedNotePage({ expert, decision, title }));
         }
-        return redirect(`/ghi-chu/${slug}`);
+        return redirect(`/notes/${slug}`);
       }
-      if (sub === '/phong-van') {
+      if (sub === '/interview') {
         if (method === 'POST') {
           const id = Number(form.id);
           const it = dbm.interviewById(db, id);
-          if (!it || it.expert_id !== expert.id) return send(404, views.errorPage({ code: 404, message: 'Phiên phỏng vấn không hợp lệ.' }));
+          if (!it || it.expert_id !== expert.id) return send(404, views.errorPage({ code: 404, message: 'That interview session is not valid.' }));
           const advanced = dbm.advanceInterview(db, id, String(form.answer ?? '').trim());
           if (advanced.step >= SCRIPT.length) {
             const answers = JSON.parse(advanced.answers);
             // The title comes from the problem the expert described (question 2), not from the
-            // topic slug: a corpus of notes all called "Kinh nghiệm: tpm" is unusable.
+            // topic slug: a corpus of notes all called "Field notes: tpm" is unusable.
             const problem = String(answers[1] ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
-            const title = `Kinh nghiệm: ${problem || advanced.topic}`;
+            const title = `Field notes: ${problem || advanced.topic}`;
             const draft = draftNoteFromInterview({ expert, topic: advanced.topic, answers, title });
             const decision = decidePublication({ title: draft.title, body: draft.body }, { attested: true, rules });
             const slug = uniqueSlug(db, slugify(`${advanced.topic}-${String(answers[0] ?? '').slice(0, 30)}`));
@@ -370,11 +370,11 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
             }
             return send(200, views.interviewPage({ expert, interview: advanced, step: advanced.step, question: null, answers, doneNoteSlug: slug }));
           }
-          return redirect(`/c/${expert.token}/phong-van?id=${id}`);
+          return redirect(`/c/${expert.token}/interview?id=${id}`);
         }
         const idParam = Number(url.searchParams.get('id'));
         let it = idParam ? dbm.interviewById(db, idParam) : null;
-        if (!it || it.expert_id !== expert.id) it = dbm.startInterview(db, { expertId: expert.id, topic: expert.topics[0] ?? 'khac' });
+        if (!it || it.expert_id !== expert.id) it = dbm.startInterview(db, { expertId: expert.id, topic: expert.topics[0] ?? 'other' });
         const answers = JSON.parse(it.answers);
         return send(200, views.interviewPage({ expert, interview: it, step: it.step, question: questionAt(it.step), answers }));
       }
@@ -385,8 +385,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (aMatch) {
       const token = decodeURIComponent(aMatch[1]);
       const sub = aMatch[2] ?? '';
-      if (token !== config.adminToken) return send(404, views.errorPage({ code: 404, message: 'Không tìm thấy trang.' }));
-      if (sub === '/xac-nhan' && method === 'POST') {
+      if (token !== config.adminToken) return send(404, views.errorPage({ code: 404, message: 'No such page.' }));
+      if (sub === '/confirm' && method === 'POST') {
         const ref = String(form.ref ?? '');
         const b = dbm.bookingByRef(db, ref);
         if (b && b.status === 'awaiting_payment') dbm.setBookingStatus(db, ref, 'paid');
@@ -396,7 +396,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         }
         return redirect(`/qt/${token}`);
       }
-      if (sub === '/hoan-tat' && method === 'POST') {
+      if (sub === '/complete' && method === 'POST') {
         const ref = String(form.ref ?? '');
         const b = dbm.bookingByRef(db, ref);
         if (b && b.status === 'paid') dbm.setBookingStatus(db, ref, 'completed');
@@ -413,7 +413,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       }));
     }
 
-    return send(404, views.errorPage({ code: 404, message: `Không có trang ${path}.` }));
+    return send(404, views.errorPage({ code: 404, message: `There is no page ${path}.` }));
   }
 
   const server = http.createServer(async (req, res) => {
@@ -453,7 +453,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const app = createApp();
   app.server.listen(app.config.port, app.config.host, () => {
     const { bankBin, bankAccount } = app.config;
-    console.log(`Xưởng listening on http://${app.config.host}:${app.config.port}`);
+    console.log(`Xuong listening on http://${app.config.host}:${app.config.port}`);
     console.log(`  notes indexed: ${app.index().n}`);
     console.log(`  AI tier: ${app.config.llm.enabled ? `model ${app.config.llm.model}` : 'no API key — extractive fallback only'}`);
     console.log(`  bank: ${bankBin && bankAccount ? `${bankBin}/${bankAccount}` : 'NOT configured — booking pages show no QR'}`);

@@ -1,6 +1,5 @@
 // src/retrieval.mjs — BM25-lite retrieval over the published corpus.
-// Vietnamese-aware: tokens are folded (diacritics stripped, đ→d) so "chuyền" and
-// "chuyen" match, which is how people actually type.
+// Folding: tokens are folded (diacritics stripped, đ→d) so "chuyền" and "chuyen" match, which is how people actually type.
 
 export function fold(s) {
   return String(s)
@@ -88,10 +87,10 @@ export function search(query, index, k = 5) {
 export function coverage(question, hits, index, { minTop = 2.2, minShare = 0.5 } = {}) {
   const thin = (why) => ({ verdict: 'thin', why });
   const asked = [...new Set(contentTokens(question))];
-  if (asked.length < 2) return thin('câu hỏi quá ngắn để tìm');
-  if (!hits.length) return thin('không có ghi chú nào khớp');
+  if (asked.length < 2) return thin('the question is too short to search on');
+  if (!hits.length) return thin('no note matched');
   const top = hits[0];
-  if (top.score < minTop) return thin(`điểm khớp thấp (${top.score} < ${minTop})`);
+  if (top.score < minTop) return thin(`top match is weak (${top.score} < ${minTop})`);
 
   const idf = (t) => {
     const df = index?.df?.get(t) ?? 0;
@@ -111,10 +110,10 @@ export function coverage(question, hits, index, { minTop = 2.2, minShare = 0.5 }
   const share = total ? have / total : 0;
   if (share < minShare) {
     return thin(
-      `ghi chú gần nhất chỉ có ${(share * 100).toFixed(0)}% trọng số từ khoá chính của câu hỏi; thiếu: ${missing.slice(0, 5).join(', ')}`
+      `the closest note covers only ${(share * 100).toFixed(0)}% of the question's key terms; missing: ${missing.slice(0, 5).join(', ')}`
     );
   }
-  return { verdict: 'ok', why: `khớp ${hits.length} ghi chú, ${(share * 100).toFixed(0)}% trọng số từ khoá chính, điểm cao nhất ${top.score}` };
+  return { verdict: 'ok', why: `matched ${hits.length} notes, ${(share * 100).toFixed(0)}% of the key terms, top score ${top.score}` };
 }
 
 /** Extractive answer used when no LLM key is configured, or when the model's JSON is unusable. */
@@ -144,7 +143,7 @@ export function extractiveAnswer(question, hits, maxSentences = 4) {
       .filter((s) => s.length > 40)
       .slice(0, 2)
       .map((s) => `- ${s} [${n.id}]`);
-    return { text: `Không có đoạn nào khớp trực tiếp. Ghi chú gần nhất:\n${opening.join('\n')}`, citations: [n.id] };
+    return { text: `No passage matched directly. Closest note:\n${opening.join('\n')}`, citations: [n.id] };
   }
   return { text: lines.join('\n'), citations: [...new Set(picked.slice(0, maxSentences).map((p) => p.note.id))] };
 }

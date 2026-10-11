@@ -1,7 +1,7 @@
-# Xưởng — a factory-production knowledge platform, Vietnam-first
+# Xuong — a factory-production knowledge platform, Vietnam-first
 
 A working prototype of a paid knowledge product for Vietnamese manufacturing: a person asks a
-production problem in plain Vietnamese, gets an **answer built only from published practitioner
+production problem in plain language, gets an **answer built only from published practitioner
 notes and carrying its citations**, and when the notes do not cover it the system **says so** and
 hands the question to a real practitioner — with a paid 1:1 booking in VND behind it.
 
@@ -11,15 +11,15 @@ question into revenue.
 
 - **Status:** prototype, running on the LAN. Demo corpus, one demo expert profile, no real money moves.
 - **Runtime:** Node ≥ 22.5, `node:http` + `node:sqlite`, zero dependencies, no build step.
-- **UI:** Vietnamese, server-rendered HTML.
+- **UI:** English, server-rendered HTML, no build step and no framework.
 
 ## The four rungs
 
 | Rung | What happens | Where it lives |
 |---|---|---|
 | 1. Ask | The question is matched against the published corpus (BM25 with Vietnamese diacritic folding) | `src/retrieval.mjs` |
-| 2. Answer or refuse | A model answers **from the retrieved notes only** and cites them, or replies `THIEU_DU_LIEU` (not enough data) | `src/llm.mjs` |
-| 3. Escalate | A refused question can be routed to a practitioner on that topic, with a 48-hour deadline | `src/server.mjs`, `/q/:ref/hoi-chuyen-gia` |
+| 2. Answer or refuse | A model answers **from the retrieved notes only** and cites them, or replies `INSUFFICIENT_DATA` (not enough data) | `src/llm.mjs` |
+| 3. Escalate | A refused question can be routed to a practitioner on that topic, with a 48-hour deadline | `src/server.mjs`, `/q/:ref/ask-expert` |
 | 4. Pay | A 1:1 session is booked, priced in whole VND, paid by bank transfer with a VietQR instruction, and settled by the operator | `src/pricing.mjs`, `/dat-lich` |
 
 ## The rule that makes it publishable
@@ -41,15 +41,16 @@ can always tell whose words are being quoted.
 The demo instance runs on the LAN:
 
 ```
-http://192.168.1.150:8090/            # ask a question (Vietnamese UI)
-http://192.168.1.150:8090/kho         # the published corpus, by topic
-http://192.168.1.150:8090/cach-lam    # how the ladder and the gate work
+http://192.168.1.150:8090/                # ask a question
+http://192.168.1.150:8090/library         # the published corpus, by topic
+http://192.168.1.150:8090/experts         # expert profiles and 1:1 booking
+http://192.168.1.150:8090/how-it-works    # how the rungs and the gate work
 http://192.168.1.150:8090/c/demo-hung-7f3a91   # demo expert workspace (answer queue, notes, interview)
 http://192.168.1.150:8090/qt/<token>  # operator console (token in /etc/xuong/xuong.env on the host)
 ```
 
 A question the corpus covers comes back with citations; one it does not (e.g. anything about
-another industry's line layout) comes back as `THIEU_DU_LIEU` plus an escalation offer. The refusal
+another industry's line layout) comes back as `INSUFFICIENT_DATA` plus an escalation offer. The refusal
 is produced by the model itself under the prompt contract, not by a regex on its output.
 
 ## Run it yourself
@@ -93,14 +94,14 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 | `POST /api/ask` | JSON ask: question, plant type, asker → answer, citations, coverage, ref |
 | `GET /api/question/:ref` | one question with its answer, citations and expert answers |
 | `GET /api/experts` | expert profiles |
-| `POST /hoi` | the HTML ask form |
-| `POST /q/:ref/hoi-chuyen-gia` | escalate a refused question to a practitioner |
-| `POST /dat-lich`, `POST /q/:ref/dat-lich` | book a 1:1 session |
-| `POST /b/:ref/da-chuyen` | the buyer says they transferred the money |
-| `POST /c/:token/tra-loi` | expert answers a routed question |
-| `POST /c/:token/ghi-chu` | expert submits a note (goes through the gate) |
-| `POST /c/:token/phong-van` | AI-moderated interview that drafts a note, then gates it |
-| `POST /c/:token/xac-nhan`, `/hoan-tat` | operator: money arrived; session done |
+| `POST /ask` | the HTML ask form |
+| `POST /q/:ref/ask-expert` | escalate a refused question to a practitioner |
+| `POST /book`, `POST /q/:ref/book` | book a 1:1 session |
+| `POST /b/:ref/transferred` | the buyer says they transferred the money |
+| `POST /c/:token/answer` | expert answers a routed question |
+| `POST /c/:token/note` | expert submits a note (goes through the gate) |
+| `POST /c/:token/interview` | AI-moderated interview that drafts a note, then gates it |
+| `POST /c/:token/confirm`, `/complete` | operator: money arrived; session done |
 
 ## Money
 
@@ -116,7 +117,7 @@ of it is a deliberate decision. See `SPEC.md` § *Vietnam constraints*.
 
 ## Tests, and what they caught
 
-40 tests (`node --test`), including an end-to-end walk over real HTTP. They are worth more than the
+41 tests (`node --test`), including an end-to-end walk over real HTTP. They are worth more than the
 coverage number because of what they found:
 
 - Vietnamese surnames in capitals were not caught by the gate (a character-range regex matched
@@ -130,8 +131,12 @@ coverage number because of what they found:
   (measured: off-corpus 0.44–0.55, on-corpus 1.00).
 - A blocked interview draft failed **silently** in the UI — now the reason is a page.
 - `expert.topics[0]` returned the raw JSON string `"["` because the column was never parsed.
-- The whole UI was Vietnamese except the state machine's own words (`open`, `answered`, `paid`),
-  which leaked to users — now every status is rendered through a Vietnamese label map.
+- The state machine's own words (`open`, `answered`, `paid`) leaked to users — now every status is
+  rendered through a label map, and a test asserts no raw token reaches a page.
+- Moving the content to English moved three things at once (UI strings, the refusal marker, the URL
+  routes), so the corpus notes were retranslated with the gate's rules restated as a constraint: they
+  still pass it clean, in the new language. The gate's Vietnamese patterns stayed — a Vietnamese note
+  carrying an employer's order number is still someone else's information.
 - **The app ignored the database it was configured to use.** `createApp` defaulted to a relative
   `data/xuong.db`, and `seed.mjs` to the same string, so `XUONG_DB` worked and `XUONG_DATA_DIR` did
   not: the service read one file while the installer seeded another. On a host where the working

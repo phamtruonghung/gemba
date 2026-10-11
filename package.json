@@ -2,7 +2,7 @@
   "name": "xuong",
   "version": "0.1.0",
   "private": false,
-  "description": "Xưởng — Vietnam-first factory-production knowledge platform: cited answers from publishable practitioner notes, escalation to a practitioner, paid 1:1 consultation in VND.",
+  "description": "Xuong — a factory-production knowledge platform: cited answers from publishable practitioner notes, escalation to a practitioner, paid 1:1 consultation in VND.",
   "license": "MIT",
   "type": "module",
   "engines": {

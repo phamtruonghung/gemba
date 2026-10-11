@@ -4,12 +4,12 @@
 // Prints the corpus the instance can see, the question's folded tokens, the scored hits and the
 // coverage verdict. Run it inside the deployment (or a container) when a question that should be
 // answered comes back thin:
-//   node scripts/probe-retrieval.mjs "máy dừng giữa ca thì nên kiểm tra theo thứ tự nào?"
+//   node scripts/probe-retrieval.mjs "the machine stops mid-shift — what should I check, and in what order?"
 import { openDb, publishedNotes } from '../src/db.mjs';
 import { loadConfig } from '../src/server.mjs';
 import { buildIndex, search, coverage, tokenize } from '../src/retrieval.mjs';
 
-const q = process.argv.slice(2).join(' ') || 'máy dừng giữa ca thì nên kiểm tra theo thứ tự nào?';
+const q = process.argv.slice(2).join(' ') || 'the machine stops mid-shift — what should I check, and in what order?';
 const dbPath = loadConfig().dbPath;
 const db = openDb(dbPath);
 const notes = publishedNotes(db);

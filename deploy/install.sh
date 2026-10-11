@@ -56,7 +56,7 @@ if [ -f "$ENV_DIR/xuong.env" ]; then
   echo "keeping the existing env file (edit $ENV_DIR/xuong.env to change keys)"
 else
   cat > "$ENV_DIR/xuong.env" <<EOF
-# Xưởng runtime configuration. Mode 600 — holds the LLM key and the operator token.
+# Xuong runtime configuration. Mode 600 — holds the LLM key and the operator token.
 XUONG_PORT=$PORT
 XUONG_HOST=0.0.0.0
 XUONG_USER=${XUONG_USER:-}
@@ -136,7 +136,7 @@ echo "live ask:"
 AUTH=()
 if [ -n "${XUONG_USER:-}" ] && [ -n "${XUONG_PASS:-}" ]; then AUTH=(-u "$XUONG_USER:$XUONG_PASS"); fi
 curl -fsS "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/api/ask" -H 'content-type: application/json' \
-  -d '{"question":"máy dừng giữa ca thì kiểm tra theo thứ tự nào?"}' \
+  -d '{"question":"the machine stops mid-shift — what should I check, and in what order?"}' \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("  coverage:", d["coverage"], "| mode:", d["mode"], "| cited:", [c["title"] for c in d["citations"]])'
 
 TOKEN="$(sed -n 's/^XUONG_ADMIN_TOKEN=//p' "$ENV_DIR/xuong.env")"

@@ -1,6 +1,6 @@
 ---
 title: Lessons and experience from the work
-topic: cai-tien
+topic: improvement
 origin: vault
 source: seed/vault-raw/lessons.md
 ---
@@ -22,5 +22,5 @@ source: seed/vault-raw/lessons.md
 - **2026-10-02** — Repeated attempts are not a plan: work that only ever gets another try never gets a date, so what is missing is a scheduled window with an owner *From:* an asset had been out of production for nearly a year, the maintenance team had tried several times and would try once more, with no window planned and no date set.
 - **2026-10-03** — A measure is only as good as where it is recorded: if work is booked at a shared terminal instead of the machine it was actually done on, every split of that number inherits the error - record it at the point of work or it stops being comparable *From:* Scrap was being declared by several people at one machine's computer and booked to that machine rather than the one the work was done on, so the per-machine and per-product split could not be trusted.
 - **2026-10-05** — Never accept an improvement on its intention: require the number it promised and then the same number measured again on the real run, plus a check that output quality, counting accuracy and scrap did not move the wrong way *From:* his manager's instruction that every improvement project coming from the technical side be evaluated on those four points before it counts.
-- **2026-10-07** — When a declared figure and the physical measurement of the same thing disagree for months, review the measuring and declaring method before believing the work changed - the deviation may sit in the measurement, not in the behaviour *From:* waste declared in the system and waste actually weighed were off by more than 10% for two consecutive months, and the first move was to compare the weighing method against last month rather than to act on the extra loss.
+- **2026-10-07** — When a declared figure and the physical measurement of the same thing disagree for months, review the measuring and declaring method before believing the work changed - the deviation may sit in the measurement, not in the behaviour *From:* waste declared in the system and waste actually weighed were off by more than a tenth for two consecutive months, and the first move was to compare the weighing method against last month rather than to act on the extra loss.
 - **2026-10-08** — A controlled document found in use at an obsolete revision is a withdrawal failure, not a printing one: ask how the superseded copy survived in the area before reprinting it, or the same copy comes back *From:* an area was found running an old revision of a controlled form while a much later revision was current, and the first move was to find out why the superseded copy was still there rather than simply to reprint.

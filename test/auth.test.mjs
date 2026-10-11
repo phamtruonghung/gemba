@@ -33,10 +33,10 @@ before(async () => {
     }
   });
   upsertNote(app.db, {
-    title: 'Máy dừng giữa ca — kiểm tra theo thứ tự nào',
+    title: 'The machine stops mid-shift — what to check, in what order',
     slug: 'may-dung',
     topic: 'quan-ly-chuyen',
-    body: 'Kiểm tra theo thứ tự: an toàn, nguồn, vật tư, thiết bị, con người.',
+    body: 'Check in this order: safety, supply, material, equipment, people.',
     origin: 'demo',
     status: 'published',
     gate_decision: 'ok'
@@ -52,12 +52,12 @@ test('the gate refuses an unauthenticated request with a 401 and a challenge', a
   assert.equal(res.status, 401);
   assert.match(res.headers.get('www-authenticate') ?? '', /^Basic realm="xuong"/);
   const html = await res.text();
-  assert.match(html, /Cần đăng nhập/);
-  assert.doesNotMatch(html, /Máy dừng giữa ca/, 'a refused page must not leak corpus content');
+  assert.match(html, /Sign-in required/);
+  assert.doesNotMatch(html, /The machine stops mid-shift/, 'a refused page must not leak corpus content');
 });
 
 test('the gate covers the API and the tokenised surfaces, not just the home page', async () => {
-  for (const path of ['/kho', '/api/ask', '/c/tok-hung', '/qt/tok']) {
+  for (const path of ['/library', '/api/ask', '/c/tok-hung', '/qt/tok']) {
     const res = await fetch(`${base}${path}`, { method: path.startsWith('/api') ? 'POST' : 'GET' });
     assert.equal(res.status, 401, `${path} must require the gate`);
   }
@@ -74,7 +74,7 @@ test('healthz answers without credentials and keeps the database path to itself'
 test('the right credentials get in', async () => {
   const res = await fetch(`${base}/`, { headers: { authorization: CREDS } });
   assert.equal(res.status, 200);
-  assert.match(await res.text(), /Xưởng|Hỏi/);
+  assert.match(await res.text(), /Xuong|Ask/);
 });
 
 test('a wrong password, a missing colon and a foreign scheme are all refused', () => {

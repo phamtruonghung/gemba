@@ -3,17 +3,17 @@ import { checkNote, loadRules } from '../src/gate.mjs';
 import { draftNoteFromInterview } from '../src/interview.mjs';
 
 const answers = [
-  'Tôi làm nghề này hai mươi năm, phụ trách khu vực lắp ráp và bảo trì cơ bản.',
-  'Vấn đề lặp lại nhiều nhất là vật tư sai quy cách ở trạm cuối làm dừng chuyền.',
-  'Dấu hiệu đầu tiên là đèn báo trạm cuối nhấp nháy và người kiểm hàng cuối cùng phát hiện ra.',
-  'Nguyên nhân gốc thường là nhập sai lô vật tư; kiểm chứng bằng cách đối chiếu bao bì với phiếu giao.',
-  'Cách xử lý: dừng trạm, cách ly vật tư nghi ngờ, báo tổ trưởng, ghi lại hiện tượng rồi mới chạy lại.',
-  'Người mới hay đổi cảm biến trước khi kiểm vật tư, nên mất thời gian mà lỗi vẫn còn.',
-  'Tiêu chuẩn là kiểm vật tư trước cảm biến, ai cũng làm theo đúng thứ tự đó.',
-  'Cách này dùng được cho chuyền lắp ráp nhiều trạm, không dùng khi vật tư do khách cấp và không được mở bao bì.'
+  'I have done this work for twenty years, covering assembly and basic maintenance.',
+  'The most repeated problem is material off specification at the last station stopping the line.',
+  'The first sign is the indicator light at the last station blinking, and the final checker notices it.',
+  'The root cause is usually a mis-picked material batch; verify it by comparing the packaging against the delivery note.',
+  'The fix: stop the station, quarantine the suspect material, tell the team leader, write the symptom down, then restart.',
+  'A newcomer replaces the sensor before checking the material, which wastes time and leaves the fault in place.',
+  'The standard is to check the material before the sensor, and everyone follows that order.',
+  'This works on a multi-station assembly line. It does not work when the customer supplies the material and the packaging may not be opened.'
 ];
 
-const draft = draftNoteFromInterview({ expert: { slug: 'x' }, topic: 'tpm', answers, title: 'Kinh nghiệm: tpm' });
+const draft = draftNoteFromInterview({ expert: { slug: 'x' }, topic: 'tpm', answers, title: 'Field notes: tpm' });
 const report = checkNote({ title: draft.title, body: draft.body }, loadRules());
 console.log('verdict:', report.verdict, 'ok:', report.ok);
 for (const f of report.findings) console.log(' ', f.severity, f.rule, JSON.stringify(f.match), '|', f.hint);

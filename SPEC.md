@@ -1,4 +1,4 @@
-# SPEC — Xưởng
+# SPEC — Xuong
 
 What this product is, which market mechanisms it copies and why, what Vietnam requires of it, what
 was decided, and what is still open. Written to be read before changing the code or spending money.
@@ -38,7 +38,7 @@ page myself the row says so.
 | Human experts positioned *against* chatbots, cheap 1:1 packages | Askany (Vietnam) | "Askany, startup tiên phong trong việc kết nối các chuyên gia tư vấn với doanh nghiệp nhỏ, startup tại Việt Nam. Startup này đã đầu tư đến 27 tỉ đồng để phát triển app và marketing." / "đặt lịch tư vấn theo gói 15 phút, theo giờ" (thanhnien.vn, read 2026-10-10) | The ladder's bottom rung: 15–30 minute packages, escalating from a machine answer |
 | AI as the front door, a human as the escalation, and the session itself turned into a reusable artifact | ExpertNetwork.AI | "Describe your question — AI recommends top experts by domain, seniority, and availability in minutes, not days." / "Every call generates a structured summary with key insights, action items, and searchable transcript." (research pass, 2026-10-10; the closest single model to this product) | Partial: the answer → escalation → paid session shape is built; turning a session into a new *published* note (with consent) is not |
 | Expert vetting, tiered revenue share by sustained quality | JustAnswer (mechanism), AlphaSights/GLG (conflict + compliance checks) | JustAnswer's "paid $2-11 per question, depending on what tier you're in" is **third-party (search result), not read on their page**; AlphaSights/GLG's conflict checks and "interactive compliance training prior to your first interaction" were read by the research pass | Not built: vetting is manual for the prototype (see §10) |
-| Answer-space boundary = "says I don't know" rather than a confident guess | SuperMe | Reported by the research pass, not re-read by me | Our version is stronger: a machine-readable marker (`THIEU_DU_LIEU`) that triggers escalation |
+| Answer-space boundary = "says I don't know" rather than a confident guess | SuperMe | Reported by the research pass, not re-read by me | Our version is stronger: a machine-readable marker (`INSUFFICIENT_DATA`) that triggers escalation |
 
 What is **not** copied: building a "digital twin" that speaks as the expert (Delphi, Qiri). In a
 production context a fabricated diagnosis attributed to a named practitioner is a safety problem,
@@ -53,15 +53,15 @@ retrieved notes and may refuse, and has no path to a diagnosis of its own.
 
 - answer **only** from the passages given; general knowledge is forbidden;
 - every claim carries `[n]` pointing at the passage it came from;
-- if the passages do not answer the question, reply with exactly `THIEU_DU_LIEU` and nothing else;
-- the answer is short, in Vietnamese, and addressed to a supervisor who will act on it.
+- if the passages do not answer the question, reply with exactly `INSUFFICIENT_DATA` and nothing else;
+- the answer is short, in English, and addressed to a supervisor who will act on it.
 
 The reply is parsed for the marker; when it appears, the question is marked `coverage: thin` and the
 UI offers escalation. Without an API key the same contract runs in a **labelled extractive mode**
 (quote the closest note, say that is what happened) so the demo never fakes a model answer.
 
 The refusal is verified live: an off-corpus question against the deployed instance returns
-`THIEU_DU_LIEU`; an on-corpus question returns a cited answer.
+`INSUFFICIENT_DATA`; an on-corpus question returns a cited answer.
 
 ## 4. Coverage — when the machine is allowed to answer
 
@@ -209,8 +209,10 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
 3. **Zero dependencies** (`node:http`, `node:sqlite`, no build step): it has to run on a small LXC
    and be readable end to end. Instrumenting a framework buys nothing here.
 4. **Money is integers, and the platform never holds funds** (see §7).
-5. **Vietnamese-first UI**, including the state machine's own vocabulary; an English word leaking
-   into a status field is a bug (there is a test for it).
+5. **One language at a time, and it is English.** The UI, the corpus and the model's instructions
+   are English; a raw state token (`awaiting_payment`, `blocked`) leaking into a page is a bug (there
+   is a test for it). The gate's *rules* still carry the Vietnamese patterns alongside the English
+   ones, because the raw notes a practitioner actually writes are Vietnamese.
 6. **Corpus provenance is visible**: every note shows `origin`, so the demo material is never
    mistaken for a practitioner's real published craft.
 7. **No simulated expert.** Answers attributed to a person are written by that person.

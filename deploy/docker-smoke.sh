@@ -68,7 +68,7 @@ fi
 echo "-> a real question through the container"
 curl -s -m 120 "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/api/ask" \
   -H 'content-type: application/json' \
-  -d '{"question":"máy dừng giữa ca thì nên kiểm tra theo thứ tự nào?"}' \
+  -d '{"question":"the machine stops mid-shift — what should I check, and in what order?"}' \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("   coverage:", d["coverage"], "| mode:", d["mode"], "| cited:", [c["title"] for c in d["citations"]])'
 
 echo "-> what the container wrote to its volume"
