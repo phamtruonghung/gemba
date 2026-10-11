@@ -20,7 +20,32 @@ question into revenue.
 | 1. Ask | The question is matched against the published corpus (BM25 with Vietnamese diacritic folding) | `src/retrieval.mjs` |
 | 2. Answer or refuse | A model answers **from the retrieved notes only** and cites them, or replies `INSUFFICIENT_DATA` (not enough data) | `src/llm.mjs` |
 | 3. Escalate | A refused question can be routed to a practitioner on that topic, with a 48-hour deadline | `src/server.mjs`, `/q/:ref/ask-expert` |
-| 4. Pay | A 1:1 session is booked, priced in whole VND, paid by bank transfer with a VietQR instruction, and settled by the operator | `src/pricing.mjs`, `/dat-lich` |
+| 4. Pay | A 1:1 session is booked, priced in whole VND, paid by bank transfer with a VietQR instruction, and settled by the operator | `src/pricing.mjs`, `/book` |
+
+## Two doors for the operator, and why
+
+`/qt/<token>` is the link the installer prints: what the instance is doing, and the two booking
+transitions (*payment received*, *session done*). It needs no sign-in, so it is the quick
+reconciliation link — and nothing more.
+
+`/admin` is an account, and it is where the power is: the prices and limits the booking form quotes
+from, the audit trail, and (next) practitioners, invitations and accounts. A token in a URL cannot be
+revoked or rotated, and "change every price" is not the same power as "mark this paid" — so creating
+people and moving money sits behind a session, and every write records the operator's email.
+
+```bash
+node scripts/admin-create.mjs --email me@example.com     # create or reset; prints the password once
+```
+
+| Setting | Default | What it changes |
+| --- | --- | --- |
+| Platform share | 20% | What the platform keeps; the practitioner receives the rest |
+| Shortest session | 30 minutes | A shorter session is not offered |
+| Default session | 45 minutes | What the booking form proposes |
+| Default rate | 600,000 VND/h | Used for a new practitioner with no rate yet |
+
+Values are whole numbers in VND — the product never holds a fraction of a đồng — and a form with one
+bad field changes nothing, so *save* means saved.
 
 ## The rule that makes it publishable
 
@@ -47,6 +72,7 @@ http://192.168.1.150:8090/experts         # expert profiles and 1:1 booking
 http://192.168.1.150:8090/how-it-works    # how the rungs and the gate work
 http://192.168.1.150:8090/c/demo-hung-7f3a91   # demo expert workspace (answer queue, notes, interview)
 http://192.168.1.150:8090/qt/<token>  # operator console (token in /etc/gemba/gemba.env on the host)
+http://192.168.1.150:8090/admin      # operator sign-in (account created by the installer; `node scripts/admin-create.mjs`)
 ```
 
 A question the corpus covers comes back with citations; one it does not (e.g. anything about
@@ -313,9 +339,9 @@ bookmark.
 
 No payment gateway or escrow (see above), no email/Zalo notification (the expert has a tokenised
 queue instead), no expert KYC/vetting, no invoice or withholding module, no contracts or ToS, no
-mobile app, no analytics. Accounts exist for askers (email + password, below) but **not** for
-experts or the operator, and there is no password reset, no email verification and no rate limit on
-sign-in yet. `SPEC.md` § *Open questions* names the ones that must be decided before selling
+mobile app, no analytics. Accounts exist for askers (email + password, below) and for the operator
+(`/admin`), and there is no password reset by email, no email verification and no rate limit on
+sign-in yet. Practitioner accounts arrive by invitation — see the operator section above. `SPEC.md` § *Open questions* names the ones that must be decided before selling
 anything.
 
 ## Repo layout

@@ -269,6 +269,24 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
     working form reads as a broken one and gets clicked twice. It is progressive enhancement — with
     JavaScript off the forms post exactly as before.
 
+17. **Management sits behind a session; the URL token only reconciles.** `/qt/<token>` keeps its two
+    booking transitions because the operator has that link bookmarked, but anything that creates a
+    person or moves money moved to `/admin` behind a signed-in operator. A token in a URL cannot be
+    rotated or revoked, and the blast radius of "change every price" is not the blast radius of "mark
+    this paid". One account system serves all three roles (`asker`/`expert`/`admin`) — scrypt, opaque
+    session ids, revocation — because a second credential store is a second thing to get wrong.
+18. **The front gate protects the anonymous surface; accounts are the authenticated one.** A shared
+    basic-auth password in front of per-user accounts is the weakest link in the chain, and one every
+    expert has to hold is a password that leaks. So a request carrying a valid session passes the gate,
+    and the paths that exist *to* authenticate (`/signin`, `/signup`, `/admin/login`, `/invite/<token>`)
+    stay reachable — otherwise nobody could ever sign in. Anonymous visitors still meet it, which is
+    the case it was built for.
+19. **Prices are settings, not constants, and they are integers.** `settings` (platform share,
+    shortest/default session, default rate) is read per request; `src/pricing.mjs` keeps its constants
+    as the fallbacks, so an instance that predates the table behaves exactly as it did. A form with one
+    invalid field changes nothing — refusing beats clamping, because a clamped value is not the value
+    the operator typed. Every write lands in `events` with the actor's email.
+
 ## 11. Open questions — decide before selling anything
 
 1. **Legal/tax shape**: MoIT registration or notification; who withholds PIT on expert payouts and

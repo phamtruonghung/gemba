@@ -26,6 +26,7 @@ import { formatVnd, MIN_MINUTES } from './pricing.mjs';
 import { ATTESTATION_TEXT } from './gate.mjs';
 import { SCRIPT } from './interview.mjs';
 import { renderMarkdown, markdownToText } from './markdown.mjs';
+import { SETTING_SPECS, SETTING_KEYS } from './settings.mjs';
 
 export function esc(s) {
   return String(s ?? '')
@@ -362,6 +363,13 @@ th{color:var(--color-muted-foreground);font-weight:600;font-size:13px}
 .prose strong{font-weight:600}
 .prose .ref{color:var(--color-muted-foreground);border-bottom:1px dotted var(--color-border-strong)}
 .pending-note{margin:0;font-size:14px;color:var(--color-muted-foreground)}
+/* The operator surface. A private page needs a way back to its own sections and a visible "this
+   worked": an operator who cannot tell whether a save landed will save twice. */
+.admin-bar{background:var(--color-card);border-bottom:1px solid var(--color-border);padding:var(--space-3) 0}
+.admin-nav{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-top:var(--space-3)}
+.admin-nav a{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 var(--space-4);border:1px solid var(--color-border);border-radius:var(--radius-pill);text-decoration:none;color:var(--color-foreground);font-weight:550}
+.admin-nav a[aria-current="page"]{background:var(--color-accent);border-color:var(--color-accent);color:var(--color-on-accent)}
+.flash{display:inline-flex;align-items:center;gap:8px;margin:var(--space-3) 0 0;padding:9px 14px;border-radius:var(--radius-pill);background:var(--color-graphite-tint);color:var(--color-ok);font-weight:550}
 .cite{display:flex;flex-direction:column;gap:4px;background:var(--color-accent-tint);border-left:3px solid var(--color-accent);border-radius:10px;padding:var(--space-3) var(--space-4);text-decoration:none;color:var(--color-foreground);margin:0 0 var(--space-3)}
 .cite:hover{background:var(--color-muted);color:var(--color-foreground)}
 code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
@@ -415,6 +423,7 @@ export function layout({ title, body, nav = true, footer = '', user = null, acti
   ).join('');
   const account = user
     ? `<span class="who">${icon('account')}${esc(user.name)}</span>
+       ${user.role === 'admin' ? `<a class="btn alt sm" href="/admin"${active === '/admin' ? ' aria-current="page"' : ''}>${icon('shield')}Operator</a>` : ''}
        <a class="btn alt sm" href="/account"${active === '/account' ? ' aria-current="page"' : ''}>My questions</a>
        <form method="post" action="/signout"><button class="link" type="submit">Sign out</button></form>`
     : `<a class="btn sm" href="/signin"${active === '/signin' ? ' aria-current="page"' : ''}>${icon('account')}Sign in</a>`;
@@ -1398,6 +1407,176 @@ export function interviewPage({ expert, interview, step, question, answers, done
     <p><a href="/c/${esc(expert.token)}">← Back to the desk</a></p>
   </div>
 </section>`
+  });
+}
+
+// --- operator surface -------------------------------------------------------
+// Two halves of the same job. `/qt/<token>` is a private link the operator bookmarks: it shows what
+// the instance is doing and reconciles a payment. These pages are the other half — what an operator
+// does with an *account*: change a price, create a practitioner, lock somebody — and they sit behind a
+// session, because a token in a URL cannot be revoked and "change every price" is not the same power
+// as "mark this paid". Every write here lands in `events` with the actor's email on it.
+
+const ADMIN_NAV = [
+  ['/admin', 'Overview', 'scale'],
+  ['/admin/settings', 'Settings', 'rules'],
+  ['/admin/audit', 'Audit', 'clock']
+];
+
+function adminShell({ admin, active, title, eyebrow, body, flash = '' }) {
+  const nav = ADMIN_NAV.map(
+    ([href, label, ico]) =>
+      `<a href="${href}"${href === active ? ' aria-current="page"' : ''}>${icon(ico)}${esc(label)}</a>`
+  ).join('');
+  return layout({
+    title,
+    nav: false,
+    user: admin,
+    body: `
+<header class="admin-bar">
+  <div class="wrap row" style="justify-content:space-between;align-items:center;gap:var(--space-4)">
+    <a class="brand" href="/admin"><span class="mark" aria-hidden="true">G</span>Gemba <span class="muted" style="font-weight:400">operator</span></a>
+    <div class="row tight-gap" style="align-items:center">
+      <span class="small muted">${esc(admin.email)}</span>
+      <form method="post" action="/admin/logout"><button class="link" type="submit">Sign out</button></form>
+    </div>
+  </div>
+  <div class="wrap"><nav class="admin-nav" aria-label="Operator">${nav}</nav></div>
+</header>
+<section class="page-head" style="padding:var(--space-6) 0 var(--space-4)">
+  <div class="wrap">
+    <p class="eyebrow">${esc(eyebrow)}</p>
+    <h1 style="font-size:clamp(26px,3.4vw,40px)">${esc(title)}</h1>
+    ${flash ? `<p class="flash" role="status">${icon('check')} ${esc(flash)}</p>` : ''}
+  </div>
+</section>
+${body}`,
+  });
+}
+
+export function adminLoginPage({ email = '', error = '' } = {}) {
+  return layout({
+    title: 'Operator sign-in',
+    nav: false,
+    body: `
+<section class="page-head"><div class="wrap narrow">
+  <p class="eyebrow">Operator console</p>
+  <h1 style="font-size:clamp(28px,3.8vw,44px)">Sign in to manage the instance</h1>
+  <p class="muted">Accounts, practitioners, prices and the audit trail. Askers do not need this page.</p>
+</div></section>
+<section class="tight"><div class="wrap narrow">
+  <form method="post" action="/admin/login" class="card">
+    <label for="email">Operator email</label>
+    <input id="email" name="email" type="email" autocomplete="username" value="${esc(email)}"${error ? ' aria-invalid="true"' : ''}>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password"${error ? ' aria-invalid="true"' : ''}>
+    ${error ? `<p class="field-error">${icon('warn')} ${esc(error)}</p>` : ''}
+    <div class="row"><button class="btn" type="submit">${icon('shield')}Sign in</button>
+      <span class="muted small">Every sign-in and every change is recorded.</span></div>
+  </form>
+  <p class="small muted"><a href="/">← Back to the site</a></p>
+</div></section>`,
+  });
+}
+
+export function adminOverviewPage({ admin, stats, settings, events = [], flash = '' }) {
+  const cards = [
+    ['Notes', stats.notes, `${stats.experts} practitioner profiles`],
+    ['Questions', stats.questions, `${stats.thin} the library could not cover`],
+    ['Bookings', stats.bookings, `${stats.paid} paid`],
+    ['Accounts', stats.accounts ?? 0, 'askers, practitioners and operators']
+  ]
+    .map(
+      ([label, value, sub]) =>
+        `<div class="card" style="margin:0"><p class="eyebrow" style="margin:0">${esc(label)}</p>
+      <p style="margin:0;font-size:30px;font-weight:700;letter-spacing:-.02em">${esc(String(value))}</p>
+      <p class="small muted" style="margin:0">${esc(sub)}</p></div>`
+    )
+    .join('');
+
+  const rows = events
+    .map(
+      (e) => `<tr><td class="mono">${esc((e.at ?? '').slice(0, 19).replace('T', ' '))}</td><td>${esc(e.kind)}</td>
+      <td class="mono">${esc(e.ref)}</td><td class="small">${esc(e.detail)}</td></tr>`
+    )
+    .join('');
+
+  return adminShell({
+    admin, active: '/admin', title: 'What the instance is doing', eyebrow: 'Operator console', flash,
+    body: `
+<section class="tight"><div class="wrap">
+  <div class="grid four">${cards}</div>
+</div></section>
+<section class="tight"><div class="wrap">
+  <h2>What it charges</h2>
+  <div class="card">
+    <ul class="plain" style="margin:0">
+      <li class="row" style="justify-content:space-between"><span>Platform share</span><strong>${esc(String(settings.platform_take_rate))}%</strong></li>
+      <li class="row" style="justify-content:space-between"><span>Shortest session</span><strong>${esc(String(settings.min_minutes))} minutes</strong></li>
+      <li class="row" style="justify-content:space-between"><span>Default session</span><strong>${esc(String(settings.default_minutes))} minutes</strong></li>
+      <li class="row" style="justify-content:space-between"><span>Default rate for a new practitioner</span><strong>${formatVnd(settings.default_rate_vnd)}</strong></li>
+    </ul>
+    <p style="margin:0"><a class="btn alt sm" href="/admin/settings">Change these</a></p>
+  </div>
+</div></section>
+<section class="tight"><div class="wrap">
+  <h2>What just happened</h2>
+  <p class="muted small">The twenty most recent events. The full trail is behind Audit.</p>
+  <table><thead><tr><th>When</th><th>What</th><th>Ref</th><th>Detail</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="4" class="muted">Nothing recorded yet.</td></tr>'}</tbody></table>
+</div></section>`,
+  });
+}
+
+export function adminSettingsPage({ admin, settings, errors = {}, flash = '' }) {
+  const field = (key) => {
+    const spec = SETTING_SPECS[key];
+    return `<div class="field">
+  <label for="set-${key}">${esc(spec.label)} <span class="muted" style="font-weight:400">(${esc(spec.unit)})</span></label>
+  <p class="hint" id="set-${key}-hint" style="margin-top:-4px">${esc(spec.hint)} Between ${spec.min} and ${spec.max}.</p>
+  <input id="set-${key}" name="${key}" inputmode="numeric" value="${esc(String(settings[key] ?? ''))}"
+    ${errors[key] ? 'aria-invalid="true" aria-describedby="set-' + key + '-err"' : `aria-describedby="set-${key}-hint"`}>
+  ${errors[key] ? `<p class="field-error" id="set-${key}-err">${icon('warn')} ${esc(errors[key])}</p>` : ''}
+</div>`;
+  };
+  return adminShell({
+    admin, active: '/admin/settings', title: 'Prices and limits', eyebrow: 'Operator console', flash,
+    body: `
+<section class="tight"><div class="wrap narrow">
+  <form method="post" action="/admin/settings" class="card">
+    ${SETTING_KEYS.map(field).join('')}
+    <div class="row"><button class="btn" type="submit">${icon('check')}Save</button>
+      <span class="muted small">Whole numbers only, in VND. Nought decimals: this product never holds a fraction of a đồng.</span></div>
+  </form>
+  <p class="small muted">Changing a value here changes what the booking form quotes immediately. A session already booked keeps the price it was booked at.</p>
+</div></section>`,
+  });
+}
+
+export function adminAuditPage({ admin, kind = '', events = [], kinds = [] }) {
+  const chips = [['', 'Everything']]
+    .concat(kinds.map((k) => [k.kind, `${k.kind} (${k.c})`]))
+    .map(([value, label]) => {
+      const href = value ? `/admin/audit?kind=${encodeURIComponent(value)}` : '/admin/audit';
+      const on = value === kind;
+      return `<a class="badge${on ? ' ok' : ''}" href="${href}"${on ? ' aria-current="page"' : ''}>${esc(label)}</a>`;
+    })
+    .join(' ');
+  const rows = events
+    .map(
+      (e) => `<tr><td class="mono">${esc((e.at ?? '').slice(0, 19).replace('T', ' '))}</td><td>${esc(e.kind)}</td>
+      <td class="mono">${esc(e.ref)}</td><td class="small">${esc(e.detail)}</td></tr>`
+    )
+    .join('');
+  return adminShell({
+    admin, active: '/admin/audit', title: 'The audit trail', eyebrow: 'Operator console',
+    body: `
+<section class="tight"><div class="wrap">
+  <p class="row tight-gap">${chips}</p>
+  <table><thead><tr><th>When</th><th>What</th><th>Ref</th><th>Detail</th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="4" class="muted">Nothing recorded for this filter.</td></tr>'}</tbody></table>
+  <p class="small muted">Writes record the operator's email in Detail — the whole point of the trail is answering “who changed this”.</p>
+</div></section>`,
   });
 }
 

@@ -105,6 +105,11 @@ create table if not exists sessions (
   expires_at text not null,
   user_agent text not null default ''
 );
+create table if not exists settings (
+  key text primary key,
+  value text not null,
+  updated_at text not null
+);
 create index if not exists idx_notes_topic on notes(topic, status);
 create index if not exists idx_questions_status on questions(status);
 create index if not exists idx_bookings_status on bookings(status);
@@ -135,6 +140,13 @@ export function migrate(db) {
   // everything asked before accounts existed stays valid and keeps its display name.
   addColumn('questions', 'user_id', 'user_id integer references users(id)');
   addColumn('bookings', 'user_id', 'user_id integer references users(id)');
+  // Roles arrived after accounts did: everyone who signed up before this was an asker, and that is
+  // exactly what the default says. A locked account keeps its history; it just cannot sign in.
+  addColumn('users', 'role', "role text not null default 'asker'");
+  addColumn('users', 'status', "status text not null default 'active'");
+  // An expert may have an account (slice 2: invitation). Nullable: the demo experts have none, and
+  // the desk token still works without one.
+  addColumn('experts', 'user_id', 'user_id integer references users(id)');
   return db;
 }
 
@@ -158,13 +170,53 @@ export function logEvent(db, kind, ref = '', detail = '') {
 // --- accounts --------------------------------------------------------------
 
 /** The one shape a user is ever handed to the views: never the password hash. */
-export const publicUser = (u) => (u ? { id: u.id, email: u.email, name: u.name, created_at: u.created_at } : null);
+export const publicUser = (u) => (u ? { id: u.id, email: u.email, name: u.name, role: u.role ?? 'asker', status: u.status ?? 'active', created_at: u.created_at } : null);
 
-export function createUser(db, { email, name, password_hash }) {
+export function createUser(db, { email, name, password_hash, role = 'asker', status = 'active' }) {
   const info = db
-    .prepare('insert into users (email, name, password_hash, created_at) values (?, ?, ?, ?)')
-    .run(String(email).trim().toLowerCase(), name, password_hash, nowIso());
+    .prepare('insert into users (email, name, password_hash, role, status, created_at) values (?, ?, ?, ?, ?, ?)')
+    .run(String(email).trim().toLowerCase(), name, password_hash, role, status, nowIso());
   return userById(db, Number(info.lastInsertRowid));
+}
+
+export function setUserRole(db, id, role) {
+  return db.prepare('update users set role = ? where id = ?').run(role, id).changes;
+}
+
+export function setUserStatus(db, id, status) {
+  return db.prepare('update users set status = ? where id = ?').run(status, id).changes;
+}
+
+/**
+ * Create an operator account, or reset one that exists. Idempotent on purpose: the installer, the
+ * seeder and `scripts/admin-create.mjs` all call it, and running any of them twice must not produce a
+ * second operator — two accounts nobody can tell apart is how an operator loses access to their own
+ * instance.
+ */
+export function upsertAdmin(db, { email, name = 'Operator', password_hash }) {
+  const existing = userByEmail(db, email);
+  if (existing) {
+    db.prepare("update users set name = ?, password_hash = ?, role = 'admin', status = 'active' where id = ?")
+      .run(name, password_hash, existing.id);
+    return { user: userById(db, existing.id), created: false };
+  }
+  return { user: createUser(db, { email, name, password_hash, role: 'admin' }), created: true };
+}
+
+export function countAdmins(db) {
+  return db.prepare("select count(*) c from users where role = 'admin'").get().c;
+}
+
+/** The audit trail, newest first — the operator's answer to "who changed this, and when". */
+export function eventKinds(db) {
+  return db.prepare('select kind, count(*) c from events group by kind order by c desc').all();
+}
+
+export function recentEvents(db, { limit = 40, kind = '' } = {}) {
+  const rows = kind
+    ? db.prepare('select * from events where kind = ? order by id desc limit ?').all(kind, limit)
+    : db.prepare('select * from events order by id desc limit ?').all(limit);
+  return rows;
 }
 
 export function userByEmail(db, email) {

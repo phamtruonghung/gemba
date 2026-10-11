@@ -27,6 +27,12 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
+# Read install-time operator credentials *before* the config file is sourced below: a GEMBA_ADMIN_PASSWORD
+# sitting in the environment file is a stored password, and re-reading it here would silently reset the
+# operator's password on every deploy.
+ADMIN_PASSWORD_ARG="${GEMBA_ADMIN_PASSWORD:-}"
+ADMIN_EMAIL_ARG="${GEMBA_ADMIN_EMAIL:-}"
+
 say "0. rename migration (a legacy installation is moved in place)"
 # Runs before anything else: the migration is what moves the database, the config and the unit out of
 # the old name. It exits immediately on a host that never used the old name.
@@ -142,7 +148,16 @@ fi
 
 "$NODE_DIR/bin/node" scripts/seed.mjs
 
-say "5. systemd unit"
+say "5. operator account"
+# Signing in to /admin needs an account, not the URL token: management lives behind a session because a
+# token in a URL cannot be revoked. This creates one on a fresh install and prints the password once;
+# on a later run it leaves the existing operator alone (scripts/admin-create.mjs owns that rule).
+GEMBA_ADMIN_EMAIL="${ADMIN_EMAIL_ARG:-operator@gemba.local}" \
+GEMBA_ADMIN_PASSWORD="$ADMIN_PASSWORD_ARG" \
+"$NODE_DIR/bin/node" scripts/admin-create.mjs || true
+unset GEMBA_ADMIN_PASSWORD
+
+say "6. systemd unit"
 install -m 644 "$APP_DIR/deploy/gemba.service" /etc/systemd/system/gemba.service
 systemctl daemon-reload
 systemctl enable gemba.service
@@ -163,7 +178,7 @@ fi
 echo "restarted at $ACTIVE_SINCE (pid $(systemctl show gemba.service -p MainPID --value))"
 journalctl -u gemba.service --no-pager -n 6 -o cat | sed 's/^/  /' || true
 
-say "6. verify over HTTP"
+say "7. verify over HTTP"
 for i in 1 2 3 4 5; do
   if curl -fsS "http://127.0.0.1:$PORT/healthz"; then break; fi
   sleep 2
@@ -201,7 +216,7 @@ if [ -n "$PROBE_REF" ]; then
     db.close();'
 fi
 
-say "7. legacy directories"
+say "8. legacy directories"
 # The migration script owns every reference to the old paths; this asks it to do the cleanup now that
 # the instance above has been verified healthy. Nothing is removed before that probe passes.
 bash "$SRC_DIR/deploy/migrate-rename.sh" --cleanup
