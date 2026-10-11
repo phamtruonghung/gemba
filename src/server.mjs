@@ -12,6 +12,7 @@ import { askFromCorpus, llmConfig } from './llm.mjs';
 import { quote, formatVnd, MIN_MINUTES, transferInstruction, suggestRateVnd } from './pricing.mjs';
 import { questionAt, draftNoteFromInterview, slugify, SCRIPT } from './interview.mjs';
 import { loadSettings, checkSettings, saveSettings, SETTING_KEYS } from './settings.mjs';
+import { checkExpert, checkInvite, checkInviteAcceptance } from './experts.mjs';
 import * as views from './views.mjs';
 import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, newSessionId, sessionExpiry, hashPassword, verifyPassword, checkEmail, checkPassword, checkName, SESSION_COOKIE } from './auth.mjs';
 
@@ -372,6 +373,124 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           admin: account, kind, events: dbm.recentEvents(db, { limit: 200, kind }), kinds: dbm.eventKinds(db)
         }));
       }
+      // --- the practitioner roster -------------------------------------
+      const rosterData = () => {
+        const stats = dbm.expertStats(db);
+        const pending = new Map();
+        for (const inv of dbm.listInvites(db)) {
+          if (!inv.accepted_at && inv.expert_id && !pending.has(inv.expert_id)) pending.set(inv.expert_id, inv);
+        }
+        return { experts: dbm.allExperts(db), stats, pending, topics: views.topicList(), settings: loadSettings(db) };
+      };
+
+      if (path === '/admin/experts' && method === 'POST') {
+        const data = rosterData();
+        const check = checkExpert(form, {
+          topics: views.topicList().map(([slug]) => slug),
+          defaultRate: data.settings.default_rate_vnd
+        });
+        if (!check.ok) {
+          return send(400, views.adminExpertsPage({
+            admin: account, ...data, errors: check.errors, draft: form, flash: ''
+          }));
+        }
+        const slug = uniqueExpertSlug(db, slugify(check.values.name) || 'practitioner');
+        const id = dbm.upsertExpert(db, { ...check.values, slug, token: newDeskToken(slug) });
+        dbm.logEvent(db, 'expert', `expert:${id}`, `actor=${actor} created slug=${slug} rate=${check.values.rate_vnd} topics=${check.values.topics.join('|')}`);
+        return redirect(`/admin/experts/${id}?added=1`);
+      }
+      if (path === '/admin/experts') {
+        return send(200, views.adminExpertsPage({
+          admin: account, ...rosterData(), errors: {}, draft: {},
+          flash: url.searchParams.get('added') === '1' ? 'Practitioner added.' : ''
+        }));
+      }
+      const exMatch = /^\/admin\/experts\/(\d+)(?:\/(invite|pause|resume|rotate))?$/.exec(path);
+      if (exMatch) {
+        const expertId = Number(exMatch[1]);
+        const action = exMatch[2] ?? '';
+        const expert = dbm.expertById(db, expertId);
+        if (!expert) return fail(404, 'No such practitioner.');
+
+        if (action === 'invite' && method === 'POST') {
+          const check = checkInvite(form, { fallbackName: expert.name });
+          if (!check.ok) {
+            return send(400, views.adminExpertPage({
+              admin: account, expert, stats: dbm.expertStats(db).get(expert.id),
+              invite: dbm.pendingInviteForExpert(db, expert.id), topics: views.topicList(),
+              errors: check.errors, draft: form, flash: ''
+            }));
+          }
+          if (dbm.userByEmail(db, check.values.email)) {
+            return send(409, views.adminExpertPage({
+              admin: account, expert, stats: dbm.expertStats(db).get(expert.id),
+              invite: dbm.pendingInviteForExpert(db, expert.id), topics: views.topicList(),
+              draft: form, errors: { email: 'That address already has an account here — ask them to sign in at /signin.' }, flash: ''
+            }));
+          }
+          const token = randomBytes(24).toString('base64url');
+          const invite = dbm.createInvite(db, {
+            token, email: check.values.email, name: check.values.name,
+            expertId: expert.id, createdBy: actor
+          });
+          dbm.logEvent(db, 'invite', `expert:${expert.id}`, `actor=${actor} email=${invite.email} expires=${invite.expires_at.slice(0, 10)}`);
+          return redirect(`/admin/experts/${expert.id}?invited=${encodeURIComponent(token)}`);
+        }
+        if ((action === 'pause' || action === 'resume') && method === 'POST') {
+          const paused = action === 'pause';
+          dbm.setExpertField(db, expert.id, 'accept_questions', paused ? 0 : 1);
+          dbm.logEvent(db, 'expert', `expert:${expert.id}`, `actor=${actor} accept_questions=${paused ? 0 : 1}`);
+          return redirect(`/admin/experts/${expert.id}`);
+        }
+        if (action === 'rotate' && method === 'POST') {
+          const token = newDeskToken(expert.slug);
+          dbm.setExpertField(db, expert.id, 'token', token);
+          dbm.logEvent(db, 'expert', `expert:${expert.id}`, `actor=${actor} desk token rotated`);
+          return redirect(`/admin/experts/${expert.id}?rotated=1`);
+        }
+        if (action === '') {
+          if (method === 'POST') {
+            const check = checkExpert(form, {
+              topics: views.topicList().map(([slug]) => slug),
+              defaultRate: loadSettings(db).default_rate_vnd
+            });
+            if (!check.ok) {
+              return send(400, views.adminExpertPage({
+                admin: account, expert, stats: dbm.expertStats(db).get(expert.id),
+                invite: dbm.pendingInviteForExpert(db, expert.id), topics: views.topicList(),
+                errors: check.errors, draft: form, flash: ''
+              }));
+            }
+            const before = dbm.expertById(db, expert.id);
+            dbm.updateExpert(db, expert.id, { ...check.values, status: before.status });
+            const changes = [];
+            if (before.rate_vnd !== check.values.rate_vnd) changes.push(`rate ${before.rate_vnd}→${check.values.rate_vnd}`);
+            if (before.years !== check.values.years) changes.push(`years ${before.years}→${check.values.years}`);
+            if (before.name !== check.values.name) changes.push('name');
+            if (JSON.stringify(before.topics) !== JSON.stringify(check.values.topics)) changes.push(`topics ${check.values.topics.join('|')}`);
+            if (before.accept_questions !== check.values.accept_questions) changes.push(`accept_questions=${check.values.accept_questions}`);
+            dbm.logEvent(db, 'expert', `expert:${expert.id}`, `actor=${actor} changed=${changes.join(' ') || 'nothing'}`);
+            return redirect(`/admin/experts/${expert.id}?saved=1`);
+          }
+          return send(200, views.adminExpertPage({
+            admin: account, expert, stats: dbm.expertStats(db).get(expert.id),
+            invite: dbm.pendingInviteForExpert(db, expert.id), topics: views.topicList(),
+            errors: {}, draft: {},
+            flash: url.searchParams.get('saved') === '1' ? 'Saved.'
+              : url.searchParams.get('added') === '1' ? 'Practitioner added. Invite them so they can sign in.'
+              : url.searchParams.get('rotated') === '1' ? 'A new desk link was generated. The old one no longer works.' : '',
+            inviteLink: url.searchParams.get('invited') ? `/invite/${url.searchParams.get('invited')}` : ''
+          }));
+        }
+        return fail(404, 'No such operator page.');
+      }
+      if (path === '/admin/invites') {
+        return send(200, views.adminInvitesPage({
+          admin: account, invites: dbm.listInvites(db).map((i) => ({ ...i, state: dbm.inviteState(i) })),
+          flash: ''
+        }));
+      }
+
       return fail(404, 'No such operator page.');
     }
 
@@ -496,6 +615,55 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       if (!b) return fail(404, 'No such booking.');
       if (b.status === 'requested') dbm.setBookingStatus(db, ref, 'awaiting_payment');
       return redirect(`/b/${ref}`);
+    }
+
+    // --- an invitation is the only way an account is created for a practitioner ---
+    const invMatch = /^\/invite\/([^/]+)$/.exec(path);
+    if (invMatch) {
+      const invite = dbm.inviteByToken(db, decodeURIComponent(invMatch[1]));
+      const state = dbm.inviteState(invite);
+      if (state !== 'pending') {
+        return send(state === 'unknown' ? 404 : 410, views.inviteDeadPage({ state, email: invite?.email ?? '' }));
+      }
+      const expert = invite.expert_id ? dbm.expertById(db, invite.expert_id) : null;
+      if (method === 'POST') {
+        if (dbm.userByEmail(db, invite.email)) {
+          return send(409, views.invitePage({
+            invite, expert, draft: form,
+            errors: { password: 'An account already exists for this address. Sign in instead, or ask the operator for a new invitation.' }
+          }));
+        }
+        const check = checkInviteAcceptance(form);
+        if (!check.ok) return send(400, views.invitePage({ invite, expert, errors: check.errors, draft: form }));
+
+        const created = dbm.createUser(db, {
+          email: invite.email,
+          name: check.values.name,
+          password_hash: await hashPassword(check.values.password),
+          role: 'expert'
+        });
+        if (invite.expert_id) dbm.linkExpertUser(db, invite.expert_id, created.id);
+        dbm.acceptInvite(db, invite.id);
+        dbm.logEvent(db, 'invite_accepted', `expert:${invite.expert_id ?? '-'}`, `actor=${invite.email} role=expert`);
+        const id = newSessionId();
+        dbm.createSession(db, { id, userId: created.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
+        dbm.touchUser(db, created.id);
+        return withCookie('/desk', id, isSecureRequest(req));
+      }
+      return send(200, views.invitePage({ invite, expert, errors: {}, draft: {} }));
+    }
+
+    // --- the desk, for a practitioner who signed in -------------------------
+    if (path === '/desk') {
+      if (!account) return redirect('/signin?next=/desk');
+      const expert = dbm.expertByUser(db, account.id);
+      if (!expert) return redirect('/experts');
+      return send(200, views.expertWorkspacePage({
+        expert,
+        expertNotes: dbm.notesForExpert(db, expert.id),
+        queue: dbm.openQuestionsFor(db, expert),
+        bookings: dbm.bookingsFor(db, { expertId: expert.id })
+      }));
     }
 
     // --- expert workspace --------------------------------------------------
@@ -649,6 +817,21 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
 
   return { server, db, index: () => index, rebuildIndex, runAsk, escalate: escalate(), config, rules };
 }
+
+/** A slug nobody has taken. `uniqueSlug` below is for notes; practitioners need their own. */
+function uniqueExpertSlug(db, base) {
+  const taken = new Set(dbm.allExperts(db).map((e) => e.slug));
+  let slug = base;
+  let i = 2;
+  while (taken.has(slug)) {
+    slug = `${base}-${i}`;
+    i += 1;
+  }
+  return slug;
+}
+
+/** The desk token: recognisable at a glance, unguessable in practice. */
+const newDeskToken = (slug) => `${slug.slice(0, 16).replace(/-+$/, '')}-${randomBytes(5).toString('hex')}`;
 
 function uniqueSlug(db, base) {
   let slug = base;

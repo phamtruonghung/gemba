@@ -36,6 +36,20 @@ PAGES = [
     ("how-it-works", "/how-it-works"),
 ]
 
+# The operator surface is behind an account, so it cannot be reached by walking the public pages. The
+# checks below sign in like a person does. On the local instance this script creates its own operator;
+# against a deployment (UI_BASE) it needs UI_ADMIN_EMAIL/UI_ADMIN_PASSWORD, and says so out loud rather
+# than reporting a pass it did not earn.
+ADMIN_EMAIL = os.environ.get("UI_ADMIN_EMAIL") or (None if EXTERNAL else "operator@gemba.local")
+ADMIN_PASSWORD = os.environ.get("UI_ADMIN_PASSWORD") or (None if EXTERNAL else "ui-check-operator-password")
+ADMIN_PAGES = [
+    ("operator-overview", "/admin"),
+    ("operator-practitioners", "/admin/experts"),
+    ("operator-invitations", "/admin/invites"),
+    ("operator-settings", "/admin/settings"),
+    ("operator-audit", "/admin/audit"),
+]
+
 failures = []
 
 
@@ -119,6 +133,14 @@ def main():
     for suffix in ("", "-wal", "-shm"):
         Path(db_path + suffix).unlink(missing_ok=True)
     subprocess.run(["node", "scripts/seed.mjs"], cwd=ROOT, env={**os.environ, "GEMBA_DB": db_path}, stdout=subprocess.DEVNULL, check=True)
+    if ADMIN_EMAIL and ADMIN_PASSWORD:
+        subprocess.run(
+            ["node", "scripts/admin-create.mjs"],
+            cwd=ROOT,
+            env={**os.environ, "GEMBA_DB": db_path, "GEMBA_ADMIN_EMAIL": ADMIN_EMAIL, "GEMBA_ADMIN_PASSWORD": ADMIN_PASSWORD},
+            stdout=subprocess.DEVNULL,
+            check=True,
+        )
     proc = subprocess.Popen(
         ["node", "src/server.mjs"],
         cwd=ROOT,
@@ -155,6 +177,103 @@ SETTLE_CSS = "*{animation:none!important;transition:none!important;opacity:1!imp
 def settle(page):
     page.emulate_media(reduced_motion="reduce")
     page.add_style_tag(content=SETTLE_CSS)
+
+
+def admin_pass(browser):
+    """Sign in and walk the operator pages the way the operator does."""
+    if not (ADMIN_EMAIL and ADMIN_PASSWORD):
+        check("operator pages — credentials to check them with", False,
+              "UI_ADMIN_EMAIL/UI_ADMIN_PASSWORD are unset, so the operator surface was NOT checked")
+        return
+    ctx = browser.new_context(
+        viewport={"width": 1440, "height": 900},
+        http_credentials=(
+            {"username": os.environ["UI_USER"], "password": os.environ["UI_PASS"]}
+            if os.environ.get("UI_USER") and os.environ.get("UI_PASS")
+            else None
+        ),
+    )
+    page = ctx.new_page()
+
+    # an anonymous visitor meets the door, not the room
+    page.goto(BASE + "/admin", wait_until="load")
+    check("operator — a visitor is sent to sign in", "/admin/login" in page.url and "next" in page.url, page.url)
+
+    settle(page)
+    page.fill("#email", ADMIN_EMAIL)
+    page.fill("#password", "not-the-password")
+    page.click("button[type=submit]")
+    page.wait_for_load_state("load")
+    check("operator — a wrong password is refused", page.url.endswith("/admin/login") and "do not match" in page.content(),
+          page.url)
+
+    page.fill("#email", ADMIN_EMAIL)
+    page.fill("#password", ADMIN_PASSWORD)
+    page.click("button[type=submit]")
+    page.wait_for_load_state("load")
+    check("operator — the right password lands on the overview", page.url.endswith("/admin") and "What the instance is doing" in page.content(),
+          page.url)
+
+    for name, path in ADMIN_PAGES:
+        resp = page.goto(BASE + path, wait_until="load")
+        settle(page)
+        status = resp.status if resp else 0
+        check(f"{name} — loads", status == 200, f"HTTP {status}")
+
+        overflow = page.evaluate(
+            "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
+        check(f"{name} — no horizontal overflow", overflow <= 1, f"{overflow}px wider than the viewport")
+
+        rows = page.evaluate(CONTRAST_JS)
+        worst = None
+        for row in rows:
+            fg, bg = parse_rgb(row["color"]), parse_rgb(row["bg"])
+            if not fg or not bg:
+                continue
+            ratio = contrast(fg, bg)
+            large = row["size"] >= 24 or (row["size"] >= 18.66 and int(row["weight"]) >= 700)
+            need = 3.0 if large else 4.5
+            if ratio < need and (worst is None or ratio < worst[1]):
+                worst = (row["text"], ratio, need)
+        check(f"{name} — contrast ≥4.5:1", worst is None,
+              f"{worst[0][:28]!r} at {worst[1]:.2f} (needs {worst[2]})" if worst else "")
+
+        unlabelled = page.evaluate(
+            """() => {
+              const out = [];
+              for (const el of document.querySelectorAll('input:not([type=hidden]), textarea, select')) {
+                const id = el.id;
+                const lab = id ? document.querySelector('label[for="' + id + '"]') : null;
+                if (!lab) out.push(el.name || el.id || el.tagName);
+              }
+              return out;
+            }"""
+        )
+        check(f"{name} — every field has a label", not unlabelled, ", ".join(unlabelled))
+
+        current = page.evaluate("() => { const a = document.querySelector('.admin-nav a[aria-current]'); return a ? a.getAttribute('href') : null; }")
+        check(f"{name} — the console marks the current page", current == path, str(current))
+
+    # narrow: the operator console has to work on the phone an operator actually carries
+    narrow = browser.new_context(viewport={"width": 375, "height": 900},
+                                 http_credentials=(
+                                     {"username": os.environ["UI_USER"], "password": os.environ["UI_PASS"]}
+                                     if os.environ.get("UI_USER") and os.environ.get("UI_PASS") else None))
+    npage = narrow.new_page()
+    npage.goto(BASE + "/admin/login", wait_until="load")
+    settle(npage)
+    npage.fill("#email", ADMIN_EMAIL)
+    npage.fill("#password", ADMIN_PASSWORD)
+    npage.click("button[type=submit]")
+    npage.wait_for_load_state("load")
+    for name, path in [("operator-overview", "/admin"), ("operator-practitioners", "/admin/experts")]:
+        npage.goto(BASE + path, wait_until="load")
+        settle(npage)
+        over = npage.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        check(f"{name} — no horizontal overflow at 375px", over <= 1, f"{over}px wider")
+    narrow.close()
+    ctx.close()
 
 
 def run_checks():
@@ -353,6 +472,7 @@ def run_checks():
                 check(f"the ask form announces that it is working — {scheme}", pending["ok"], pending["why"])
 
                 ctx.close()
+        admin_pass(browser)
         browser.close()
 
 

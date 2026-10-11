@@ -29,7 +29,7 @@ transitions (*payment received*, *session done*). It needs no sign-in, so it is 
 reconciliation link — and nothing more.
 
 `/admin` is an account, and it is where the power is: the prices and limits the booking form quotes
-from, the audit trail, and (next) practitioners, invitations and accounts. A token in a URL cannot be
+from, the practitioner roster, invitations, the audit trail, and (next) asker accounts. A token in a URL cannot be
 revoked or rotated, and "change every price" is not the same power as "mark this paid" — so creating
 people and moving money sits behind a session, and every write records the operator's email.
 
@@ -43,6 +43,23 @@ node scripts/admin-create.mjs --email me@example.com     # create or reset; prin
 | Shortest session | 30 minutes | A shorter session is not offered |
 | Default session | 45 minutes | What the booking form proposes |
 | Default rate | 600,000 VND/h | Used for a new practitioner with no rate yet |
+
+### Practitioners, and how one arrives
+
+A practitioner is who a refused question is routed to and where a paid session happens. There is **no
+open registration** — an account is created by invitation, because the value of the corpus is that it
+comes from people who ran the line, and an invitation is the operator saying "this one did".
+
+1. **Add** them at `/admin/experts` — name, headline, topics, years, rate. Topics decide routing: a
+   practitioner with no topic can never be sent a question, so the form refuses to save one.
+2. **Invite** them from their page. You get a single-use link, valid for seven days, shown once —
+   send it to them however you like. They set their own password and land on their desk.
+3. **Their desk** is `/desk` once signed in. The older `/c/<token>` link keeps working: a link is a
+   permanent password, so it is the fallback for someone who loses theirs, not the front door. If it
+   leaks, *Generate a new desk link* kills the old one.
+
+Pausing a practitioner (`Accept new questions` off) takes them out of routing immediately; editing a
+rate changes what new bookings quote, without a deploy. Every one of those changes is audited.
 
 Values are whole numbers in VND — the product never holds a fraction of a đồng — and a form with one
 bad field changes nothing, so *save* means saved.
@@ -119,6 +136,10 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 |---|---|
 | `GET /healthz` | liveness + corpus size + whether the model is configured |
 | `GET/POST /signup`, `GET/POST /signin`, `POST /signout` | create an account, sign in, sign out |
+| `GET/POST /invite/:token` | a practitioner sets their own password from an invitation (single use, seven days) |
+| `GET /desk` | the desk of the signed-in practitioner (the account door, next to `/c/<token>`) |
+| `GET/POST /admin/login`, `POST /admin/logout` | operator sign-in |
+| `GET /admin`, `GET/POST /admin/experts`, `GET/POST /admin/experts/:id` (+ `/invite`, `/pause`, `/resume`, `/rotate`), `GET /admin/invites`, `GET/POST /admin/settings`, `GET /admin/audit` | the operator console |
 | `GET /account` | the signed-in asker's own questions and bookings |
 | `POST /api/ask` | JSON ask: question, plant type, asker → answer, citations, coverage, ref |
 | `GET /api/question/:ref` | one question with its answer, citations and expert answers |
@@ -340,7 +361,8 @@ bookmark.
 No payment gateway or escrow (see above), no email/Zalo notification (the expert has a tokenised
 queue instead), no expert KYC/vetting, no invoice or withholding module, no contracts or ToS, no
 mobile app, no analytics. Accounts exist for askers (email + password, below) and for the operator
-(`/admin`), and there is no password reset by email, no email verification and no rate limit on
+(`/admin`), practitioners get accounts by invitation rather than by registering, and there is no password
+reset by email (a practitioner who loses one uses a fresh desk link), no email verification and no rate limit on
 sign-in yet. Practitioner accounts arrive by invitation — see the operator section above. `SPEC.md` § *Open questions* names the ones that must be decided before selling
 anything.
 
