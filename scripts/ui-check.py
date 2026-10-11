@@ -179,8 +179,10 @@ def run_checks():
                             const r = el.getBoundingClientRect();
                             if (!r.width || !r.height) continue;
                             if (getComputedStyle(el).visibility === 'hidden') continue;
-                            // A link inside a sentence is text, not a control: WCAG 2.2 exempts it.
-                            if (el.tagName === 'A' && el.closest('p, li, dd, dt, .answer')) continue;
+                            // A link inside a sentence — or a heading that is itself a link — is text,
+                            // not a control: WCAG 2.2 (2.5.8) exempts inline targets. Chips, nav items,
+                            // buttons, selects and fields are controls and stay held to 44px.
+                            if (el.tagName === 'A' && el.closest('p, li, dd, dt, .answer, h1, h2, h3, h4')) continue;
                             if (r.height < 44) bad.push((el.tagName + ':' + (el.textContent || el.name || '').trim().slice(0, 24)) + ' h=' + Math.round(r.height));
                           }
                           return bad;
@@ -200,6 +202,35 @@ def run_checks():
                         if ratio < need and (worst is None or ratio < worst[1]):
                             worst = (row["text"], ratio, need)
                     check(f"contrast ≥4.5:1 — {tag}", worst is None, f"{worst[0][:28]!r} at {worst[1]:.2f} (needs {worst[2]})" if worst else "")
+
+                    # Cards standing side by side must line up. This is the check that was missing when
+                    # every card in the band had its action row at a different height: the cause was an
+                    # inline `margin:0` overriding the `margin-top:auto` meant to push the action down,
+                    # and no style-based check noticed because each card was individually valid.
+                    misaligned = page.evaluate(
+                        """() => {
+                          const out = [];
+                          for (const grid of document.querySelectorAll('.grid')) {
+                            const rows = new Map();
+                            for (const card of grid.querySelectorAll(':scope > article.card')) {
+                              const last = card.lastElementChild;
+                              if (!last) continue;
+                              const cr = card.getBoundingClientRect();
+                              const rt = Math.round(cr.top);
+                              const off = Math.round(cr.bottom - last.getBoundingClientRect().bottom);
+                              if (!rows.has(rt)) rows.set(rt, []);
+                              rows.get(rt).push(off);
+                            }
+                            for (const [rt, offs] of rows) {
+                              if (offs.length > 1 && Math.max(...offs) - Math.min(...offs) > 2) {
+                                out.push('row@' + rt + ' -> ' + offs.join('/'));
+                              }
+                            }
+                          }
+                          return out;
+                        }"""
+                    )
+                    check(f"card actions line up — {tag}", not misaligned, "; ".join(misaligned[:3]))
 
                     if width == 1440:
                         page.screenshot(path=str(SHOTS / f"{name}-{scheme}.png"), full_page=True)

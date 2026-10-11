@@ -16,6 +16,19 @@ BASE = f"http://127.0.0.1:{PORT}"
 SHOTS = Path(os.environ.get("SHOT_DIR") or Path(tempfile.gettempdir()) / "xuong-ui-shots")
 SHOTS.mkdir(parents=True, exist_ok=True)
 
+# A screenshot taken while an entrance animation is running captures the band at partial opacity:
+# the picture then shows a mid-grey band carrying pale text that does not exist a moment later, and a
+# reviewer (or a vision model) reports a contrast failure that is not real. Reduced motion plus an
+# explicit kill switch pins every capture to the settled page a reader actually sees.
+SETTLE_CSS = "*{animation:none!important;transition:none!important;opacity:1!important}"
+
+
+def shot(page, name, full=True):
+    page.emulate_media(reduced_motion="reduce")
+    page.add_style_tag(content=SETTLE_CSS)
+    page.screenshot(path=str(SHOTS / f"{name}.png"), full_page=full)
+
+
 
 def main():
     # A seeded file database, not ':memory:' — an empty corpus has no notes to open and no experts
@@ -47,26 +60,38 @@ def main():
                 page.fill("#password", "a sentence of ten characters")
                 page.click("button[type=submit]")
                 page.wait_for_load_state("load")
-                page.screenshot(path=str(SHOTS / f"account-{scheme}.png"), full_page=True)
+                shot(page, f"account-{scheme}")
 
                 # a question the library covers, then one it does not
                 page.goto(BASE + "/", wait_until="load")
                 page.fill("#q", "the machine stops mid-shift, what do I check and in what order")
                 page.click("button[type=submit]")
                 page.wait_for_load_state("load")
-                page.screenshot(path=str(SHOTS / f"question-cited-{scheme}.png"), full_page=True)
+                shot(page, f"question-cited-{scheme}")
 
                 page.goto(BASE + "/", wait_until="load")
                 page.fill("#q", "what is a good CRM for my sales team?")
                 page.click("button[type=submit]")
                 page.wait_for_load_state("load")
-                page.screenshot(path=str(SHOTS / f"question-refused-{scheme}.png"), full_page=True)
+                shot(page, f"question-refused-{scheme}")
 
-                # the note page itself
+                # the note page itself, reached the way a reader reaches it: the card's own title
                 page.goto(BASE + "/library", wait_until="load")
-                page.click("ul.plain li a")
+                page.click(".grid article h3 a")
                 page.wait_for_load_state("load")
-                page.screenshot(path=str(SHOTS / f"note-{scheme}.png"), full_page=True)
+                shot(page, f"note-{scheme}")
+
+                # the whole landing page, which is the thing a redesign has to be judged on
+                page.goto(BASE + "/", wait_until="load")
+                shot(page, f"home-{scheme}")
+                shot(page, f"hero-{scheme}", full=False)
+
+                # and the same page at phone width, where a landing page usually breaks
+                phone = ctx.browser.new_context(viewport={"width": 375, "height": 900}, color_scheme=scheme, is_mobile=True, has_touch=True)
+                p375 = phone.new_page()
+                p375.goto(BASE + "/", wait_until="load")
+                shot(p375, f"home-375-{scheme}")
+                phone.close()
                 ctx.close()
             browser.close()
         print("screenshots:", sorted(p.name for p in SHOTS.glob("*.png")))

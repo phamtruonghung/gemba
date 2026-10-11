@@ -136,17 +136,33 @@ both off, which is why an unauthenticated instance is still open by design.
 
 The visual system is generated, not improvised: `design-system/xuong/MASTER.md` holds the palette,
 type scale, spacing, radius and shadow tokens, and `src/views.mjs` carries them as CSS custom
-properties. Navy and slate for authority, one blue accent reserved for the primary action, and a
-distinct amber panel for a refusal so "I do not know" never looks like an error.
+properties. **Orange is the theme** — it carries the brand mark, the primary action, the tint fills
+and the highlight on the dark bands — on warm paper (`#F7F4F1` / `#0B1A1D`). Graphite stays for
+structure, and a refusal is a graphite panel rather than an amber one: with orange as the brand,
+an amber warning would read as brand emphasis, and a refusal must not look like either praise or
+an error.
+
+The page shape follows `arbolus.com`, read off the live page rather than copied by eye
+(`scripts/read-reference.py` prints the section outline, nav, and the computed styles that matter):
+a thin dark utility bar, a light nav bar with one filled CTA, a centred hero with a small uppercase
+stat row over a very large headline, the product's primary action in one card, a three-column
+feature row, a two-column block with a framed example, a full-width dark band of practitioner cards,
+a four-card grid, the money block, a row of real refusals, who it is for, the published notes as
+resource cards, a closing dark CTA band, and a four-column footer.
 
 - **Light and dark** are both first-class, driven by `prefers-color-scheme`; every colour pair was
-  checked at 4.5:1 or better, on the rendered page rather than in the stylesheet.
+  checked at 4.5:1 or better — on the rendered page, and again from the screenshot's own pixels
+  (`scripts/measure-contrast.py`), because a style-based check can pair the wrong background inside
+  a dark band.
 - **No client JavaScript.** The one motion in the system (a short entry fade) is CSS, and it is
   off under `prefers-reduced-motion`. A factory-floor browser and a locked-down corporate one both
-  work.
+  work. Screenshots are taken with animation disabled: a capture taken mid-fade shows a band at
+  partial opacity and invents a contrast failure that does not exist.
 - **Accessible by construction**: a skip link, visible focus rings, `aria-current` on the current
   nav item, labels bound to every field, errors next to the field that caused them, and 44px touch
-  targets. `scripts/ui-check.py` asserts all of it in a headless browser at 375px and 1440px.
+  targets for controls (inline links in text are exempt under WCAG 2.2). `scripts/ui-check.py`
+  asserts all of it in a headless browser at 375px and 1440px, and also asserts that cards standing
+  side by side line their action rows up.
 
 ## Money
 
@@ -162,10 +178,10 @@ of it is a deliberate decision. See `SPEC.md` § *Vietnam constraints*.
 
 ## Tests, and what they caught
 
-60 tests (`node --test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
-(102 checks in a headless browser: overflow at 375/1440, contrast, focus, tap targets, labels, and
-the primary button sampled from the pixels it actually painted). They are worth more than the
-coverage number because of what they found:
+64 tests (`node --test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+(126 checks in a headless browser: overflow at 375/1440, contrast, focus, tap targets, labels, card
+alignment, and the primary button sampled from the pixels it actually painted). They are worth more
+than the coverage number because of what they found:
 
 - Vietnamese surnames in capitals were not caught by the gate (a character-range regex matched
   lowercase accented letters too) — fixed with `\p{Lu}`/`\p{Ll}` and per-token checks.
@@ -301,6 +317,7 @@ anything.
 ```
 src/       db.mjs  auth.mjs  gate.mjs  retrieval.mjs  pricing.mjs  llm.mjs  interview.mjs  views.mjs  server.mjs
 scripts/   seed.mjs  import-notes.mjs  smoke.sh  ui-check.py  ui-shots.py  probe-*.mjs
+           read-reference.py  measure-contrast.py  probe-block.py   # design evidence, not opinions
 design-system/xuong/MASTER.md   the generated visual system the interface is built from
 seed/      experts.json  topic-map.json  corpus/  vault-raw/
 test/      unit.test.mjs  app.test.mjs  auth.test.mjs  accounts.test.mjs

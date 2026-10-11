@@ -42,7 +42,19 @@ jobs:
           python-version: '3.12'
       - run: pip install playwright pillow && python -m playwright install --with-deps chromium
       - name: Interface checks in a headless browser
+        env:
+          SHOT_DIR: ${{ runner.temp }}/ui-shots
         run: python scripts/ui-check.py
+      - name: Contrast measured from the pixels, not from the stylesheet
+        # A style-based check can resolve the wrong background inside a dark band. This reads the
+        # screenshots the previous step took and fails if the text on a band is not legible.
+        run: python scripts/measure-contrast.py "${{ runner.temp }}"/ui-shots/*-light.png
+      - name: Upload the screenshots when something is wrong
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-shots
+          path: ${{ runner.temp }}/ui-shots
 
   image:
     needs: test

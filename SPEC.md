@@ -239,7 +239,12 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
 12. **The interface is generated from a design system, not decorated afterwards.** The tokens live in
     `design-system/xuong/MASTER.md`, the CSS in `src/views.mjs` is written against them, and
     `scripts/ui-check.py` measures the result in a browser (overflow, contrast, focus, tap targets,
-    the painted button). A palette nobody checks is a palette that drifts.
+    card alignment, the painted button). A palette nobody checks is a palette that drifts.
+13. **Orange is the theme; the page shape is borrowed from a reference site, and the borrowing is
+    evidence, not impression.** `scripts/read-reference.py` reads the reference's outline and
+    computed styles so "like arbolus.com" means the same section order, nav shape and hero rhythm —
+    not a mood board. A refusal is graphite, not amber: with orange as the brand, an amber panel
+    would read as brand emphasis, and a refusal must read as neither praise nor error.
 
 ## 11. Open questions — decide before selling anything
 
