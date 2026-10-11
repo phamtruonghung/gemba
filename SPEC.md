@@ -1,4 +1,4 @@
-# SPEC — Xuong
+# SPEC — Gemba
 
 What this product is, which market mechanisms it copies and why, what Vietnam requires of it, what
 was decided, and what is still open. Written to be read before changing the code or spending money.
@@ -226,7 +226,7 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
    mistaken for a practitioner's real published craft.
 8. **No simulated expert.** Answers attributed to a person are written by that person.
 9. **The gate is in the app, not in the deployment.** Every path except `/healthz` can require HTTP
-   basic auth (`XUONG_USER`/`XUONG_PASS`), because the ask form spends money on a model per question
+   basic auth (`GEMBA_USER`/`GEMBA_PASS`), because the ask form spends money on a model per question
    and a publicly reachable instance without it is an open bill. Relying on a proxy someone has to
    remember to configure is how that gets forgotten.
 
@@ -237,10 +237,23 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
     actually end the session (and one day end *all* of them); a token the server cannot revoke is a
     promise it cannot keep. Passwords are `scrypt`, salts per account, comparison constant-time.
 12. **The interface is generated from a design system, not decorated afterwards.** The tokens live in
-    `design-system/xuong/MASTER.md`, the CSS in `src/views.mjs` is written against them, and
+    `design-system/gemba/MASTER.md`, the CSS in `src/views.mjs` is written against them, and
     `scripts/ui-check.py` measures the result in a browser (overflow, contrast, focus, tap targets,
     card alignment, the painted button). A palette nobody checks is a palette that drifts.
-13. **Orange is the theme; the page shape is borrowed from a reference site, and the borrowing is
+13. **The name is an identifier, not a label.** The product is Gemba, and that name reaches the repo,
+    the image, the systemd unit, `/opt`, `/etc`, `/var/lib`, the environment prefix and the session
+    cookie — `deploy/migrate-rename.sh` moves a live older installation, and `test/naming.test.mjs`
+    fails if the old name survives anywhere it is not load-bearing. It is load-bearing in exactly two
+    places, both of which the same test asserts rather than merely tolerates: the migration script
+    (which has to look for it) and the folded Vietnamese stopword for *workshop* in `src/retrieval.mjs`
+    (where renaming the token would silently change what retrieval ignores).
+14. **The answering tier is a gateway, and the gateway and the model id are one decision.** Default
+    is the OpenCode gateway (`/zen/go/v1`, OpenAI-compatible): it routes by `x-opencode-session` and
+    answers `400 MissingSessionID` without it, so the app sends a per-installation id or it silently
+    degrades to the extractive answer. `deploy/llm-gateway-check.sh` proves on-corpus citation *and*
+    off-corpus refusal through the configured gateway before any deploy — one probe cannot tell a
+    working gateway from one that answers everything.
+15. **Orange is the theme; the page shape is borrowed from a reference site, and the borrowing is
     evidence, not impression.** `scripts/read-reference.py` reads the reference's outline and
     computed styles so "like arbolus.com" means the same section order, nav shape and hero rhythm —
     not a mood board. A refusal is graphite, not amber: with orange as the brand, an amber panel

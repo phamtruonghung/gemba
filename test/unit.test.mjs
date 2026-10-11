@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { checkNote, decidePublication, loadRules, ATTESTATION_TEXT } from '../src/gate.mjs';
 import { buildIndex, search, coverage, tokenize, fold } from '../src/retrieval.mjs';
 import { quote, priceFor, split, roundVnd, formatVnd, transferInstruction, PLATFORM_TAKE_RATE, MIN_MINUTES } from '../src/pricing.mjs';
-import { buildPrompt, askFromCorpus, NO_DATA_MARKER } from '../src/llm.mjs';
+import { buildPrompt, askFromCorpus, NO_DATA_MARKER, llmConfig } from '../src/llm.mjs';
 import { SCRIPT, draftNoteFromInterview, slugify } from '../src/interview.mjs';
 import { openDb, upsertNote, pruneSeedNotes, publishedNotes } from '../src/db.mjs';
 
@@ -264,4 +264,51 @@ test('interview: slugs are ASCII and stable', () => {
   assert.equal(slugify('Máy dừng giữa ca — v2'), 'may-dung-giua-ca-v2');
   assert.equal(slugify('The machine stops mid-shift — v2'), 'the-machine-stops-mid-shift-v2');
   assert.equal(slugify(''), 'note');
+});
+
+test('llm: the gateway and the model id are one decision', () => {
+  // These must move together: an OpenRouter-style namespaced model id sent to the OpenCode gateway
+  // (or the reverse) 404s at the first question, long after the install said it was fine.
+  const def = llmConfig({});
+  assert.equal(def.base, 'https://opencode.ai/zen/go/v1', 'the default gateway is the OpenCode one');
+  assert.equal(def.model, 'deepseek-v4.1-flash', 'and the default model is the one it serves');
+
+  const or = llmConfig({ GEMBA_LLM_BASE_URL: 'https://openrouter.ai/api/v1' });
+  assert.equal(or.model, 'deepseek/deepseek-v4-flash-0731', 'OpenRouter gets its namespaced id');
+
+  const pinned = llmConfig({ GEMBA_LLM_BASE_URL: 'https://openrouter.ai/api/v1', GEMBA_LLM_MODEL: 'x/y' });
+  assert.equal(pinned.model, 'x/y', 'an explicit model always wins');
+
+  const local = llmConfig({ GEMBA_LLM_BASE_URL: 'http://192.168.1.105:8080/v1' });
+  assert.equal(local.model, 'deepseek-v4.1-flash', 'an unknown gateway still gets a usable id');
+});
+
+test('llm: the OpenCode gateway gets its session header, and other gateways do not', async () => {
+  // Observed against the live gateway: without this header it answers 400 MissingSessionID and the
+  // product silently degrades to the extractive answer — correct-looking output, no model involved.
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '{"answer":"a","citations":[1],"coverage":"ok"}' }, finish_reason: 'stop' }] })
+    };
+  };
+  const hits = [{ note: { id: 7, title: 'A note', topic: 'tpm', body: CRAFT }, score: 9 }];
+
+  await askFromCorpus({
+    question: 'why does the press stop', hits, coverageVerdict: { verdict: 'ok' },
+    cfg: { base: 'https://opencode.ai/zen/go/v1', model: 'deepseek-v4.1-flash', key: 'k', session: 'sess-1', enabled: true, timeoutMs: 1000 },
+    fetchImpl: fakeFetch
+  });
+  assert.equal(calls[0].headers['x-opencode-session'], 'sess-1');
+  assert.match(calls[0].url, /opencode\.ai\/zen\/go\/v1\/chat\/completions$/);
+
+  calls.length = 0;
+  await askFromCorpus({
+    question: 'why does the press stop', hits, coverageVerdict: { verdict: 'ok' },
+    cfg: { base: 'https://openrouter.ai/api/v1', model: 'x/y', key: 'k', session: '', enabled: true, timeoutMs: 1000 },
+    fetchImpl: fakeFetch
+  });
+  assert.equal('x-opencode-session' in calls[0].headers, false, 'OpenRouter must not receive the header');
 });

@@ -11,4 +11,4 @@ SPEC.md
 test
 deploy/install.sh
 deploy/quick-tunnel.sh
-deploy/xuong.service
+deploy/gemba.service

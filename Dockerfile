@@ -7,10 +7,10 @@
 FROM node:22-alpine
 
 ENV NODE_ENV=production \
-    XUONG_HOST=0.0.0.0 \
-    XUONG_PORT=8090 \
-    XUONG_DATA_DIR=/data \
-    XUONG_DB=/data/xuong.db
+    GEMBA_HOST=0.0.0.0 \
+    GEMBA_PORT=8090 \
+    GEMBA_DATA_DIR=/data \
+    GEMBA_DB=/data/gemba.db
 
 WORKDIR /app
 
@@ -34,7 +34,7 @@ VOLUME ["/data"]
 # /healthz is the one path the front gate leaves open, so this probe works whether the gate is
 # configured or not.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.XUONG_PORT||8090)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.GEMBA_PORT||8090)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["node", "src/server.mjs"]

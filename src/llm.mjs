@@ -7,12 +7,31 @@
 
 import { extractiveAnswer } from './retrieval.mjs';
 
+// The gateway and the model id are one decision, not two: they must match, or the call 404s on a
+// model the gateway does not serve. The OpenCode gateway (OpenAI-compatible, the same one this
+// project's own agent runs on) serves `deepseek-v4.1-flash`; OpenRouter serves the `deepseek/...`
+// namespaced id. So the default model is derived from the base URL rather than fixed, and an
+// explicit GEMBA_LLM_MODEL always wins.
+const GATEWAYS = [
+  // `session: true` — this gateway wants the x-opencode-session header (see below).
+  { match: 'opencode.ai', base: 'https://opencode.ai/zen/go/v1', model: 'deepseek-v4.1-flash', session: true },
+  { match: 'openrouter.ai', base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-flash-0731', session: false }
+];
+
+// The OpenCode gateway is session-scoped: it routes and attributes a request by `x-opencode-session`,
+// and refuses the call with "MissingSessionID" without it. A stable id per installation keeps this
+// app's usage attributable; the installer writes a UUID into the env once.
+const DEFAULT_SESSION = '00000000-0000-4000-8000-000000000000';
+
 export function llmConfig(env = process.env) {
-  const key = env.XUONG_LLM_KEY || env.OPENROUTER_API_KEY || env.OPENCODE_GO_API_KEY || '';
-  const base = env.XUONG_LLM_BASE_URL || (env.OPENCODE_GO_API_KEY && !env.OPENROUTER_API_KEY ? 'https://opencode.ai/zen/go/v1' : 'https://openrouter.ai/api/v1');
-  const model = env.XUONG_LLM_MODEL || 'deepseek/deepseek-v4-flash-0731';
-  const timeoutMs = Number(env.XUONG_LLM_TIMEOUT_MS || 45000);
-  return { key, base, model, timeoutMs, enabled: Boolean(key) };
+  const key = env.GEMBA_LLM_KEY || env.OPENCODE_GO_API_KEY || env.OPENROUTER_API_KEY || '';
+  const base = env.GEMBA_LLM_BASE_URL
+    || GATEWAYS[0].base;
+  const gateway = GATEWAYS.find((g) => base.includes(g.match));
+  const model = env.GEMBA_LLM_MODEL || gateway?.model || GATEWAYS[0].model;
+  const timeoutMs = Number(env.GEMBA_LLM_TIMEOUT_MS || 45000);
+  const session = gateway?.session ? (env.GEMBA_LLM_SESSION || DEFAULT_SESSION) : '';
+  return { key, base, model, timeoutMs, session, enabled: Boolean(key) };
 }
 
 export const NO_DATA_MARKER = 'INSUFFICIENT_DATA';
@@ -103,7 +122,12 @@ export async function askFromCorpus({ question, hits, plantType = '', coverageVe
   try {
     const res = await fetchImpl(`${cfg.base.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.key}` },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${cfg.key}`,
+        // Only the OpenCode gateway needs this; sending it elsewhere is harmless but pointless.
+        ...(cfg.session ? { 'x-opencode-session': cfg.session } : {})
+      },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(cfg.timeoutMs)
     });

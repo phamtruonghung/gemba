@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parent.parent
 PORT = int(os.environ.get("UI_PORT", "8098"))
 BASE = f"http://127.0.0.1:{PORT}"
-SHOTS = Path(os.environ.get("SHOT_DIR") or Path(tempfile.gettempdir()) / "xuong-ui-shots")
+SHOTS = Path(os.environ.get("SHOT_DIR") or Path(tempfile.gettempdir()) / "gemba-ui-shots")
 SHOTS.mkdir(parents=True, exist_ok=True)
 
 # A screenshot taken while an entrance animation is running captures the band at partial opacity:
@@ -33,13 +33,13 @@ def shot(page, name, full=True):
 def main():
     # A seeded file database, not ':memory:' — an empty corpus has no notes to open and no experts
     # to book, which is exactly the state a screenshot tool must not be fooled by.
-    db_path = str(Path(tempfile.gettempdir()) / "xuong-ui-shots.db")
+    db_path = str(Path(tempfile.gettempdir()) / "gemba-ui-shots.db")
     for suffix in ("", "-wal", "-shm"):
         Path(db_path + suffix).unlink(missing_ok=True)
-    subprocess.run(["node", "scripts/seed.mjs"], cwd=ROOT, env={**os.environ, "XUONG_DB": db_path}, stdout=subprocess.DEVNULL, check=True)
+    subprocess.run(["node", "scripts/seed.mjs"], cwd=ROOT, env={**os.environ, "GEMBA_DB": db_path}, stdout=subprocess.DEVNULL, check=True)
     proc = subprocess.Popen(
         ["node", "src/server.mjs"], cwd=ROOT,
-        env={**os.environ, "XUONG_PORT": str(PORT), "XUONG_DB": db_path},
+        env={**os.environ, "GEMBA_PORT": str(PORT), "GEMBA_DB": db_path},
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:

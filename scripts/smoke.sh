@@ -69,7 +69,7 @@ JAR=$(mktemp)
 curl -s -o /dev/null -c "$JAR" -w '   POST /signup → %{http_code}\n' -X POST "$BASE/signup" \
   --data-urlencode "name=Smoke Asker" --data-urlencode "email=$EMAIL" \
   --data-urlencode "password=a sentence of ten characters"
-grep -q "xuong_session" "$JAR" && echo "   session cookie set → yes" || echo "   session cookie set → NO"
+grep -q "gemba_session" "$JAR" && echo "   session cookie set → yes" || echo "   session cookie set → NO"
 curl -s -b "$JAR" "$BASE/account" | grep -oE "Signed in as Smoke Asker|$EMAIL" | sort -u | sed 's/^/     /'
 # The same cookie must mean nothing after signing out: revocation, not forgetting.
 curl -s -o /dev/null -b "$JAR" -c "$JAR" -X POST "$BASE/signout"

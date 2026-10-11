@@ -1,4 +1,4 @@
-# Xuong — a factory-production knowledge platform, Vietnam-first
+# Gemba — a factory-production knowledge platform, Vietnam-first
 
 A working prototype of a paid knowledge product for Vietnamese manufacturing: a person asks a
 production problem in plain language, gets an **answer built only from published practitioner
@@ -46,7 +46,7 @@ http://192.168.1.150:8090/library         # the published corpus, by topic
 http://192.168.1.150:8090/experts         # expert profiles and 1:1 booking
 http://192.168.1.150:8090/how-it-works    # how the rungs and the gate work
 http://192.168.1.150:8090/c/demo-hung-7f3a91   # demo expert workspace (answer queue, notes, interview)
-http://192.168.1.150:8090/qt/<token>  # operator console (token in /etc/xuong/xuong.env on the host)
+http://192.168.1.150:8090/qt/<token>  # operator console (token in /etc/gemba/gemba.env on the host)
 ```
 
 A question the corpus covers comes back with citations; one it does not (e.g. anything about
@@ -57,7 +57,7 @@ is produced by the model itself under the prompt contract, not by a regex on its
 
 ```bash
 node --version            # needs >= 22.5 for node:sqlite
-npm run seed              # creates data/xuong.db: expert profiles + the corpus, every note through the gate
+npm run seed              # creates data/gemba.db: expert profiles + the corpus, every note through the gate
 npm start                 # http://127.0.0.1:8090
 npm test                  # node --test test/*.test.mjs
 BASE=http://127.0.0.1:8090 scripts/smoke.sh    # walks the live instance end to end
@@ -71,18 +71,19 @@ the refusal marker are enforced by tests.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `XUONG_PORT` | `8090` | HTTP port |
-| `XUONG_HOST` | `0.0.0.0` | bind address |
-| `XUONG_USER` / `XUONG_PASS` | — | HTTP basic auth in front of everything except `/healthz`; **set this before publishing the instance to any hostname** |
-| `XUONG_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
-| `XUONG_DB` | `<data>/xuong.db` | database path |
-| `XUONG_HOST_PORT` | `8090` | host-side port in `docker-compose.yml`; the container always listens on 8090 internally |
-| `XUONG_ADMIN_TOKEN` | generated into `<data>/admin.token` | operator console token (`/qt/<token>`) |
-| `XUONG_LLM_KEY` | — | API key for the answer model; absent ⇒ labelled extractive mode |
-| `XUONG_LLM_BASE_URL` | OpenRouter | OpenAI-compatible chat-completions base URL |
-| `XUONG_LLM_MODEL` | `deepseek/deepseek-v4-flash-0731` | model id (the code's default, so the README and the code agree) |
-| `XUONG_LLM_TIMEOUT_MS` | `90000` | per-request timeout |
-| `XUONG_BANK_BIN` / `XUONG_BANK_ACCOUNT` | — | VietQR recipient; unset ⇒ the booking page shows the amount with no QR |
+| `GEMBA_PORT` | `8090` | HTTP port |
+| `GEMBA_HOST` | `0.0.0.0` | bind address |
+| `GEMBA_USER` / `GEMBA_PASS` | — | HTTP basic auth in front of everything except `/healthz`; **set this before publishing the instance to any hostname** |
+| `GEMBA_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
+| `GEMBA_DB` | `<data>/gemba.db` | database path |
+| `GEMBA_HOST_PORT` | `8090` | host-side port in `docker-compose.yml`; the container always listens on 8090 internally |
+| `GEMBA_ADMIN_TOKEN` | generated into `<data>/admin.token` | operator console token (`/qt/<token>`) |
+| `GEMBA_LLM_KEY` | — | API key for the answer model; absent ⇒ labelled extractive mode |
+| `GEMBA_LLM_BASE_URL` | OpenCode (`/zen/go/v1`) | OpenAI-compatible chat-completions base URL |
+| `GEMBA_LLM_MODEL` | `deepseek-v4.1-flash` | model id, derived from the gateway when unset (`deepseek/...` for OpenRouter) |
+| `GEMBA_LLM_SESSION` | minted at install | the OpenCode gateway routes by this header and answers `400 MissingSessionID` without it |
+| `GEMBA_LLM_TIMEOUT_MS` | `90000` | per-request timeout |
+| `GEMBA_BANK_BIN` / `GEMBA_BANK_ACCOUNT` | — | VietQR recipient; unset ⇒ the booking page shows the amount with no QR |
 
 Secrets belong in the environment or in the systemd `EnvironmentFile`, never in the repo.
 
@@ -128,13 +129,13 @@ What it does not do yet: no password reset, no email verification, no sign-in ra
 CSRF token (the forms are `POST`-only, the cookie is `SameSite=Lax`, so a cross-site form post
 cannot carry it — a token is still the honest fix if this is ever sold).
 
-The old `XUONG_USER`/`XUONG_PASS` gate is separate and still available: it is the *door*, kept for
+The old `GEMBA_USER`/`GEMBA_PASS` gate is separate and still available: it is the *door*, kept for
 protecting a public prototype, while accounts are the *identity* inside it. Tests and LAN runs leave
 both off, which is why an unauthenticated instance is still open by design.
 
 ## The interface
 
-The visual system is generated, not improvised: `design-system/xuong/MASTER.md` holds the palette,
+The visual system is generated, not improvised: `design-system/gemba/MASTER.md` holds the palette,
 type scale, spacing, radius and shadow tokens, and `src/views.mjs` carries them as CSS custom
 properties. **Orange is the theme** — it carries the brand mark, the primary action, the tint fills
 and the highlight on the dark bands — on warm paper (`#F7F4F1` / `#0B1A1D`). Graphite stays for
@@ -208,7 +209,7 @@ than the coverage number because of what they found:
   host kept serving the previous build — and the new front gate's page (`Cần đăng nhập`, `lang="vi"`)
   is how it was caught. The installer now restarts and checks the process start time.
 - **The app ignored the database it was configured to use.** `createApp` defaulted to a relative
-  `data/xuong.db`, and `seed.mjs` to the same string, so `XUONG_DB` worked and `XUONG_DATA_DIR` did
+  `data/gemba.db`, and `seed.mjs` to the same string, so `GEMBA_DB` worked and `GEMBA_DATA_DIR` did
   not: the service read one file while the installer seeded another. On a host where the working
   directory happened to match, nothing looked wrong — in the container it produced an instance with
   an **empty corpus and no error anywhere**. Both now resolve through `loadConfig().dbPath`, with a
@@ -222,12 +223,12 @@ than the coverage number because of what they found:
 ## Deployment
 
 Two ways to run it on a host: the systemd installer below for a bare machine, or the container
-(next section) when it has to move between machines. Both read the same `XUONG_*` variables, write
+(next section) when it has to move between machines. Both read the same `GEMBA_*` variables, write
 the same SQLite schema, and honour the same data path — the app opens the database it is configured
 with, never a file that happens to sit next to the source.
 
 `deploy/install.sh` is idempotent: it installs Node from the official tarball, copies the tree,
-writes `/etc/xuong/xuong.env` (mode 600), installs `deploy/xuong.service`, re-seeds the corpus, and
+writes `/etc/gemba/gemba.env` (mode 600), installs `deploy/gemba.service`, re-seeds the corpus, and
 **restarts** the service — then proves the restarted process is the one it just installed, because
 `systemctl enable --now` leaves an already-running unit on the old code (and the old database) while
 every check passes against it.
@@ -239,10 +240,10 @@ corpus is the deployment's content; the questions and notes are the operator's.
 
 ```bash
 bash deploy/install.sh                 # on the host
-XUONG_LLM_KEY_FILE=/root/or.key bash deploy/install.sh   # taking the key from a file instead of the env
+GEMBA_LLM_KEY_FILE=/root/llm.key bash deploy/install.sh  # key from a file, not from the environment
 ```
 
-It runs as a systemd service (`xuong.service`) on the demo host `192.168.1.150:8090`. Ports 80/443
+It runs as a systemd service (`gemba.service`) on the demo host `192.168.1.150:8090`. Ports 80/443
 there belong to another stack, so the app is published on 8090 — a reverse proxy is the deployment's
 job, not the app's.
 
@@ -252,33 +253,33 @@ The whole product is one Node process — no separate frontend service, no build
 service — so the image is the source tree plus a writable `/data`.
 
 ```bash
-cp .env.example .env       # fill in XUONG_USER/XUONG_PASS, and XUONG_LLM_KEY for real answers
+cp .env.example .env       # fill in GEMBA_USER/GEMBA_PASS, and GEMBA_LLM_KEY for real answers
 docker compose up -d       # builds the image and serves on :8090
-docker compose logs -f xuong
+docker compose logs -f gemba
 ```
 
 Or from the published image, no checkout needed:
 
 ```bash
-docker run -d --name xuong -p 8090:8090 --env-file .env \
-  -v xuong-data:/data ghcr.io/phamtruonghung/xuong:latest
+docker run -d --name gemba -p 8090:8090 --env-file .env \
+  -v gemba-data:/data ghcr.io/phamtruonghung/gemba:latest
 ```
 
 `deploy/docker-smoke.sh` does the whole thing and cleans up after itself: build, start, check the
 gate from outside (401 without credentials, 200 with them), ask a real question *through the
 container*, and print what landed in the volume. Use it after changing anything in `src/`.
 
-State is only the volume (`xuong-data`: the SQLite file plus the generated admin token), so carrying
+State is only the volume (`gemba-data`: the SQLite file plus the generated admin token), so carrying
 an instance to another machine is:
 
 ```bash
-docker save ghcr.io/phamtruonghung/xuong:latest | gzip | ssh other-host 'gunzip | docker load'
-docker run --rm -v xuong-data:/data -v "$PWD:/backup" alpine tar czf /backup/xuong-data.tgz -C /data .
+docker save ghcr.io/phamtruonghung/gemba:latest | gzip | ssh other-host 'gunzip | docker load'
+docker run --rm -v gemba-data:/data -v "$PWD:/backup" alpine tar czf /backup/gemba-data.tgz -C /data .
 ```
 
-The container always listens on 8090 internally and always writes `/data`; `XUONG_HOST_PORT` moves
+The container always listens on 8090 internally and always writes `/data`; `GEMBA_HOST_PORT` moves
 only the host-side port. The entrypoint seeds the corpus when the volume is empty and says loudly
-when `XUONG_PASS` is missing, so an ungated container announces itself in the log rather than
+when `GEMBA_PASS` is missing, so an ungated container announces itself in the log rather than
 quietly becoming an open model bill.
 
 ### Publishing it to a hostname
@@ -287,19 +288,19 @@ The ask form spends money: every question calls a model. An instance reachable f
 without a gate is therefore an open bill and an open spam target, so the app carries its own front
 gate rather than relying on the deployment to remember one:
 
-- set `XUONG_USER` and `XUONG_PASS` and every path — the pages, `/api/ask`, the expert desks, the
+- set `GEMBA_USER` and `GEMBA_PASS` and every path — the pages, `/api/ask`, the expert desks, the
   console — answers `401` with a basic-auth challenge until the browser authenticates;
 - `/healthz` stays open (it is the readiness probe) and deliberately does not print the database path;
 - with neither variable set the app is open, which is what local development wants.
 
 Tunnelling is the deployment's business, not the app's. On this host the tunnel is managed in the
 Cloudflare dashboard (a token-managed `cloudflared` runs on the Proxmox host), so a public hostname
-is one ingress entry there: `xuong.<your-domain>` → `http://192.168.1.150:8090`. Verification that
+is one ingress entry there: `gemba.<your-domain>` → `http://192.168.1.150:8090`. Verification that
 counts is a request from outside the LAN: `401` without credentials, `200` with them.
 
 For a URL today there is `deploy/quick-tunnel.sh`: it installs `cloudflared`, runs a quick tunnel to
 `127.0.0.1:8090`, and prints the `https://<name>.trycloudflare.com` URL. It refuses to start when no
-`XUONG_PASS` is configured, because that would publish an open ask form. The URL changes on every
+`GEMBA_PASS` is configured, because that would publish an open ask form. The URL changes on every
 restart and the tunnel dies with the host — a demonstration instrument, not an address anyone should
 bookmark.
 
@@ -318,10 +319,10 @@ anything.
 src/       db.mjs  auth.mjs  gate.mjs  retrieval.mjs  pricing.mjs  llm.mjs  interview.mjs  views.mjs  server.mjs
 scripts/   seed.mjs  import-notes.mjs  smoke.sh  ui-check.py  ui-shots.py  probe-*.mjs
            read-reference.py  measure-contrast.py  probe-block.py   # design evidence, not opinions
-design-system/xuong/MASTER.md   the generated visual system the interface is built from
+design-system/gemba/MASTER.md   the generated visual system the interface is built from
 seed/      experts.json  topic-map.json  corpus/  vault-raw/
 test/      unit.test.mjs  app.test.mjs  auth.test.mjs  accounts.test.mjs
-deploy/    install.sh  xuong.service  quick-tunnel.sh  entrypoint.sh  docker-smoke.sh
+deploy/    install.sh  gemba.service  quick-tunnel.sh  entrypoint.sh  docker-smoke.sh
 Dockerfile  docker-compose.yml  .env.example     the same app as a container, for another machine
 .github/workflows/ci.yml                          tests, then build-and-publish the image
 SPEC.md    the mechanism being copied, the constraints, the decisions, the open questions

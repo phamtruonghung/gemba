@@ -110,7 +110,7 @@ create index if not exists idx_questions_status on questions(status);
 create index if not exists idx_bookings_status on bookings(status);
 `;
 
-export function openDb(path = 'data/xuong.db') {
+export function openDb(path = 'data/gemba.db') {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec('pragma journal_mode = wal;');

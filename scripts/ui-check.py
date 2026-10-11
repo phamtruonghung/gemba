@@ -24,7 +24,7 @@ BASE = os.environ.get("UI_BASE") or f"http://127.0.0.1:{PORT}"
 EXTERNAL = bool(os.environ.get("UI_BASE"))
 # Default to the system temp dir: a hard-coded path from the author's machine is a check that
 # passes here and cannot pass anywhere else (CI caught exactly that).
-SHOTS = Path(os.environ.get("SHOT_DIR") or Path(tempfile.gettempdir()) / "xuong-ui-shots")
+SHOTS = Path(os.environ.get("SHOT_DIR") or Path(tempfile.gettempdir()) / "gemba-ui-shots")
 SHOTS.mkdir(parents=True, exist_ok=True)
 
 PAGES = [
@@ -115,14 +115,14 @@ def main():
         return 1 if failures else 0
     # Seeded, not ':memory:'. An empty corpus renders a different page — no notes, no experts,
     # zeros in the stats — and checking that page is checking a page nobody will ever see.
-    db_path = str(Path(tempfile.gettempdir()) / "xuong-ui-check.db")
+    db_path = str(Path(tempfile.gettempdir()) / "gemba-ui-check.db")
     for suffix in ("", "-wal", "-shm"):
         Path(db_path + suffix).unlink(missing_ok=True)
-    subprocess.run(["node", "scripts/seed.mjs"], cwd=ROOT, env={**os.environ, "XUONG_DB": db_path}, stdout=subprocess.DEVNULL, check=True)
+    subprocess.run(["node", "scripts/seed.mjs"], cwd=ROOT, env={**os.environ, "GEMBA_DB": db_path}, stdout=subprocess.DEVNULL, check=True)
     proc = subprocess.Popen(
         ["node", "src/server.mjs"],
         cwd=ROOT,
-        env={**os.environ, "XUONG_PORT": str(PORT), "XUONG_DB": db_path, "XUONG_LLM_KEY": ""},
+        env={**os.environ, "GEMBA_PORT": str(PORT), "GEMBA_DB": db_path, "GEMBA_LLM_KEY": ""},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

@@ -273,12 +273,12 @@ test('no raw state token reaches a page', async () => {
   }
 });
 
-// Regression: createApp() used to default to a relative 'data/xuong.db' and ignore config.dbPath.
+// Regression: createApp() used to default to a relative 'data/gemba.db' and ignore config.dbPath.
 // The service then read an empty corpus while the installer seeded, and the container volume
 // mounted, a different file — with no error anywhere. The configured path must be the one opened.
 test('the app opens the database the configuration names, not a file next to the source', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'xuong-configured-db-'));
-  const configured = join(dir, 'nested', 'xuong.db');
+  const dir = mkdtempSync(join(tmpdir(), 'gemba-configured-db-'));
+  const configured = join(dir, 'nested', 'gemba.db');
   const app = createApp({
     config: {
       port: 0,

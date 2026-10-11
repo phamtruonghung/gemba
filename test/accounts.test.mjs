@@ -131,7 +131,7 @@ test('accounts: sign up sets a session, and the account page is that person’s 
   assert.equal(res.status, 303);
   assert.equal(res.headers.get('location'), '/account');
   const cookie = cookieOf(res);
-  assert.match(cookie, /xuong_session=/);
+  assert.match(cookie, /gemba_session=/);
 
   const page = await fetch(`${base}/account`, { headers: { cookie } });
   const html = await page.text();
@@ -208,7 +208,7 @@ test('accounts: sign out revokes the session server-side, not just the cookie', 
 
   const out = await post('/signout', {}, cookie);
   assert.equal(out.status, 303);
-  assert.match(cookieOf(out), /xuong_session=;?$|xuong_session=$/, 'the cookie is cleared');
+  assert.match(cookieOf(out), /gemba_session=;?$|gemba_session=$/, 'the cookie is cleared');
 
   const after = await fetch(`${base}/account`, { headers: { cookie }, redirect: 'manual' });
   assert.equal(after.status, 303, 'the revoked cookie is worth nothing');
@@ -222,7 +222,7 @@ test('accounts: the account page is not reachable without a session', async () =
 });
 
 test('accounts: a forged session cookie is not a session', async () => {
-  const res = await fetch(`${base}/account`, { headers: { cookie: 'xuong_session=not-a-real-session-id' }, redirect: 'manual' });
+  const res = await fetch(`${base}/account`, { headers: { cookie: 'gemba_session=not-a-real-session-id' }, redirect: 'manual' });
   assert.equal(res.status, 303);
   assert.equal(res.headers.get('location'), '/signin?next=/account');
 });
