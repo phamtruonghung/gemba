@@ -91,6 +91,27 @@ chmod 600 "$ENV_DIR/xuong.env"
 say "4. seed the corpus (idempotent: upserts by slug)"
 set -a; . "$ENV_DIR/xuong.env"; set +a
 cd "$APP_DIR"
+
+# Migration for instances deployed before the app honoured its configured database path. Back then
+# the service read $APP_DIR/data/xuong.db (a relative default) while this script seeded
+# $DATA_DIR/xuong.db, so a live instance could sit on an empty corpus, or hold its questions in a
+# file that lives inside the code directory. If the old file is there and the configured one is
+# not, the old one is the one with the real state: move it rather than seed over the top of it.
+OLD_DB="$APP_DIR/data/xuong.db"
+CONFIGURED_DB="${XUONG_DB:-$DATA_DIR/xuong.db}"
+if [ "$OLD_DB" != "$CONFIGURED_DB" ] && [ -f "$OLD_DB" ] && [ ! -f "$CONFIGURED_DB" ]; then
+  echo "moving the old data file $OLD_DB -> $CONFIGURED_DB (it holds the live state)"
+  mv "$OLD_DB" "$CONFIGURED_DB"
+  # The WAL is part of the database — committed transactions live in it until a checkpoint. Move it
+  # into place next to the new file, and only then drop the shared-memory file, which is rebuilt.
+  [ -f "$OLD_DB-wal" ] && mv "$OLD_DB-wal" "$CONFIGURED_DB-wal" || true
+  rm -f "$OLD_DB-shm"
+fi
+if [ "$OLD_DB" != "$CONFIGURED_DB" ] && [ -f "$OLD_DB" ] && [ -f "$CONFIGURED_DB" ]; then
+  echo "note: both $OLD_DB and $CONFIGURED_DB exist — the service uses $CONFIGURED_DB."
+  echo "      Check the old one with: node scripts/probe-db.mjs $OLD_DB $CONFIGURED_DB"
+fi
+
 "$NODE_DIR/bin/node" scripts/seed.mjs
 
 say "5. systemd unit"

@@ -78,8 +78,14 @@ export function loadConfig(env = process.env) {
   };
 }
 
-export function createApp({ dbPath = 'data/xuong.db', config = loadConfig(), rules = loadRules() } = {}) {
-  const db = dbm.openDb(dbPath);
+export function createApp({ dbPath, config = loadConfig(), rules = loadRules() } = {}) {
+  // The configured path wins. XUONG_DB / XUONG_DATA_DIR are what the README, the systemd unit, the
+  // installer and the container volume all describe, so the running app has to open *that* file.
+  // (It used to default to a relative 'data/xuong.db', which silently ignored the configuration:
+  // the service kept reading a file next to the source while the installer seeded, and the
+  // container mounted, a different one — an empty corpus with no error anywhere.) Tests pass
+  // ':memory:' explicitly; createApp({ dbPath }) still overrides for them.
+  const db = dbm.openDb(dbPath ?? config.dbPath);
   let index = buildIndex(dbm.publishedNotes(db));
   const rebuildIndex = () => {
     index = buildIndex(dbm.publishedNotes(db));
