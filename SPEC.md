@@ -243,8 +243,10 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
 13. **The name is an identifier, not a label.** The product is Gemba, and that name reaches the repo,
     the image, the systemd unit, `/opt`, `/etc`, `/var/lib`, the environment prefix and the session
     cookie — `deploy/migrate-rename.sh` moves a live older installation, and `test/naming.test.mjs`
-    fails if the old name survives anywhere it is not load-bearing (it is load-bearing in exactly
-    two places: the migration script, and the folded Vietnamese stopword `'xuong'` in retrieval).
+    fails if the old name survives anywhere it is not load-bearing. It is load-bearing in exactly two
+    places, both of which the same test asserts rather than merely tolerates: the migration script
+    (which has to look for it) and the folded Vietnamese stopword for *workshop* in `src/retrieval.mjs`
+    (where renaming the token would silently change what retrieval ignores).
 14. **The answering tier is a gateway, and the gateway and the model id are one decision.** Default
     is the OpenCode gateway (`/zen/go/v1`, OpenAI-compatible): it routes by `x-opencode-session` and
     answers `400 MissingSessionID` without it, so the app sends a per-installation id or it silently
