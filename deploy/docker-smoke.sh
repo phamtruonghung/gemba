@@ -71,6 +71,22 @@ curl -s -m 120 "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/api/ask" \
   -d '{"question":"the machine stops mid-shift — what should I check, and in what order?"}' \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("   coverage:", d["coverage"], "| mode:", d["mode"], "| cited:", [c["title"] for c in d["citations"]])'
 
+echo "-> an account, through the container"
+# The container must carry the accounts too, and the session must be revocable there: sign up, read
+# the identity back off /account, sign out, then prove the same cookie is dead.
+JAR="$(mktemp)"
+EMAIL="container-$(date +%s)@example.com"
+curl -s -o /dev/null -c "$JAR" "${AUTH[@]}" -w '   POST /signup → %{http_code}\n' \
+  -X POST "http://127.0.0.1:$PORT/signup" \
+  --data-urlencode "name=Container Asker" --data-urlencode "email=$EMAIL" \
+  --data-urlencode "password=a sentence of ten characters"
+grep -q xuong_session "$JAR" && echo "   session cookie → set" || echo "   session cookie → MISSING"
+curl -s -b "$JAR" "${AUTH[@]}" "http://127.0.0.1:$PORT/account" | grep -oE "Signed in as Container Asker" | head -1 | sed 's/^/   /'
+curl -s -o /dev/null -b "$JAR" -c "$JAR" "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/signout"
+code_after="$(curl -s -o /dev/null -b "$JAR" "${AUTH[@]}" -w '%{http_code}' "http://127.0.0.1:$PORT/account")"
+echo "   GET /account after sign-out → $code_after (303 = the session was revoked)"
+rm -f "$JAR"
+
 echo "-> what the container wrote to its volume"
 docker run --rm -v "$VOL:/data" alpine ls -l /data
 
