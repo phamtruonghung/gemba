@@ -116,6 +116,16 @@ cd "$APP_DIR"
 # file that lives inside the code directory. If the old file is there and the configured one is
 # not, the old one is the one with the real state: move it rather than seed over the top of it.
 OLD_DB="$APP_DIR/data/gemba.db"
+# The installer owns one data directory. If the config points somewhere else — which is exactly what a
+# half-done rename leaves behind — stop, loudly: continuing means seeding a second database beside the
+# real one and reporting success while the instance serves the wrong file.
+CONFIGURED_DATA_DIR="$(sed -n 's/^GEMBA_DATA_DIR=//p' "$ENV_DIR/gemba.env" | head -1)"
+if [ -n "$CONFIGURED_DATA_DIR" ] && [ "$CONFIGURED_DATA_DIR" != "$DATA_DIR" ]; then
+  echo "refusing to continue: the config's GEMBA_DATA_DIR is $CONFIGURED_DATA_DIR, but this installer owns $DATA_DIR" >&2
+  echo "  fix it (or move the database) before installing; see deploy/migrate-rename.sh" >&2
+  exit 1
+fi
+
 CONFIGURED_DB="${GEMBA_DB:-$DATA_DIR/gemba.db}"
 if [ "$OLD_DB" != "$CONFIGURED_DB" ] && [ -f "$OLD_DB" ] && [ ! -f "$CONFIGURED_DB" ]; then
   echo "moving the old data file $OLD_DB -> $CONFIGURED_DB (it holds the live state)"
@@ -192,15 +202,9 @@ if [ -n "$PROBE_REF" ]; then
 fi
 
 say "7. legacy directories"
-# The rename migration moved the database, the config and the unit, but an old code directory is a
-# second copy of the app answering to a name nobody uses — and the naming test cannot see a host. It is
-# removed only here, after the health probe above has passed, so a working instance always precedes it.
-for legacy in /opt/xuong /etc/xuong; do
-  if [ -e "$legacy" ]; then
-    rm -rf "$legacy"
-    echo "removed $legacy"
-  fi
-done
+# The migration script owns every reference to the old paths; this asks it to do the cleanup now that
+# the instance above has been verified healthy. Nothing is removed before that probe passes.
+bash "$SRC_DIR/deploy/migrate-rename.sh" --cleanup
 
 TOKEN="$(sed -n 's/^GEMBA_ADMIN_TOKEN=//p' "$ENV_DIR/gemba.env")"
 if [ -z "$TOKEN" ]; then TOKEN="$(cat "$DATA_DIR/admin.token" 2>/dev/null || true)"; fi
