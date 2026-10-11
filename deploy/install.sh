@@ -39,6 +39,11 @@ fi
 
 say "2. application code -> $APP_DIR"
 mkdir -p "$APP_DIR"
+# Unpacking over the previous tree leaves files that the source no longer has: after the corpus was
+# renamed, /opt/xuong/seed/corpus held both the old Vietnamese notes and the new English ones, and the
+# seed read all of them. Clear everything except data/ first (the legacy database lives there, and
+# step 4 migrates it), so the installed tree is exactly the source tree.
+find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name data -exec rm -rf {} +
 # The database never lives inside the checkout: a redeploy would otherwise drop live state.
 tar czf - -C "$SRC_DIR" --exclude=data --exclude=.git --exclude='*.db*' . | tar xzf - -C "$APP_DIR"
 echo "files: $(find "$APP_DIR" -type f | wc -l), version $(python3 -c "import json;print(json.load(open('$APP_DIR/package.json'))['version'])")"
@@ -56,7 +61,7 @@ if [ -f "$ENV_DIR/xuong.env" ]; then
   echo "keeping the existing env file (edit $ENV_DIR/xuong.env to change keys)"
 else
   cat > "$ENV_DIR/xuong.env" <<EOF
-# Xưởng runtime configuration. Mode 600 — holds the LLM key and the operator token.
+# Xuong runtime configuration. Mode 600 — holds the LLM key and the operator token.
 XUONG_PORT=$PORT
 XUONG_HOST=0.0.0.0
 XUONG_USER=${XUONG_USER:-}
@@ -117,9 +122,23 @@ fi
 say "5. systemd unit"
 install -m 644 "$APP_DIR/deploy/xuong.service" /etc/systemd/system/xuong.service
 systemctl daemon-reload
-systemctl enable --now xuong.service
+systemctl enable xuong.service
+STARTED_AT=$(date +%s)
+# `enable --now` does not restart a unit that is already running, so an update left the old process
+# serving the old code and old database while the checks below — and the operator — saw a healthy
+# instance. Restart explicitly, then prove the running process is the one just installed.
+systemctl restart xuong.service
 sleep 2
 systemctl --no-pager --lines=8 status xuong.service || true
+ACTIVE_SINCE=$(systemctl show xuong.service -p ActiveEnterTimestamp --value)
+ACTIVE_EPOCH=$(date -d "$ACTIVE_SINCE" +%s 2>/dev/null || echo 0)
+if [ "$ACTIVE_EPOCH" -lt "$STARTED_AT" ]; then
+  echo "ERROR: the service did not restart — it is still the process started at $ACTIVE_SINCE."
+  echo "       Everything below would be testing the previous build."
+  exit 1
+fi
+echo "restarted at $ACTIVE_SINCE (pid $(systemctl show xuong.service -p MainPID --value))"
+journalctl -u xuong.service --no-pager -n 6 -o cat | sed 's/^/  /' || true
 
 say "6. verify over HTTP"
 for i in 1 2 3 4 5; do
@@ -136,7 +155,7 @@ echo "live ask:"
 AUTH=()
 if [ -n "${XUONG_USER:-}" ] && [ -n "${XUONG_PASS:-}" ]; then AUTH=(-u "$XUONG_USER:$XUONG_PASS"); fi
 curl -fsS "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/api/ask" -H 'content-type: application/json' \
-  -d '{"question":"máy dừng giữa ca thì kiểm tra theo thứ tự nào?"}' \
+  -d '{"question":"the machine stops mid-shift — what should I check, and in what order?"}' \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("  coverage:", d["coverage"], "| mode:", d["mode"], "| cited:", [c["title"] for c in d["citations"]])'
 
 TOKEN="$(sed -n 's/^XUONG_ADMIN_TOKEN=//p' "$ENV_DIR/xuong.env")"

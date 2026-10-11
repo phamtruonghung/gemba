@@ -182,6 +182,24 @@ export function upsertNote(db, n) {
   return Number(info.lastInsertRowid);
 }
 
+/**
+ * Retire seed notes the deployment no longer ships. The seed corpus is the deployment's content, so
+ * a note whose slug has left the seed set should leave the corpus too — otherwise a re-seed after a
+ * rename leaves both the old and the new note published, and the app answers from a ghost.
+ * Notes written by a person ('expert', 'interview') are never touched: they are the operator's data,
+ * not the deployment's.
+ */
+export function pruneSeedNotes(db, keepSlugs) {
+  const keep = new Set(keepSlugs);
+  const retired = db
+    .prepare(`select id, slug, origin from notes where origin in ('demo', 'vault', 'seed')`)
+    .all()
+    .filter((n) => !keep.has(n.slug));
+  const del = db.prepare('delete from notes where id = ?');
+  for (const n of retired) del.run(n.id);
+  return retired;
+}
+
 export function publishedNotes(db) {
   return db.prepare(`select * from notes where status = 'published' order by id`).all();
 }

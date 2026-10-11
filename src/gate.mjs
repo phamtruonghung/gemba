@@ -13,8 +13,8 @@
 //   note    — advisory, never blocks (style, length, house shape)
 
 export const ATTESTATION_TEXT =
-  'Tôi xác nhận nội dung này là kiến thức nghề của tôi: không có số liệu, tên khách hàng/nhà cung cấp, ' +
-  'bản vẽ, mã hàng, giá hay điều khoản hợp đồng của bất kỳ nhà máy nào.';
+  'I confirm this is my own craft knowledge: it holds no figures, no customer or supplier names, ' +
+  'no drawings, no part codes, no prices and no contract terms belonging to any plant.';
 
 export const DEFAULT_RULES = {
   // Names that must never reach the corpus. Extend per deployment in data/gate.rules.json.
@@ -34,7 +34,13 @@ export const DEFAULT_RULES = {
     '(đơn\\s+giá|giá\\s+nhập|giá\\s+bán|chiết\\s+khấu)',
     'hợp\\s+đồng\\s+(số|ngày)',
     '(bản\\s+vẽ|drawing)\\s+[A-Z0-9-]{4,}',
-    '(tài\\s+liệu\\s+nội\\s+bộ|mật|confidential|internal\\s+use)'
+    '(tài\\s+liệu\\s+nội\\s+bộ|mật|confidential|internal\\s+use)',
+    // English forms of the same things. The corpus may hold either language — the notes are
+    // published in English now, but a Vietnamese note with an employer's part number is still
+    // someone else's information and still has to be blocked.
+    '(unit\\s+price|price\\s+per\\s+(unit|piece)|invoice\\s+(no|number))',
+    '(supplier|customer|vendor)\\s+(code|no|number)',
+    '(Mr|Mrs|Ms|Dr)\\.?\\s+\\p{Lu}\\p{Ll}+'
   ],
   // No \b anywhere in these: \b is defined on ASCII \w, so a boundary next to a Vietnamese
   // letter never matches. checkNote() wraps each pattern in unicode letter/number lookarounds.
@@ -44,7 +50,9 @@ export const DEFAULT_RULES = {
     '\\d[\\d.,]*\\s?(ppm|pcs|cái|chiếc|bộ|kg|tấn|tấn/giờ|m2|mét)',
     '\\d[\\d.,]*\\s?(phút|giờ|giây)\\s*(dừng|ngừng|chạy|máy)',
     'OEE[^\\n]{0,20}\\d',
-    '\\d[\\d.,]*\\s*(lần|suất)\\s*/\\s*(tuần|tháng|ngày)'
+    '\\d[\\d.,]*\\s*(lần|suất)\\s*/\\s*(tuần|tháng|ngày)',
+    '\\d[\\d.,]*\\s?(pcs|units|pairs|sets|kg|tons?|metres?|meters?|percent)',
+    '\\d[\\d.,]*\\s?(minutes?|hours?|seconds?)\\s*(down|stopped|idle|running|changeover)'
   ],
   min_chars: 300,
   max_chars: 12000
@@ -154,14 +162,14 @@ export function checkNote(note, rules = DEFAULT_RULES) {
       rule: 'too_short',
       severity: 'note',
       match: `${body.trim().length} chars`,
-      hint: `Nội dung dưới ${rules.min_chars} ký tự — người đọc khó dùng được.`
+      hint: `Body under ${rules.min_chars} characters — a reader cannot use it.`
     });
   }
   if (body.length > rules.max_chars) {
-    findings.push({ rule: 'too_long', severity: 'note', match: `${body.length} chars`, hint: `Trên ${rules.max_chars} ký tự — nên tách thành hai ghi chú.` });
+    findings.push({ rule: 'too_long', severity: 'note', match: `${body.length} chars`, hint: `Over ${rules.max_chars} characters — split it into two notes.` });
   }
   if (!/^#|\n##\s/.test(body) && !/^-\s/m.test(body)) {
-    findings.push({ rule: 'no_shape', severity: 'note', match: '', hint: 'Chưa có tiêu đề phụ hay gạch đầu dòng — nên có ít nhất hai mục.' });
+    findings.push({ rule: 'no_shape', severity: 'note', match: '', hint: 'No subheadings and no bullets — two sections is the minimum for a usable note.' });
   }
 
   const blocking = findings.filter((f) => f.severity === 'block');

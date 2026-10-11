@@ -2,62 +2,62 @@
 //
 // Copied deliberately from the market: the hardest part of a practitioner platform is not the
 // answer, it is getting a busy practitioner to write anything at all (Tacivo's answer is an
-// AI-moderated interview; Delphi's is "hand us your existing talks"). Xưởng does the interview,
+// AI-moderated interview; Delphi's is "hand us your existing talks"). Xuong does the interview,
 // but the script itself enforces the boundary the gate will check afterwards: the questions ask
 // for craft, never for the plant's numbers.
 
 export const SCRIPT = [
   {
     id: 'scope',
-    ask: 'Anh/chị làm nghề này bao lâu, phụ trách khu vực nào (ví dụ: lắp ráp, ép nhựa, bảo trì, kho)?',
-    hint: 'Chỉ cần phạm vi công việc, không cần tên nhà máy hay tên khách hàng.'
+    ask: 'How long have you done this work, and which area are you responsible for (assembly, moulding, maintenance, stores)?',
+    hint: 'The scope of the work is enough — no plant name, no customer name.'
   },
   {
     id: 'problem',
-    ask: 'Vấn đề nào trên chuyền anh/chị phải xử lý nhiều lần nhất trong một tháng?',
-    hint: 'Mô tả hiện tượng, đừng nêu số liệu của nhà máy — chỉ nói nó hay xảy ra thế nào.'
+    ask: 'Which problem on the line do you have to deal with most often in a month?',
+    hint: 'Describe what happens — not your plant’s figures, just how it tends to go wrong.'
   },
   {
     id: 'symptom',
-    ask: 'Dấu hiệu đầu tiên để nhận ra vấn đề đó là gì, và ai thường phát hiện ra trước?',
-    hint: 'Nghe, thấy, ngửi, đo — cái gì đổi trước tiên?'
+    ask: 'What is the first sign of that problem, and who usually notices it first?',
+    hint: 'Heard, seen, smelled, measured — what changes first?'
   },
   {
     id: 'cause',
-    ask: 'Nguyên nhân gốc thường gặp nhất mà anh/chị đã kiểm chứng bằng cách nào?',
-    hint: 'Kể cách kiểm chứng, không cần kể kết quả bằng số.'
+    ask: 'What is the most common root cause, and how did you verify it?',
+    hint: 'Describe the check, not the result as a number.'
   },
   {
     id: 'countermeasure',
-    ask: 'Cách xử lý anh/chị dùng lại nhiều lần, làm theo thứ tự nào?',
-    hint: 'Từng bước, đủ để người khác làm theo.'
+    ask: 'What fix do you use again and again, and in what order do you do it?',
+    hint: 'Step by step, specific enough for someone else to follow.'
   },
   {
     id: 'mistake',
-    ask: 'Cách làm mà anh/chị thấy nhiều người mới làm sai ở chỗ đó là gì?',
-    hint: 'Đây thường là phần giá trị nhất của ghi chú.'
+    ask: 'Where do newcomers usually get this wrong?',
+    hint: 'This is usually the most valuable part of the note.'
   },
   {
     id: 'standard',
-    ask: 'Nếu phải viết một dòng tiêu chuẩn để không tái diễn, anh/chị viết gì?',
-    hint: 'Một dòng, ai đọc cũng làm được.'
+    ask: 'If you had one line of standard to stop it happening again, what would it say?',
+    hint: 'One line that anyone can follow.'
   },
   {
     id: 'transfer',
-    ask: 'Cách này còn dùng được ở nhà máy khác, ngành khác không? Giới hạn của nó là gì?',
-    hint: 'Nói rõ khi nào thì KHÔNG nên áp dụng.'
+    ask: 'Does this work in another plant, another industry? Where does it stop applying?',
+    hint: 'Be explicit about when NOT to use it.'
   }
 ];
 
 const HEAD = {
-  scope: 'Phạm vi và kinh nghiệm',
-  problem: 'Vấn đề hay gặp',
-  symptom: 'Dấu hiệu nhận biết',
-  cause: 'Nguyên nhân gốc và cách kiểm chứng',
-  countermeasure: 'Cách xử lý theo thứ tự',
-  mistake: 'Lỗi người mới hay mắc',
-  standard: 'Tiêu chuẩn một dòng',
-  transfer: 'Dùng được ở đâu, giới hạn ở đâu'
+  scope: 'Scope and experience',
+  problem: 'The recurring problem',
+  symptom: 'The first signs',
+  cause: 'Root cause and how to verify it',
+  countermeasure: 'The fix, in order',
+  mistake: 'The newcomer’s mistake',
+  standard: 'One line of standard',
+  transfer: 'Where it applies, where it stops'
 };
 
 export function questionAt(step) {
@@ -87,5 +87,5 @@ export function slugify(s) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 60) || 'ghi-chu';
+    .slice(0, 60) || 'note';
 }

@@ -41,28 +41,28 @@ before(async () => {
   });
   const expertId = upsertExpert(app.db, {
     slug: 'hung-qa',
-    name: 'Anh Hùng',
-    headline: 'Giám sát sản xuất (hồ sơ mẫu)',
-    topics: ['tpm', 'quan-ly-chuyen', 'cai-tien', 'an-toan'],
+    name: 'Hung',
+    headline: 'Production supervisor (sample profile)',
+    topics: ['tpm', 'shift-management', 'improvement', 'safety'],
     years: 20,
     rate_vnd: 800000,
     token: EXPERT_TOKEN
   });
   const lanId = upsertExpert(app.db, {
     slug: 'lan-lap-rap',
-    name: 'Chị Lan',
-    headline: 'Trưởng ca lắp ráp (hồ sơ mẫu)',
-    topics: ['chat-luong', 'an-toan'],
+    name: 'Lan',
+    headline: 'Assembly shift leader (sample profile)',
+    topics: ['quality', 'safety'],
     years: 12,
     rate_vnd: 600000,
     token: 'tok-lan-test'
   });
   let n = 0;
-  for (const file of ['demo-dung-may-giua-ca.md', 'demo-andon-bat-thuong.md', 'demo-5s-hien-truong.md', 'demo-tieu-chuan-mot-diem.md']) {
+  for (const file of ['demo-machine-stops-mid-shift.md', 'demo-andon-surface-the-abnormal.md', 'demo-5s-on-the-floor.md', 'demo-one-point-standard.md']) {
     const note = noteFromCorpus(file);
     n += 1;
     upsertNote(app.db, {
-      expert_id: note.topic === 'chat-luong' ? lanId : expertId,
+      expert_id: note.topic === 'quality' ? lanId : expertId,
       slug: `seed-${n}-${note.slug}`,
       title: note.title,
       topic: note.topic,
@@ -110,11 +110,11 @@ test('healthz reports the corpus size and the AI tier honestly', async () => {
 });
 
 test('ask: an on-corpus question is answered with citations to real notes', async () => {
-  const { res, body } = await ask('may dung giua ca thi kiem tra theo thu tu nao');
+  const { res, body } = await ask('the machine stops mid-shift, what do I check and in what order');
   assert.equal(res.status, 200);
   assert.equal(body.coverage, 'ok');
   assert.ok(body.citations.length >= 1);
-  assert.equal(body.hits[0].slug, 'seed-1-demo-dung-may-giua-ca');
+  assert.equal(body.hits[0].slug, 'seed-1-demo-machine-stops-mid-shift');
   const note = await fetch(`${base}/api/question/${body.ref}`);
   const stored = await note.json();
   assert.equal(stored.ai_coverage, 'ok');
@@ -122,16 +122,16 @@ test('ask: an on-corpus question is answered with citations to real notes', asyn
 });
 
 test('ask: an off-corpus question says so instead of guessing', async () => {
-  const { body } = await ask('thủ tục tuyển dụng nhân viên văn phòng và chính sách lương thưởng');
+  const { body } = await ask('office recruitment procedure and the salary policy');
   assert.equal(body.coverage, 'thin');
-  assert.match(body.answer, /THIEU_DU_LIEU/);
+  assert.match(body.answer, /INSUFFICIENT_DATA/);
 });
 
 test('the full ladder: ask → escalate → a practitioner answers', async () => {
-  const { body: asked } = await ask('quy định về hợp đồng lao động thời vụ ngoài nhà máy', { asker: 'Khách thử', contact: 'thu@example.com' });
+  const { body: asked } = await ask('rules for seasonal labour contracts outside the plant', { asker: 'Test client', contact: 'thu@example.com' });
   assert.equal(asked.coverage, 'thin');
 
-  const esc = await post(`/q/${asked.ref}/hoi-chuyen-gia`, { asker: 'Khách thử', contact: 'thu@example.com' });
+  const esc = await post(`/q/${asked.ref}/ask-expert`, { asker: 'Test client', contact: 'thu@example.com' });
   assert.equal(esc.status, 303);
   const routed = await (await fetch(`${base}/api/question/${asked.ref}`)).json();
   assert.equal(routed.status, 'routed');
@@ -142,106 +142,106 @@ test('the full ladder: ask → escalate → a practitioner answers', async () =>
   assert.equal(workspace.status, 200);
   assert.match(html, new RegExp(asked.ref), 'the question reaches the expert workspace');
 
-  const answered = await post(`/c/${EXPERT_TOKEN}/tra-loi`, { ref: asked.ref, body: 'Hợp đồng thời vụ theo luật lao động hiện hành: nêu rõ thời hạn và phụ lục.' });
+  const answered = await post(`/c/${EXPERT_TOKEN}/answer`, { ref: asked.ref, body: 'A seasonal contract has to state its term and any annex; check the termination clause before signing.' });
   assert.equal(answered.status, 303);
   const after = await (await fetch(`${base}/api/question/${asked.ref}`)).json();
   assert.equal(after.status, 'answered');
   assert.equal(after.answers.length, 1);
-  assert.match(after.answers[0].body, /luật lao động/);
+  assert.match(after.answers[0].body, /termination clause/);
 
   const page = await (await fetch(`${base}/q/${asked.ref}`)).text();
-  assert.match(page, /Trả lời từ Anh Hùng/);
+  assert.match(page, /Answer from Hung/);
 });
 
 test('gate at the door: a note with an order number is refused, a clean note publishes', async () => {
-  const leaky = await post(`/c/${EXPERT_TOKEN}/ghi-chu`, {
-    title: 'Kinh nghiệm xử lý lô hàng',
-    topic: 'chat-luong',
+  const leaky = await post(`/c/${EXPERT_TOKEN}/note`, {
+    title: 'Handling a bad batch',
+    topic: 'quality',
     attested: '1',
-    body: `# Kinh nghiệm\n\n## Bối cảnh\nLô theo PO 45123 bị lỗi và đơn giá nhập cao hơn kế hoạch nên phải xử lý trong ca.\n\n## Cách làm\nKiểm tra theo thứ tự và ghi lại hiện tượng trước khi sửa bất cứ thứ gì.`
+    body: `# Handling a bad batch\n\n## Context\nThe batch on PO 45123 was wrong and the unit price came in above plan, so it had to be handled inside the shift.\n\n## What to do\nCheck in order and write the symptom down before changing anything.`
   });
   assert.equal(leaky.status, 422);
   assert.match(await leaky.text(), /document/);
 
-  const clean = await post(`/c/${EXPERT_TOKEN}/ghi-chu`, {
-    title: 'Kiểm tra cảm biến trạm cuối theo thứ tự',
+  const clean = await post(`/c/${EXPERT_TOKEN}/note`, {
+    title: 'Checking the last-station sensor, in order',
     topic: 'tpm',
-    body: `# Kiểm tra cảm biến trạm cuối theo thứ tự\n\n## Thứ tự\nĐầu tiên xem đèn báo trên trạm, sau đó kiểm tra vật tư có đúng quy cách không, cuối cùng mới đo cảm biến.\n\n## Vì sao theo thứ tự này\nSai vật tư bị nhầm thành lỗi cảm biến nhiều hơn lỗi cảm biến thật, nên kiểm tra vật tư trước sẽ tiết kiệm thời gian dừng máy.\n\n## Ghi lại\nGhi hiện tượng vào sổ tay của ca trực để người sau đọc được, không ghi số liệu sản lượng của nhà máy.`
+    body: `# Checking the last-station sensor, in order\n\n## The order\nFirst look at the indicator light on the station, then check that the material matches the specification, and only then measure the sensor.\n\n## Why this order\nMaterial out of specification is mistaken for a sensor fault far more often than a real sensor fault, so checking the material first saves stop time.\n\n## Write it down\nRecord the symptom in the shift notebook so the next crew can read it. Do not record the plant's output figures.`
   });
   assert.equal(clean.status, 303);
-  const published = await (await fetch(`${base}/kho`)).text();
-  assert.match(published, /Kiểm tra cảm biến trạm cuối theo thứ tự/);
+  const published = await (await fetch(`${base}/library`)).text();
+  assert.match(published, /Checking the last-station sensor, in order/);
 });
 
 test('the AI-moderated interview turns eight answers into a published note', async () => {
-  const start = await fetch(`${base}/c/${EXPERT_TOKEN}/phong-van`);
+  const start = await fetch(`${base}/c/${EXPERT_TOKEN}/interview`);
   const html = await start.text();
   assert.equal(start.status, 200);
-  assert.match(html, /Câu 1\/8/);
+  assert.match(html, /Question 1\/8/);
 
   const idMatch = /name="id" value="(\d+)"/.exec(html);
   assert.ok(idMatch, 'the interview session id is in the form');
   const id = idMatch[1];
 
   const answers = [
-    'Tôi làm nghề này hai mươi năm, phụ trách khu vực lắp ráp và bảo trì cơ bản.',
-    'Vấn đề lặp lại nhiều nhất là vật tư sai quy cách ở trạm cuối làm dừng chuyền.',
-    'Dấu hiệu đầu tiên là đèn báo trạm cuối nhấp nháy và người kiểm hàng cuối cùng phát hiện ra.',
-    'Nguyên nhân gốc thường là nhập sai lô vật tư; kiểm chứng bằng cách đối chiếu bao bì với phiếu giao.',
-    'Cách xử lý: dừng trạm, cách ly vật tư nghi ngờ, báo tổ trưởng, ghi lại hiện tượng rồi mới chạy lại.',
-    'Người mới hay đổi cảm biến trước khi kiểm vật tư, nên mất thời gian mà lỗi vẫn còn.',
-    'Tiêu chuẩn là kiểm vật tư trước cảm biến, ai cũng làm theo đúng thứ tự đó.',
-    'Cách này dùng được cho chuyền lắp ráp nhiều trạm, không dùng khi vật tư do khách cấp và không được mở bao bì.'
+    'I have done this work for twenty years, covering assembly and basic maintenance.',
+    'The most repeated problem is material off specification at the last station stopping the line.',
+    'The first sign is the indicator light at the last station blinking, and the final checker notices it.',
+    'The root cause is usually a mis-picked material batch; verify it by comparing the packaging against the delivery note.',
+    'The fix: stop the station, quarantine the suspect material, tell the team leader, write the symptom down, then restart.',
+    'A newcomer replaces the sensor before checking the material, which wastes time and leaves the fault in place.',
+    'The standard is to check the material before the sensor, and everyone follows that order.',
+    'This works on a multi-station assembly line. It does not work when the customer supplies the material and the packaging may not be opened.'
   ];
   let last;
   for (let i = 0; i < answers.length; i += 1) {
-    last = await post(`/c/${EXPERT_TOKEN}/phong-van`, { id, answer: answers[i] });
+    last = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer: answers[i] });
     if (i < answers.length - 1) assert.equal(last.status, 303);
   }
   const done = await last.text();
   assert.equal(last.status, 200);
-  assert.match(done, /Đã tạo ghi chú/);
+  assert.match(done, /Note created/);
 
-  const corpus = await (await fetch(`${base}/kho`)).text();
-  assert.match(corpus, /Kinh nghiệm: Vấn đề lặp lại nhiều nhất/, 'the interview note is in the corpus, titled after the problem');
+  const corpus = await (await fetch(`${base}/library`)).text();
+  assert.match(corpus, /Field notes: The most repeated problem/, 'the interview note is in the corpus, titled after the problem');
 });
 
 test('money: a booking is priced in VND, split, and never marked paid by the system', async () => {
-  const res = await post('/dat-lich', {
+  const res = await post('/book', {
     expert: 'hung-qa',
     minutes: '60',
     starts_at: '2026-10-20 20:00',
-    asker: 'Khách thử',
+    asker: 'Test client',
     contact: 'thu@example.com',
     topic: 'tpm',
-    agenda: 'Chuyền hay dừng ở trạm cuối, cần lộ trình kiểm tra.'
+    agenda: 'The line keeps stopping at the last station; I need an order to check things in.'
   });
   assert.equal(res.status, 303);
   const location = res.headers.get('location');
   const ref = location.split('/').pop();
 
   const page = await (await fetch(`${base}${location}`)).text();
-  assert.match(page, /800\.000đ/, 'one hour at the expert rate');
-  assert.match(page, /640\.000đ/, 'expert payout after the 20% platform fee');
+  assert.match(page, /800,000 VND/, 'one hour at the expert rate');
+  assert.match(page, /640,000 VND/, 'expert payout after the 20% platform fee');
   assert.match(page, /img\.vietqr\.io/);
   assert.match(page, /B-/, 'the transfer code is the booking ref');
-  assert.match(page, /chờ hướng dẫn chuyển khoản/, 'status shown in Vietnamese');
+  assert.match(page, /waiting for transfer instructions/, 'status shown as an English label, never the raw token');
 
-  const claim = await post(`/b/${ref}/da-chuyen`);
+  const claim = await post(`/b/${ref}/transferred`);
   assert.equal(claim.status, 303);
   const claimed = await (await fetch(`${base}/b/${ref}`)).text();
-  assert.match(claimed, /khách báo đã chuyển khoản/);
+  assert.match(claimed, /you reported the transfer/);
 
   // The platform operator confirms against the bank statement; the system alone never does.
   const adminBefore = await (await fetch(`${base}/qt/${ADMIN}`)).text();
   assert.match(adminBefore, new RegExp(ref));
-  const confirm = await post(`/qt/${ADMIN}/xac-nhan`, { ref });
+  const confirm = await post(`/qt/${ADMIN}/confirm`, { ref });
   assert.equal(confirm.status, 303);
-  assert.match(await (await fetch(`${base}/b/${ref}`)).text(), /đã nhận tiền/);
+  assert.match(await (await fetch(`${base}/b/${ref}`)).text(), /payment received/);
 
-  const done = await post(`/qt/${ADMIN}/hoan-tat`, { ref });
+  const done = await post(`/qt/${ADMIN}/complete`, { ref });
   assert.equal(done.status, 303);
-  assert.match(await (await fetch(`${base}/b/${ref}`)).text(), /đã xong buổi/);
+  assert.match(await (await fetch(`${base}/b/${ref}`)).text(), /session completed/);
 });
 
 test('the admin surface is not reachable without the token', async () => {
@@ -256,19 +256,19 @@ test('the expert workspace is not reachable without the token', async () => {
 
 test('the home page states the ladder and the demo status plainly', async () => {
   const html = await (await fetch(`${base}/`)).text();
-  assert.match(html, /Trả lời từ kho ghi chú|Hỏi kho kiến thức/);
-  assert.match(html, /Bản thử nghiệm/);
-  const how = await (await fetch(`${base}/cach-lam`)).text();
-  assert.match(how, /Cổng kiểm duyệt/);
-  assert.match(how, /THIEU_DU_LIEU/);
+  assert.match(html, /Answer from the note library|Ask the knowledge library/);
+  assert.match(html, /Prototype/);
+  const how = await (await fetch(`${base}/how-it-works`)).text();
+  assert.match(how, /The gate/);
+  assert.match(how, /INSUFFICIENT_DATA/);
 });
 
-test('no English state word reaches a Vietnamese page', async () => {
-  const pages = await Promise.all(['/', '/kho', '/chuyen-gia', `/c/${EXPERT_TOKEN}`, `/qt/${ADMIN}`].map((p) => fetch(`${base}${p}`).then((r) => r.text())));
+test('no raw state token reaches a page', async () => {
+  const pages = await Promise.all(['/', '/library', '/experts', `/c/${EXPERT_TOKEN}`, `/qt/${ADMIN}`].map((p) => fetch(`${base}${p}`).then((r) => r.text())));
   for (const [i, html] of pages.entries()) {
     const body = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script>[\s\S]*?<\/script>/, '');
     for (const word of ['>open<', '>routed<', '>answered<', '>published<', '>blocked<', '>requested<', '>awaiting_payment<', '>paid<', '>completed<']) {
-      assert.ok(!body.includes(word), `page ${i} leaks the English state ${word}`);
+      assert.ok(!body.includes(word), `page ${i} leaks the raw state token ${word}`);
     }
   }
 });

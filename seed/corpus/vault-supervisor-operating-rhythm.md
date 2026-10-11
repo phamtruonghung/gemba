@@ -1,6 +1,6 @@
 ---
 title: The supervisor's operating rhythm — the craft
-topic: quan-ly-chuyen
+topic: shift-management
 origin: vault
 source: seed/vault-raw/supervisor-operating-rhythm.md
 ---

@@ -1,30 +1,44 @@
 [
   {
     "slug": "hung-qa",
-    "name": "Anh Hùng",
-    "headline": "Giám sát sản xuất 20 năm — lắp ráp, cải tiến, quản lý ca (hồ sơ mẫu)",
-    "bio": "Hồ sơ mẫu cho bản thử nghiệm. Ghi chú trong kho thuộc nhóm này là kiến thức nghề đã tách khỏi nhà máy cụ thể.",
-    "topics": ["tpm", "quan-ly-chuyen", "cai-tien", "an-toan"],
+    "name": "Hung",
+    "headline": "Production supervisor, 20 years — assembly, improvement, shift management (sample profile)",
+    "bio": "Sample profile for the trial build. Notes in the vault under this group are craft knowledge already stripped of any specific plant.",
+    "topics": [
+      "tpm",
+      "shift-management",
+      "improvement",
+      "safety",
+      "strategy",
+      "open-work"
+    ],
     "years": 20,
     "rate_vnd": 800000,
     "token": "demo-hung-7f3a91"
   },
   {
     "slug": "lan-lap-rap",
-    "name": "Chị Lan",
-    "headline": "Trưởng ca lắp ráp điện tử (hồ sơ mẫu)",
-    "bio": "Hồ sơ mẫu cho bản thử nghiệm: dùng để thử luồng chuyển câu hỏi và đặt lịch.",
-    "topics": ["quan-ly-chuyen", "chat-luong", "an-toan"],
+    "name": "Lan",
+    "headline": "Electronics assembly shift leader (sample profile)",
+    "bio": "Sample profile for the trial build: used to test the question-handoff and scheduling flow.",
+    "topics": [
+      "shift-management",
+      "quality",
+      "safety"
+    ],
     "years": 12,
     "rate_vnd": 600000,
     "token": "demo-lan-2c8d40"
   },
   {
     "slug": "dung-bao-tri",
-    "name": "Anh Dũng",
-    "headline": "Kỹ sư bảo trì — thiết bị, dừng máy, khuôn (hồ sơ mẫu)",
-    "bio": "Hồ sơ mẫu cho bản thử nghiệm.",
-    "topics": ["tpm", "cai-tien"],
+    "name": "Dung",
+    "headline": "Maintenance engineer — equipment, machine stops, tooling (sample profile)",
+    "bio": "Sample profile for the trial build.",
+    "topics": [
+      "tpm",
+      "improvement"
+    ],
     "years": 15,
     "rate_vnd": 700000,
     "token": "demo-dung-91be55"

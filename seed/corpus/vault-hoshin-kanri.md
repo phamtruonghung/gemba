@@ -1,6 +1,6 @@
 ---
 title: Hoshin Kanri — strategy deployment, and the last mile
-topic: chien-luoc
+topic: strategy
 origin: vault
 source: seed/vault-raw/hoshin-kanri.md
 ---
@@ -39,7 +39,7 @@ source: seed/vault-raw/hoshin-kanri.md
 ## What it settles for the last mile
 
 - An objective arriving at the front line has to become four things the same day, or it decays into a whisper: a **number** (what is different, by how much), a **date**, a **named owner**, and a **method** (the experiment loop or the loss drill that will move it).
-- The precondition is stability, not willpower. Toyota's cascade landed in a plant running better than 98% of the time with about a thousand andon pulls a day answered inside takt — which is precisely why its managers were "not bogged down in fire-fighting" and had time to think about hoshin targets at all. A front line without that stability cannot absorb an objective; the objective then competes with the chaos it was meant to resolve.
+- The precondition is stability, not willpower. Toyota's cascade landed in a plant running nearly all of the time with about a thousand andon pulls a day answered inside takt — which is precisely why its managers were "not bogged down in fire-fighting" and had time to think about hoshin targets at all. A front line without that stability cannot absorb an objective; the objective then competes with the chaos it was meant to resolve.
 - Deploy the objective *through* the front-line leaders, not past them. In the plant Womack walked, the redesign of jobs and equipment was done by a group leader with four team leaders and the operators themselves over three months, against a stated objective — not handed to staff experts. A target assigned over the heads of the people who own the process arrives as a number with no method.
 - Do not bolt a second cadence on to carry it. The objective should ride the routine that already exists, because "a standing rhythm that keeps firing while changing nothing" is the documented failure ([[supervisor-operating-rhythm]]).
 - A number that arrives as a cascade target is the place to be most careful about Goodhart: pair it with a counter-measure, and read the trend before it is allowed to become a judged score ([[supervisor-operating-rhythm]] carries the pairing rule).

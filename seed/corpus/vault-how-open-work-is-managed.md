@@ -1,6 +1,6 @@
 ---
 title: How open work is managed
-topic: cong-viec
+topic: open-work
 origin: vault
 source: seed/vault-raw/how-open-work-is-managed.md
 ---

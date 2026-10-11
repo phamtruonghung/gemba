@@ -15,7 +15,7 @@ export function llmConfig(env = process.env) {
   return { key, base, model, timeoutMs, enabled: Boolean(key) };
 }
 
-export const NO_DATA_MARKER = 'THIEU_DU_LIEU';
+export const NO_DATA_MARKER = 'INSUFFICIENT_DATA';
 
 const MAX_PASSAGES = 3;
 const MAX_PASSAGE_CHARS = 1400;
@@ -25,25 +25,25 @@ export function buildPrompt({ question, hits, plantType = '' }) {
     .slice(0, MAX_PASSAGES)
     .map((h, i) => {
       const body = h.note.body.length > MAX_PASSAGE_CHARS ? `${h.note.body.slice(0, MAX_PASSAGE_CHARS)}…` : h.note.body;
-      return `[${i + 1}] (id ${h.note.id}) ${h.note.title} — chủ đề: ${h.note.topic}\n${body}`;
+      return `[${i + 1}] (id ${h.note.id}) ${h.note.title} — topic: ${h.note.topic}\n${body}`;
     })
     .join('\n\n---\n\n');
   const system = [
-    'Bạn là trợ lý của một nền tảng chia sẻ kiến thức sản xuất tại Việt Nam.',
-    'Chỉ được trả lời bằng nội dung có trong các TRÍCH ĐOẠN bên dưới. Không dùng kiến thức ngoài, không suy đoán, không bịa.',
-    'Mỗi khẳng định phải kèm số hiệu trích đoạn dạng [1], [2] đúng như đánh số.',
-    'Nếu các trích đoạn không đủ để trả lời, hoặc câu hỏi cần số liệu/điều kiện riêng của nhà máy người hỏi, hãy trả lời đúng một từ ' + NO_DATA_MARKER + ' rồi nêu ngắn gọn còn thiếu gì.',
-    'Giọng văn: như một kỹ sư già nói với đồng nghiệp. Tiếng Việt. Ngắn, cụ thể, có việc làm được ngay.',
-    'Tối đa 150 từ. Trả về JSON ngay, không viết lời dẫn, không dùng khối mã.'
+    'You are the assistant of a knowledge platform for factory production.',
+    'Answer only from the PASSAGES below. No outside knowledge, no guessing, no invention.',
+    'Every claim must carry its passage number as [1], [2], exactly as the passages are numbered.',
+    'If the passages are not enough to answer, or the question needs figures or conditions specific to the asker\'s own plant, reply with exactly ' + NO_DATA_MARKER + ' and then state briefly what is missing.',
+    'Voice: an experienced engineer talking to a colleague. English. Short, concrete, something they can act on today.',
+    'At most 150 words. Return the JSON immediately: no preamble, no code fences.'
   ].join(' ');
   const user = [
-    plantType ? `Người hỏi làm ở: ${plantType}.` : '',
-    `Câu hỏi: ${question}`,
+    plantType ? `The asker works in: ${plantType}.` : '',
+    `Question: ${question}`,
     '',
-    'TRÍCH ĐOẠN:',
+    'PASSAGES:',
     passages,
     '',
-    'Trả về JSON đúng định dạng, không thêm chữ nào ngoài JSON:',
+    'Return JSON in exactly this shape and nothing else:',
     '{"answer":"...","citations":[1,2],"coverage":"ok"|"thin","missing":"..."}'
   ]
     .filter(Boolean)
@@ -73,7 +73,7 @@ export async function askFromCorpus({ question, hits, plantType = '', coverageVe
     const thin = coverageVerdict?.verdict === 'thin';
     return {
       answer: thin
-        ? `${NO_DATA_MARKER}\nKho ghi chú chưa đủ cho câu này (${coverageVerdict?.why ?? 'không khớp ghi chú nào'}). Phần gần nhất:\n${ex.text}`
+        ? `${NO_DATA_MARKER}\nThe note library does not cover this question (${coverageVerdict?.why ?? 'no note matched'}). Closest passage:\n${ex.text}`
         : ex.text,
       citations: ex.citations,
       coverage: thin ? 'thin' : 'ok',

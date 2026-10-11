@@ -1,12 +1,12 @@
 // src/pricing.mjs — money, in VND, integer-only.
-// Vietnam keeps prices in đồng and people read them as "500k" or "500.000đ", so the
+// Prices are in VND and people read them as "500k", so the
 // currency is an integer, never a float, and formatting is the Vietnamese convention.
 
 export const PLATFORM_TAKE_RATE = 0.2;
 export const MIN_MINUTES = 30;
 export const DEFAULT_MINUTES = 45;
 
-/** Round to the nearest 10.000đ: nobody quotes a consultation at 483.333đ. */
+/** Round to the nearest 10,000 VND: nobody quotes a consultation at 483,333 VND. */
 export function roundVnd(n, step = 10000) {
   return Math.round(n / step) * step;
 }
@@ -21,13 +21,13 @@ export function split(priceVnd, takeRate = PLATFORM_TAKE_RATE) {
 }
 
 export function quote(rateVnd, minutes = DEFAULT_MINUTES, takeRate = PLATFORM_TAKE_RATE) {
-  if (minutes < MIN_MINUTES) throw new Error(`tối thiểu ${MIN_MINUTES} phút`);
+  if (minutes < MIN_MINUTES) throw new Error(`minimum ${MIN_MINUTES} minutes`);
   return { minutes, ...split(priceFor(rateVnd, minutes), takeRate) };
 }
 
-/** "600.000đ" — the way the number is written in Vietnam (dot thousands separator). */
+/** "600,000 VND" — integer VND, no decimals, thousands separated. */
 export function formatVnd(n) {
-  return `${Math.round(n).toLocaleString('de-DE')}đ`;
+  return `${Math.round(n).toLocaleString('en-US')} VND`;
 }
 
 /** A safe default when an expert has not set a rate: seniority, cheap-first. */

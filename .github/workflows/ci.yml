@@ -65,7 +65,7 @@ jobs:
           echo "--- ask through the container:"
           curl -fsS -X POST http://127.0.0.1:8090/api/ask \
             -H 'content-type: application/json' \
-            -d '{"question":"máy dừng giữa ca thì kiểm tra theo thứ tự nào?"}'
+            -d '{"question":"the machine stops mid-shift — what should I check, and in what order?"}'
           echo
           echo "--- container log:"
           docker logs xuong-smoke
