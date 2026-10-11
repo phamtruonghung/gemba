@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -17,7 +18,9 @@ from playwright.sync_api import sync_playwright
 ROOT = Path("/root/work/xuong")
 PORT = int(os.environ.get("UI_PORT", "8097"))
 BASE = f"http://127.0.0.1:{PORT}"
-SHOTS = Path(os.environ.get("SHOT_DIR", "/root/.hermes/cache/scratch/xuong-shots"))
+# Default to the system temp dir: a hard-coded path from the author's machine is a check that
+# passes here and cannot pass anywhere else (CI caught exactly that).
+SHOTS = Path(os.environ.get("SHOT_DIR") or Path(tempfile.gettempdir()) / "xuong-ui-shots")
 SHOTS.mkdir(parents=True, exist_ok=True)
 
 PAGES = [
@@ -103,7 +106,7 @@ def sample_png(path):
 def main():
     # Seeded, not ':memory:'. An empty corpus renders a different page — no notes, no experts,
     # zeros in the stats — and checking that page is checking a page nobody will ever see.
-    db_path = "/tmp/xuong-ui-check.db"
+    db_path = str(Path(tempfile.gettempdir()) / "xuong-ui-check.db")
     for suffix in ("", "-wal", "-shm"):
         Path(db_path + suffix).unlink(missing_ok=True)
     subprocess.run(["node", "scripts/seed.mjs"], cwd=ROOT, env={**os.environ, "XUONG_DB": db_path}, stdout=subprocess.DEVNULL, check=True)
