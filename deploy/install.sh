@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 # deploy/install.sh — install Gemba on a Debian/Ubuntu host as a systemd service.
 #
@@ -189,6 +190,17 @@ if [ -n "$PROBE_REF" ]; then
     console.log("  probe question removed from the instance:", n, "row");
     db.close();'
 fi
+
+say "7. legacy directories"
+# The rename migration moved the database, the config and the unit, but an old code directory is a
+# second copy of the app answering to a name nobody uses — and the naming test cannot see a host. It is
+# removed only here, after the health probe above has passed, so a working instance always precedes it.
+for legacy in /opt/xuong /etc/xuong; do
+  if [ -e "$legacy" ]; then
+    rm -rf "$legacy"
+    echo "removed $legacy"
+  fi
+done
 
 TOKEN="$(sed -n 's/^GEMBA_ADMIN_TOKEN=//p' "$ENV_DIR/gemba.env")"
 if [ -z "$TOKEN" ]; then TOKEN="$(cat "$DATA_DIR/admin.token" 2>/dev/null || true)"; fi
