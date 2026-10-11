@@ -6,7 +6,7 @@
 
 ---
 
-**Project:** Xuong
+**Project:** Gemba
 **Generated:** 2026-10-11 12:31:07
 **Category:** General
 **Design Dials:** Variance 5/10 (Balanced / Modern) | Motion 2/10 (Subtle) | Density 6/10 (Standard)

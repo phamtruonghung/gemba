@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // scripts/probe-db.mjs — which database is which?
 //
-// The app must open the file the configuration names (XUONG_DB, or XUONG_DATA_DIR/xuong.db). When
+// The app must open the file the configuration names (GEMBA_DB, or GEMBA_DATA_DIR/gemba.db). When
 // two candidates exist — typically a stale one next to the source and the configured one — this
 // says which holds the questions and bookings, so the operator migrates the right one:
-//   node scripts/probe-db.mjs /opt/xuong/data/xuong.db /var/lib/xuong/xuong.db
+//   node scripts/probe-db.mjs /opt/gemba/data/gemba.db /var/lib/gemba/gemba.db
 // With no arguments it reports the configured database.
 import { existsSync } from 'node:fs';
 import { loadConfig } from '../src/server.mjs';

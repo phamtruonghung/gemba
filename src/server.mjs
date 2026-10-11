@@ -50,14 +50,14 @@ function readEnvFile(path) {
 }
 
 export function loadConfig(env = process.env) {
-  // Extra env files, mostly for this author's host: XUONG_ENV_FILE, then the Hermes profile, then
+  // Extra env files, mostly for this author's host: GEMBA_ENV_FILE, then the Hermes profile, then
   // the working directory. None of them are required — a container or a systemd unit passes its own.
-  const fileEnv = { ...readEnvFile(process.env.XUONG_ENV_FILE || '/root/.hermes/.env'), ...readEnvFile('.env') };
+  const fileEnv = { ...readEnvFile(process.env.GEMBA_ENV_FILE || '/root/.hermes/.env'), ...readEnvFile('.env') };
   const merged = { ...fileEnv, ...env };
-  const dataDir = merged.XUONG_DATA_DIR || 'data';
+  const dataDir = merged.GEMBA_DATA_DIR || 'data';
   mkdirSync(dataDir, { recursive: true });
   const tokenFile = `${dataDir}/admin.token`;
-  let adminToken = merged.XUONG_ADMIN_TOKEN;
+  let adminToken = merged.GEMBA_ADMIN_TOKEN;
   if (!adminToken) {
     if (existsSync(tokenFile)) adminToken = readFileSync(tokenFile, 'utf8').trim();
     else {
@@ -66,25 +66,25 @@ export function loadConfig(env = process.env) {
     }
   }
   return {
-    port: Number(merged.XUONG_PORT || 8090),
-    host: merged.XUONG_HOST || '0.0.0.0',
-    dbPath: merged.XUONG_DB || `${dataDir}/xuong.db`,
+    port: Number(merged.GEMBA_PORT || 8090),
+    host: merged.GEMBA_HOST || '0.0.0.0',
+    dbPath: merged.GEMBA_DB || `${dataDir}/gemba.db`,
     dataDir,
     adminToken,
-    // Optional front gate. Set XUONG_USER + XUONG_PASS before publishing this to a public
+    // Optional front gate. Set GEMBA_USER + GEMBA_PASS before publishing this to a public
     // hostname: the ask form calls a paid model, so an open instance is an open bill.
-    user: merged.XUONG_USER || '',
-    pass: merged.XUONG_PASS || '',
-    bankBin: merged.XUONG_BANK_BIN || '',
-    bankAccount: merged.XUONG_BANK_ACCOUNT || '',
+    user: merged.GEMBA_USER || '',
+    pass: merged.GEMBA_PASS || '',
+    bankBin: merged.GEMBA_BANK_BIN || '',
+    bankAccount: merged.GEMBA_BANK_ACCOUNT || '',
     llm: llmConfig(merged)
   };
 }
 
 export function createApp({ dbPath, config = loadConfig(), rules = loadRules() } = {}) {
-  // The configured path wins. XUONG_DB / XUONG_DATA_DIR are what the README, the systemd unit, the
+  // The configured path wins. GEMBA_DB / GEMBA_DATA_DIR are what the README, the systemd unit, the
   // installer and the container volume all describe, so the running app has to open *that* file.
-  // (It used to default to a relative 'data/xuong.db', which silently ignored the configuration:
+  // (It used to default to a relative 'data/gemba.db', which silently ignored the configuration:
   // the service kept reading a file next to the source while the installer seeded, and the
   // container mounted, a different one — an empty corpus with no error anywhere.) Tests pass
   // ':memory:' explicitly; createApp({ dbPath }) still overrides for them.
@@ -164,7 +164,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     // --- front gate: optional HTTP basic auth ------------------------------
     if (!basicAuthOk(req.headers.authorization, config)) {
       res.writeHead(401, {
-        'www-authenticate': 'Basic realm="xuong", charset="UTF-8"',
+        'www-authenticate': 'Basic realm="gemba", charset="UTF-8"',
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store'
       });
@@ -564,7 +564,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const app = createApp();
   app.server.listen(app.config.port, app.config.host, () => {
     const { bankBin, bankAccount } = app.config;
-    console.log(`Xuong listening on http://${app.config.host}:${app.config.port}`);
+    console.log(`Gemba listening on http://${app.config.host}:${app.config.port}`);
     console.log(`  notes indexed: ${app.index().n}`);
     console.log(`  AI tier: ${app.config.llm.enabled ? `model ${app.config.llm.model}` : 'no API key — extractive fallback only'}`);
     console.log(`  bank: ${bankBin && bankAccount ? `${bankBin}/${bankAccount}` : 'NOT configured — booking pages show no QR'}`);

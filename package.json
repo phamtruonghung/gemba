@@ -1,8 +1,8 @@
 {
-  "name": "xuong",
+  "name": "gemba",
   "version": "0.1.0",
   "private": false,
-  "description": "Xuong — a factory-production knowledge platform: cited answers from publishable practitioner notes, escalation to a practitioner, paid 1:1 consultation in VND.",
+  "description": "Gemba — a factory-production knowledge platform: cited answers from publishable practitioner notes, escalation to a practitioner, paid 1:1 consultation in VND.",
   "license": "MIT",
   "type": "module",
   "engines": {

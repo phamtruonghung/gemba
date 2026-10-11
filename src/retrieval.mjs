@@ -21,6 +21,8 @@ export function tokenize(s) {
 export const STOPWORDS = new Set([
   'va', 'cua', 'la', 'co', 'cho', 'khi', 'nao', 'gi', 'mot', 'cac', 'nhung', 'de', 'voi', 'thi', 'ma',
   'neu', 'khong', 'duoc', 'nay', 'do', 'kia', 'ai', 'tai', 'trong', 'ngoai', 'tren', 'duoi', 'ra', 'vao',
+  // 'xuong' here is the Vietnamese stopword (xưởng, folded to ASCII by the diacritic pass), not the
+  // product name. It stays — a rename that swept this line would silently change what retrieval drops.
   'len', 'xuong', 'roi', 'da', 'se', 'dang', 'bi', 'do', 'vi', 'nen', 'hay', 'hoac', 'cung', 'nhu', 'sao',
   'the', 'chi', 'con', 'phai', 've', 'theo', 'lam', 'bang', 'toi', 'minh', 'ban', 'ho', 'no', 'rat', 'qua',
   'nhieu', 'it', 'moi', 'tu', 'den', 'sau', 'truoc', 'giua', 'ca', 'thu', 'lam', 'sao', 'bao', 'nhieu'

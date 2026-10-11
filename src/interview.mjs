@@ -2,7 +2,7 @@
 //
 // Copied deliberately from the market: the hardest part of a practitioner platform is not the
 // answer, it is getting a busy practitioner to write anything at all (Tacivo's answer is an
-// AI-moderated interview; Delphi's is "hand us your existing talks"). Xuong does the interview,
+// AI-moderated interview; Delphi's is "hand us your existing talks"). Gemba does the interview,
 // but the script itself enforces the boundary the gate will check afterwards: the questions ask
 // for craft, never for the plant's numbers.
 

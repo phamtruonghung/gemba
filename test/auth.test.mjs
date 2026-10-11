@@ -8,7 +8,7 @@ import { createApp, basicAuthOk } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
 import { upsertNote } from '../src/db.mjs';
 
-const USER = 'xuong';
+const USER = 'gemba';
 const PASS = 'mat-khau-thu-nghiem';
 const CREDS = 'Basic ' + Buffer.from(`${USER}:${PASS}`, 'utf8').toString('base64');
 
@@ -50,7 +50,7 @@ after(() => app.server.close());
 test('the gate refuses an unauthenticated request with a 401 and a challenge', async () => {
   const res = await fetch(`${base}/`);
   assert.equal(res.status, 401);
-  assert.match(res.headers.get('www-authenticate') ?? '', /^Basic realm="xuong"/);
+  assert.match(res.headers.get('www-authenticate') ?? '', /^Basic realm="gemba"/);
   const html = await res.text();
   assert.match(html, /Sign-in required/);
   assert.doesNotMatch(html, /The machine stops mid-shift/, 'a refused page must not leak corpus content');
@@ -74,7 +74,7 @@ test('healthz answers without credentials and keeps the database path to itself'
 test('the right credentials get in', async () => {
   const res = await fetch(`${base}/`, { headers: { authorization: CREDS } });
   assert.equal(res.status, 200);
-  assert.match(await res.text(), /Xuong|Ask/);
+  assert.match(await res.text(), /Gemba|Ask/);
 });
 
 test('a wrong password, a missing colon and a foreign scheme are all refused', () => {

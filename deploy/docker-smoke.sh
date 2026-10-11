@@ -6,14 +6,14 @@
 # up here rather than in front of a customer), shows what landed in the volume, and removes
 # everything afterwards.
 #
-# Usage:  [ENV_FILE=/etc/xuong/xuong.env] [PORT=8091] deploy/docker-smoke.sh
+# Usage:  [ENV_FILE=/etc/gemba/gemba.env] [PORT=8091] deploy/docker-smoke.sh
 set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-}"
 PORT="${PORT:-8091}"
-NAME="${NAME:-xuong-smoke}"
+NAME="${NAME:-gemba-smoke}"
 VOL="${NAME}-data"
-IMAGE="${IMAGE:-xuong:smoke}"
+IMAGE="${IMAGE:-gemba:smoke}"
 
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -48,11 +48,11 @@ echo "-> container log (first lines)"
 # pipeline reports failure, which `set -e` then treats as a script error.
 docker logs "$NAME" 2>&1 | sed -n '1,6p'
 
-# The gate. If XUONG_USER/XUONG_PASS came in through the environment, the container must refuse an
+# The gate. If GEMBA_USER/GEMBA_PASS came in through the environment, the container must refuse an
 # open request and admit a credentialed one — this is the check that catches the "gate configured
 # but instance still open" class of defect.
-U="$(grep -m1 '^XUONG_USER=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
-P="$(grep -m1 '^XUONG_PASS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+U="$(grep -m1 '^GEMBA_USER=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+P="$(grep -m1 '^GEMBA_PASS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
 if [ -n "$U" ] && [ -n "$P" ]; then
   code_open="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"
   code_auth="$(curl -s -o /dev/null -w '%{http_code}' -u "$U:$P" "http://127.0.0.1:$PORT/")"
@@ -80,7 +80,7 @@ curl -s -o /dev/null -c "$JAR" "${AUTH[@]}" -w '   POST /signup → %{http_code}
   -X POST "http://127.0.0.1:$PORT/signup" \
   --data-urlencode "name=Container Asker" --data-urlencode "email=$EMAIL" \
   --data-urlencode "password=a sentence of ten characters"
-grep -q xuong_session "$JAR" && echo "   session cookie → set" || echo "   session cookie → MISSING"
+grep -q gemba_session "$JAR" && echo "   session cookie → set" || echo "   session cookie → MISSING"
 curl -s -b "$JAR" "${AUTH[@]}" "http://127.0.0.1:$PORT/account" | grep -oE "Signed in as Container Asker" | head -1 | sed 's/^/   /'
 curl -s -o /dev/null -b "$JAR" -c "$JAR" "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/signout"
 code_after="$(curl -s -o /dev/null -b "$JAR" "${AUTH[@]}" -w '%{http_code}' "http://127.0.0.1:$PORT/account")"

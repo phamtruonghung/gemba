@@ -12,9 +12,9 @@ import { loadConfig } from '../src/server.mjs';
 import { slugify } from '../src/interview.mjs';
 
 const rules = loadRules();
-// The database the server will open, resolved the same way. Hardcoding a relative 'data/xuong.db'
-// here meant the seed wrote to one file while the service read another (XUONG_DB alone was honoured;
-// XUONG_DATA_DIR was not), so a fresh corpus never reached the running app.
+// The database the server will open, resolved the same way. Hardcoding a relative 'data/gemba.db'
+// here meant the seed wrote to one file while the service read another (GEMBA_DB alone was honoured;
+// GEMBA_DATA_DIR was not), so a fresh corpus never reached the running app.
 const dbPath = loadConfig().dbPath;
 const db = openDb(dbPath);
 

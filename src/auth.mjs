@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 
 const scryptAsync = promisify(scrypt);
 
-export const SESSION_COOKIE = 'xuong_session';
+export const SESSION_COOKIE = 'gemba_session';
 export const SESSION_DAYS = 30;
 
 // Cost parameters. N is the CPU/memory cost (2^14 = 16384), r the block size, p the parallelism.

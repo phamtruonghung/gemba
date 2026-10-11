@@ -1,25 +1,25 @@
 [Unit]
-Description=Xuong — Vietnam-first factory-production knowledge platform (prototype)
-Documentation=file:/opt/xuong/README.md
+Description=Gemba — Vietnam-first factory-production knowledge platform (prototype)
+Documentation=file:/opt/gemba/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/xuong
-EnvironmentFile=/etc/xuong/xuong.env
-ExecStart=/opt/node22/bin/node /opt/xuong/src/server.mjs
+WorkingDirectory=/opt/gemba
+EnvironmentFile=/etc/gemba/gemba.env
+ExecStart=/opt/node22/bin/node /opt/gemba/src/server.mjs
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 # The SQLite database and the admin token live outside the checkout so a redeploy of the
 # code cannot overwrite live state.
-ReadWritePaths=/var/lib/xuong
+ReadWritePaths=/var/lib/gemba
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=xuong
+SyslogIdentifier=gemba
 
 [Install]
 WantedBy=multi-user.target

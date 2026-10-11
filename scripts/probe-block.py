@@ -52,11 +52,11 @@ async def main():
     url = sys.argv[1]
     needles = sys.argv[2:]
     env = dict(os.environ)
-    env.pop("XUONG_USER", None)
+    env.pop("GEMBA_USER", None)
     subprocess.Popen(
         ["node", "src/server.mjs"],
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        env={**env, "XUONG_PORT": PORT, "XUONG_DB": f"{TMP}/probe.db"},
+        env={**env, "GEMBA_PORT": PORT, "GEMBA_DB": f"{TMP}/probe.db"},
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
     async with async_playwright() as pw:

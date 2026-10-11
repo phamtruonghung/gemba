@@ -86,17 +86,17 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           set -e
-          docker run -d --name xuong-smoke -p 8090:8090 ghcr.io/${{ github.repository }}:latest
+          docker run -d --name gemba-smoke -p 8090:8090 ghcr.io/${{ github.repository }}:latest
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:8090/healthz; then ok=1; break; fi
             sleep 2
           done
-          test "${ok:-}" = 1 || { echo "the container never became healthy"; docker logs xuong-smoke; exit 1; }
+          test "${ok:-}" = 1 || { echo "the container never became healthy"; docker logs gemba-smoke; exit 1; }
           echo "--- ask through the container:"
           curl -fsS -X POST http://127.0.0.1:8090/api/ask \
             -H 'content-type: application/json' \
             -d '{"question":"the machine stops mid-shift — what should I check, and in what order?"}'
           echo
           echo "--- container log:"
-          docker logs xuong-smoke
-          docker rm -f xuong-smoke
+          docker logs gemba-smoke
+          docker rm -f gemba-smoke
