@@ -50,7 +50,9 @@ function readEnvFile(path) {
 }
 
 export function loadConfig(env = process.env) {
-  const fileEnv = { ...readEnvFile('/root/.hermes/.env'), ...readEnvFile('.env') };
+  // Extra env files, mostly for this author's host: XUONG_ENV_FILE, then the Hermes profile, then
+  // the working directory. None of them are required — a container or a systemd unit passes its own.
+  const fileEnv = { ...readEnvFile(process.env.XUONG_ENV_FILE || '/root/.hermes/.env'), ...readEnvFile('.env') };
   const merged = { ...fileEnv, ...env };
   const dataDir = merged.XUONG_DATA_DIR || 'data';
   mkdirSync(dataDir, { recursive: true });

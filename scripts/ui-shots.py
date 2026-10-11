@@ -9,7 +9,8 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-ROOT = Path("/root/work/xuong")
+# The repo this file lives in — never a path from the machine it was written on.
+ROOT = Path(__file__).resolve().parent.parent
 PORT = int(os.environ.get("UI_PORT", "8098"))
 BASE = f"http://127.0.0.1:{PORT}"
 SHOTS = Path(os.environ.get("SHOT_DIR") or Path(tempfile.gettempdir()) / "xuong-ui-shots")

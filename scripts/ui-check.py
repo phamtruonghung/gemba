@@ -15,7 +15,8 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-ROOT = Path("/root/work/xuong")
+# The repo this file lives in — never a path from the machine it was written on.
+ROOT = Path(__file__).resolve().parent.parent
 PORT = int(os.environ.get("UI_PORT", "8097"))
 BASE = f"http://127.0.0.1:{PORT}"
 # Default to the system temp dir: a hard-coded path from the author's machine is a check that
