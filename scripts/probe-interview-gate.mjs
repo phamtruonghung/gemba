@@ -1,5 +1,6 @@
 // scratch probe: why did the interview draft fail the gate?
-import { checkNote, loadRules } from '../src/gate.mjs';
+import { checkNote, loadRules, readRulesFile } from '../src/gate.mjs';
+import { loadConfig } from '../src/server.mjs';
 import { draftNoteFromInterview } from '../src/interview.mjs';
 
 const answers = [
@@ -14,6 +15,6 @@ const answers = [
 ];
 
 const draft = draftNoteFromInterview({ expert: { slug: 'x' }, topic: 'tpm', answers, title: 'Field notes: tpm' });
-const report = checkNote({ title: draft.title, body: draft.body }, loadRules());
+const report = checkNote({ title: draft.title, body: draft.body }, loadRules(readRulesFile(loadConfig().gateRulesPath)));
 console.log('verdict:', report.verdict, 'ok:', report.ok);
 for (const f of report.findings) console.log(' ', f.severity, f.rule, JSON.stringify(f.match), '|', f.hint);

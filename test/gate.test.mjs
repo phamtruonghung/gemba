@@ -3,10 +3,11 @@
 // behalf, and the seed publishes nothing that would need an attestation.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-import { checkNote, decidePublication, loadRules, DEFAULT_RULES } from '../src/gate.mjs';
+import { checkNote, decidePublication, loadRules, readRulesFile, DEFAULT_RULES } from '../src/gate.mjs';
 import { createApp } from '../src/server.mjs';
 import { openDb, upsertExpert, noteBySlug, publishedNotes, answersFor, insertQuestion, routeQuestion } from '../src/db.mjs';
 import { seedDatabase } from '../src/seed-corpus.mjs';
@@ -48,8 +49,8 @@ const ADVERSARIAL = [
     '## Liên hệ\nGọi 0909 123 456 hoặc Zalo 0912.345.678 khi máy dừng quá 10 phút, đừng chờ hết ca.', 'block'),
   N('customer name', 'Yêu cầu của khách hàng',
     '## Hiện trạng\nKhách hàng Bosch yêu cầu nhãn phải in đúng vị trí, lệch 2 mm là trả lại cả lô.', 'block'),
-  N('factory / company name', 'Nhà máy Relats Việt Nam',
-    '## Hiện trạng\nCông ty TNHH Sản xuất ABC có ba nhà máy, nhà máy Relats Việt Nam là nơi áp dụng cách này đầu tiên.', 'block'),
+  N('factory / company name', 'Nhà máy Acme Fab Việt Nam',
+    '## Hiện trạng\nCông ty TNHH Sản xuất ABC có ba nhà máy, nhà máy Acme Fab Việt Nam là nơi áp dụng cách này đầu tiên.', 'block'),
   N('OEE figure', 'OEE của chuyền',
     '## Hiện trạng\nOEE 67% tuần trước, phần lớn mất ở dừng máy ngắn, không phải ở chất lượng.', 'attest'),
   N('portable craft: sentence starts with "Do Not"', 'Machine start-up',
@@ -64,7 +65,8 @@ const ADVERSARIAL = [
     '## Cách làm\nĐơn giá gia công tính theo giờ máy, không theo sản phẩm, vì thời gian gá chiếm phần lớn.', 'clean')
 ];
 
-const verdictOf = (n) => checkNote({ title: n.title, body: n.body }, DEFAULT_RULES).verdict;
+const FIXTURE_RULES = loadRules({ block_terms: ['acme fab'] });
+const verdictOf = (n) => checkNote({ title: n.title, body: n.body }, FIXTURE_RULES).verdict;
 const klass = (v) => (v === 'blocked' ? 'block' : v === 'needs_attestation' ? 'attest' : 'clean');
 
 test('gate: the 18-note adversarial set has 18 notes', () => {
@@ -445,4 +447,61 @@ test('gate: a shift length is a quantity, not a shift identifier — but the shi
   assert.equal(ids('Một ca 8 tiếng nên có hai lần dừng ngắn để vệ sinh.').length, 0);
   assert.equal(ids('A shift of line 2 hours is too short to see the pattern.').length, 0);
   assert.equal(ids('Ca 2 chạy chậm vì thiếu người.').length, 1);
+});
+
+// --- the employer's names are a deployment file, not source (issue #45) ---------------------------
+
+const rulesDir = mkdtempSync(join(tmpdir(), 'gemba-rules-'));
+const rulesFile = (name, text) => {
+  const path = join(rulesDir, name);
+  writeFileSync(path, text);
+  return path;
+};
+
+test('gate rules: the built-in block list is empty — the source names no employer', () => {
+  assert.deepEqual(DEFAULT_RULES.block_terms, []);
+});
+
+test('gate rules: an absent file is the documented default, a valid file adds to it', () => {
+  assert.deepEqual(readRulesFile(join(rulesDir, 'nope.json')), {});
+  assert.deepEqual(readRulesFile(undefined), {});
+  const path = rulesFile('ok.json', JSON.stringify({ block_terms: ['acme fab'] }));
+  const rules = loadRules(readRulesFile(path));
+  const report = checkNote({ title: 'Note', body: `${CRAFT}\nAt Acme Fab we did it the other way round.` }, rules);
+  assert.equal(report.verdict, 'blocked');
+  assert.ok(report.findings.some((f) => f.rule === 'block_term'));
+});
+
+test('gate rules: a present but wrong file throws and names the path — the gate fails closed', () => {
+  const bad = rulesFile('bad.json', '{ not json');
+  assert.throws(() => readRulesFile(bad), (e) => e.message.includes(bad));
+  assert.throws(() => readRulesFile(rulesFile('str.json', '{"block_terms": "acme"}')), /block_terms.*array of strings/);
+  assert.throws(() => readRulesFile(rulesFile('typo.json', '{"blok_terms": []}')), /unknown key "blok_terms"/);
+  assert.throws(() => readRulesFile(rulesFile('arr.json', '[]')), /JSON object/);
+});
+
+test('gate rules: the tracked example parses through the loader', () => {
+  const rules = readRulesFile('deploy/gate.rules.example.json');
+  assert.ok(rules.block_terms.length > 0);
+});
+
+test('gate rules: the server loads the file named in its config and refuses a note that names the employer', async () => {
+  const path = rulesFile('server.json', JSON.stringify({ block_terms: ['acme fab'] }));
+  const local = createApp({
+    dbPath: ':memory:',
+    config: { port: 0, host: '127.0.0.1', dbPath: ':memory:', dataDir: 'data', gateRulesPath: path, adminToken: 'adm', bankBin: '', bankAccount: '', llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 } }
+  });
+  upsertExpert(local.db, { slug: 'hung-qa', name: 'Hung', headline: 'x', topics: ['tpm'], years: 20, rate_vnd: 800000, token: 'tok-rules' });
+  await new Promise((r) => local.server.listen(0, '127.0.0.1', r));
+  try {
+    const res = await fetch(`http://127.0.0.1:${local.server.address().port}/c/tok-rules/note`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ title: 'A note', topic: 'tpm', body: `${CRAFT}\nAt Acme Fab we did it the other way round.` })
+    });
+    assert.equal(res.status, 422);
+  } finally {
+    local.server.close();
+  }
 });

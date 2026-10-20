@@ -17,7 +17,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, publishedNotes } from '../src/db.mjs';
-import { loadRules } from '../src/gate.mjs';
+import { loadRules, readRulesFile } from '../src/gate.mjs';
+import { loadConfig } from '../src/server.mjs';
 import { seedDatabase } from '../src/seed-corpus.mjs';
 import { buildIndex, search, coverage, TUNING } from '../src/retrieval.mjs';
 import { askFromCorpus } from '../src/llm.mjs';
@@ -50,7 +51,7 @@ if (custom && args.has('--write-baseline')) {
 }
 
 const db = openDb(':memory:');
-seedDatabase(db, { rules: loadRules() });
+seedDatabase(db, { rules: loadRules(readRulesFile(loadConfig().gateRulesPath)) });
 const index = buildIndex(publishedNotes(db));
 
 const questions = readFileSync(qIdx !== -1 ? resolve(argv[qIdx + 1]) : QUESTIONS, 'utf8')

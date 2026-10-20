@@ -233,6 +233,41 @@ test('pausing a practitioner stops questions being routed to them', async () => 
   assert.equal(expertsForTopic(app.db, 'shift-management').some((e) => e.id === expert.id), true, 'and resuming brings them back');
 });
 
+test('when every practitioner is paused, a question waits and says so — a paused practitioner is never the fallback', async () => {
+  // The test above checks expertsForTopic. route() has its own fallback ("someone, rather than nobody")
+  // and used to pick the most senior active practitioner whether or not they accepted questions.
+  const accepting = app.db.prepare('select id from experts where accept_questions = 1').all().map((r) => r.id);
+  app.db.prepare('update experts set accept_questions = 0').run();
+  try {
+    const asked = await (await fetch(base + '/api/ask', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ question: 'rules for seasonal labour contracts outside the plant' })
+    })).json();
+    assert.equal(asked.coverage, 'thin');
+
+    const esc = await post(`/q/${asked.ref}/ask-expert`, { asker: 'Thu', contact: 'thu@example.com' });
+    assert.equal(esc.status, 303);
+    assert.match(esc.headers.get('location'), /\?nobody=1$/);
+    const stored = app.db.prepare('select * from questions where ref = ?').get(asked.ref);
+    assert.notEqual(stored.status, 'routed', 'nobody is accepting, so the question is not routed to a paused practitioner');
+    assert.equal(app.db.prepare('select count(*) n from outbox where ref = ?').get(asked.ref).n, 0, 'and nothing is promised to anyone');
+    const page = await (await get(esc.headers.get('location'))).text();
+    assert.match(page, /Hiện chưa có chuyên gia nào nhận câu hỏi mới về chủ đề này/, 'the page says so, in the language the question was asked in');
+
+    // One practitioner resumes, on a topic that does not match: the fallback now has someone to use.
+    const other = app.db.prepare("select * from experts where topics not like ?").all(`%${stored.topic}%`)[0];
+    assert.ok(other, 'there is a practitioner who does not cover the question\'s topic');
+    app.db.prepare('update experts set accept_questions = 1 where id = ?').run(other.id);
+    await post(`/q/${asked.ref}/ask-expert`, { asker: 'Thu', contact: 'thu@example.com' });
+    const routed = app.db.prepare('select * from questions where ref = ?').get(asked.ref);
+    assert.equal(routed.status, 'routed');
+    assert.equal(routed.expert_id, other.id, 'routed to the one practitioner who is accepting');
+  } finally {
+    app.db.prepare('update experts set accept_questions = 0').run();
+    for (const id of accepting) app.db.prepare('update experts set accept_questions = 1 where id = ?').run(id);
+  }
+});
+
 test('the operator can rotate a desk token that leaked', async () => {
   const cookie = await asOperator();
   const expert = app.db.prepare("select * from experts where name = 'Hung'").get();

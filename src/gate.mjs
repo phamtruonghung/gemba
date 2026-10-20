@@ -14,6 +14,8 @@
 //             reported, never blocks a person's note, but the seed loader refuses it
 //   note    — advisory, never blocks (style, length, house shape)
 
+import { existsSync, readFileSync } from 'node:fs';
+
 export const ATTESTATION_TEXT =
   'I confirm this is my own craft knowledge: it holds no figures, no customer or supplier names, ' +
   'no drawings, no part codes, no prices and no contract terms belonging to any plant.';
@@ -23,8 +25,10 @@ export const ATTESTATION_TEXT =
 const VALUE = '(?=[A-Z0-9-]*\\d)[A-Z0-9][A-Z0-9-]*';
 
 export const DEFAULT_RULES = {
-  // Names that must never reach the corpus. Extend per deployment in data/gate.rules.json.
-  block_terms: ['relats', 'vi-prod', 'vi prod'],
+  // Names that must never reach the corpus. Empty on purpose: this file is public, and an employer's
+  // name does not belong in it. A deployment lists its own in <GEMBA_DATA_DIR>/gate.rules.json
+  // (see readRulesFile; deploy/gate.rules.example.json shows the shape).
+  block_terms: [],
   // Vietnamese family names, in both spellings (with and without diacritics: people type both).
   // "Nguyễn Văn A" is a person, not a craft term. A token must match one of these EXACTLY: "nguyên"
   // (as in "nguyên nhân", root cause) is not folded onto "nguyễn".
@@ -162,6 +166,38 @@ const LIST_KEYS = [
   'document_patterns', 'contact_patterns', 'customer_names', 'customer_context_patterns',
   'customer_context_patterns_cased', 'plant_identifier_words', 'lint_patterns', 'figure_patterns', 'injection_patterns'
 ];
+
+const INT_KEYS = ['min_chars', 'max_chars'];
+
+/**
+ * Read a deployment's rule additions from a JSON file. An absent file is the documented default: the
+ * built-in rules, no employer names. A file that is present but wrong THROWS — a typo'd key must not
+ * silently drop the block list, so the gate fails closed (the same house rule as a half-set login).
+ */
+export function readRulesFile(path) {
+  if (!path || !existsSync(path)) return {};
+  let data;
+  try {
+    data = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (e) {
+    throw new Error(`gate rules file ${path} is not valid JSON: ${e.message}`);
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error(`gate rules file ${path} must be a JSON object`);
+  }
+  for (const [key, value] of Object.entries(data)) {
+    if (LIST_KEYS.includes(key)) {
+      if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+        throw new Error(`gate rules file ${path}: "${key}" must be an array of strings`);
+      }
+    } else if (INT_KEYS.includes(key)) {
+      if (!Number.isInteger(value)) throw new Error(`gate rules file ${path}: "${key}" must be an integer`);
+    } else {
+      throw new Error(`gate rules file ${path}: unknown key "${key}"`);
+    }
+  }
+  return data;
+}
 
 export function loadRules(extra) {
   const rules = { ...DEFAULT_RULES, ...(extra ?? {}) };

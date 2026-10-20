@@ -292,13 +292,28 @@ test('the home page states the ladder and the demo status plainly', async () => 
   assert.doesNotMatch(how, /INSUFFICIENT_DATA/);
 });
 
-test('no raw state token reaches a page', async () => {
-  const pages = await Promise.all(['/', '/library', '/experts', `/c/${EXPERT_TOKEN}`, `/qt/${ADMIN}`].map((p) => fetch(`${base}${p}`).then((r) => r.text())));
+test('no raw state token reaches an asker\'s or practitioner\'s page', async () => {
+  // The operator's audit trail (/qt, /admin) prints events as logged ("coverage=thin mode=extractive") and
+  // is left out on purpose; every page a guest, an asker or a practitioner reads is in.
+  const refs = app.db.prepare('select ref from questions').all().map((r) => `/q/${r.ref}`);
+  const bookings = app.db.prepare('select ref from bookings').all().map((r) => `/b/${r.ref}`);
+  assert.ok(refs.length >= 2 && bookings.length >= 1, 'earlier tests left questions and a booking to look at');
+  assert.ok(app.db.prepare("select 1 from questions where ai_coverage = 'thin'").get(), 'a refused question is among them');
+  assert.ok(app.db.prepare("select 1 from questions where ai_mode = 'extractive'").get(), 'and an answered-by-extractive one');
+  const paths = ['/', '/library', '/experts', `/c/${EXPERT_TOKEN}`, ...refs, ...bookings];
+  const pages = await Promise.all(paths.map((p) => fetch(`${base}${p}`).then((r) => r.text())));
   for (const [i, html] of pages.entries()) {
     const body = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script>[\s\S]*?<\/script>/, '');
-    for (const word of ['>open<', '>routed<', '>answered<', '>published<', '>blocked<', '>requested<', '>awaiting_payment<', '>paid<', '>completed<']) {
-      assert.ok(!body.includes(word), `page ${i} leaks the raw state token ${word}`);
+    for (const word of ['>open<', '>routed<', '>answered<', '>published<', '>blocked<', '>requested<', '>awaiting_payment<', '>paid<', '>completed<', 'INSUFFICIENT_DATA', 'extractive', 'llm-']) {
+      assert.ok(!body.includes(word), `${paths[i]} leaks the raw state token ${word}`);
     }
+  }
+});
+
+test('the public pages state no legal conclusion about who holds the money', async () => {
+  for (const path of ['/', '/how-it-works', '/experts']) {
+    const html = await (await fetch(`${base}${path}`)).text();
+    assert.doesNotMatch(html, /needs no payment licence|not a payment intermediary|never holds/i, path);
   }
 });
 

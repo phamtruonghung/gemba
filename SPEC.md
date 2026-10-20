@@ -33,7 +33,7 @@ page myself the row says so.
 |---|---|---|---|
 | Answer in the expert's own published material, not in general knowledge | Delphi (delphi.ai) | "Upload writing, videos, podcasts, or link to live feeds – Delphi indexes it all." (product page, read 2026-10-10) | The corpus *is* the answer space; the prompt forbids outside knowledge |
 | Monetise access in tiers instead of only by the hour | Delphi | "Create flexible membership tiers or pay-as-you-go plans tailored to your clients' needs." | Roadmap: session now, subscription once a corpus exists |
-| Price a session by the minute, hold the money before the call, settle on actual duration | Clarity.fm | "A *pre-charge* is a temporary hold on your card for the estimated cost of the call." / "You'll be charged based on the actual duration of the call at the expert's rate — not the estimated time." / "If the call ends sooner, you'll receive a refund or credit for the unused time." (help.startups.com, read 2026-10-10) | Session price = rate × minutes, minimum 30; payment is instructed by VietQR and confirmed by the operator (no card rails, and we never hold funds — §7) |
+| Price a session by the minute, hold the money before the call, settle on actual duration | Clarity.fm | "A *pre-charge* is a temporary hold on your card for the estimated cost of the call." / "You'll be charged based on the actual duration of the call at the expert's rate — not the estimated time." / "If the call ends sooner, you'll receive a refund or credit for the unused time." (help.startups.com, read 2026-10-10) | Session price = rate × minutes, minimum 30; payment is instructed by VietQR to the operator's account and confirmed by the operator (no card rails; what that flow means legally is open — §7) |
 | Capture tacit knowledge by an AI-led interview instead of asking for documents | Tacivo | "AI-guided sessions capture what departing employees know." + use cases: exit interviews, handovers, SOPs, after-action reviews + pushes to Notion/Confluence/SharePoint/Drive and an MCP server (homepage, read 2026-10-10) | `/c/:token/interview`: a scripted interview drafts a note; the author reviews, edits and attests it, and it has to pass the gate before it is published |
 | Human experts positioned *against* chatbots, cheap 1:1 packages | Askany (Vietnam) | "Askany, startup tiên phong trong việc kết nối các chuyên gia tư vấn với doanh nghiệp nhỏ, startup tại Việt Nam. Startup này đã đầu tư đến 27 tỉ đồng để phát triển app và marketing." / "đặt lịch tư vấn theo gói 15 phút, theo giờ" (thanhnien.vn, read 2026-10-10) | The ladder's bottom rung: 15–30 minute packages, escalating from a machine answer |
 | AI as the front door, a human as the escalation, and the session itself turned into a reusable artifact | ExpertNetwork.AI | "Describe your question — AI recommends top experts by domain, seniority, and availability in minutes, not days." / "Every call generates a structured summary with key insights, action items, and searchable transcript." (research pass, 2026-10-10; the closest single model to this product) | Partial: the answer → escalation → paid session shape is built; turning a session into a new *published* note (with consent) is not |
@@ -148,7 +148,8 @@ vetting it does not replace.
 ## 6. Money
 
 Whole VND integers only. `quote(rate, minutes)` → `{price, fee, payout}` with a 20% platform take and
-a 30-minute minimum block (`src/pricing.mjs`).
+a 30-minute minimum block by default (`src/pricing.mjs`); the operator can change both in the settings page
+(`src/settings.mjs`), and the public pages quote what is saved.
 
 Published VND anchors for a 1:1 session, read 2026-10-10:
 
@@ -172,11 +173,11 @@ Measured with `quote()` (`node -e` over `src/pricing.mjs`; whole VND, price roun
 platform day rate the research pass reported for independent consultants, because the buyer here is a
 supervisor or a plant manager paying out of a small budget, not a consultancy.
 
-Refunds and payouts are **instructions**, never movements the platform makes. A booking cancelled after
+Refunds and payouts are **instructions** the operator carries out from their own bank; the software moves no money. A booking cancelled after
 it was paid records `refund_vnd`; the operator sends the transfer from their own bank and marks it sent
 (`refunded_at`, with the bank reference in the event log). A completed session's practitioner share is
 *owed* until the operator marks the payout sent (`payout_paid_at`). The statement shows three numbers
-per practitioner: paid out, owed, in flight. The platform holds nothing, so there is nothing to reverse.
+per practitioner: paid out, owed, in flight. Where the money sits meanwhile, and what that means, is §7.2.
 
 ## 7. Vietnam constraints
 
@@ -184,25 +185,74 @@ Engineering notes, **not legal advice**; every row names who says it. Rows marke
 came from the research pass and their page did not render for a second read by me — they are
 directionally useful and must be confirmed with counsel before launch.
 
-| Constraint | What it means here | Source | Status |
-|---|---|---|---|
-| Selling services online from Vietnam brings the platform under the e-commerce regime (Law on E-Commerce, alongside its implementing decree) | Registration duties, mandatory published policies, and liability for what the platform sells | Baker McKenzie; Duane Morris; Tilleke & Gibbins; CDLAF | not re-verified |
-| Platforms may be **jointly liable** with sellers for consumer damages | The published notes are content the platform sells; the gate is also a liability control | Duane Morris | not re-verified |
-| Platforms with an online ordering + payment function must **withhold and pay tax** on behalf of sellers/individuals, and domestic operators register a **separate TIN** for it | The expert payout is a payment to an individual: withholding is the platform's job, not the expert's | Vietnam Briefing (Decree 252/2026); RSM Vietnam tax spotlight | withholding duty **verified** in the RSM document; the "earlier of payment or confirmation" trigger is not |
-| PIT withholding on payments to individuals without an employment contract: **10% once a payment reaches VND 5m** (raised from VND 2m) | A VND 5m+ payout needs a withholding path before it is paid | Baker McKenzie (Decree 253/2026, Circular 87/2026) | not re-verified |
-| Individuals/households with annual revenue ≤ **VND 500m** are outside PIT | A part-time expert may fall under this — but that is his filing, not an excuse to skip withholding | PIT Law 109/2025 (Expertis translation) | not re-verified |
-| VAT is **8%** (reduced from 10%) until 31 Dec 2026 | Pricing must not bake in 10% and quietly lose 2 points | ASL Law | not re-verified |
-| E-invoicing obligations reach foreign e-commerce suppliers and some business households | An invoice path is required once real money moves | Vietnam Briefing (Decree 70/2025) | not re-verified |
-| Payment-intermediary services (e-wallet, collection/payment support, gateway) require an SBV licence with **charter capital from VND 50bn** | Money must route **through a licensed provider or straight to the expert's account**; the platform must not hold customer funds | LuatVietnam (Decree 52/2024/ND-CP), Article 22 | not re-verified |
-| User-generated content / community features can trigger a social-network licence under Decree 147/2024 (thresholds reported as 10,000 visits or 1,000 active users per month) | The Q&A + notes surface may need a licence or at least a notification as it grows | Apolat Legal; KPMG Vietnam | not re-verified |
-| Personal data protection moved from Decree 13/2023 to **PDP Law 91/2025/QH15, effective 1 Jan 2026** | Askers and experts are data subjects; consent, storage and cross-border rules apply | Herbert Smith Freehills Kramer | not re-verified |
-| The market around it: management consulting in Vietnam ≈ **USD 2.63bn (2025) → 3.84bn (2031)**; manufacturing took **USD 22.88bn of 27.62bn** realised FDI in 2025 (82.8%) | There is a large, target-rich factory base and proven willingness to buy advice | Mordor Intelligence; Datagent citing MoF/VIR | not re-verified |
+### 7.1 Instruments reported in force
 
-**Consequence for the architecture:** the platform confirms the transfer, it does not hold the money.
-That is why `/b/:ref` produces a VietQR instruction rather than a checkout, and why the operator
-marks payment — a design decision driven by the VND 50bn licensing threshold, not by laziness.
+Every row comes from issue #45 (review of `bc2693d`, 2026-10-20; the evidence report is not in this
+repo). Nobody who has worked on this repo has read these instruments on a primary page, so **every row
+is *reported, needs counsel confirmation***, none is verified, and none is a conclusion about this
+product. The earlier version of this section cited other instruments (an irregular-income PIT rule, a
+VAT rate, e-invoicing, social-network licensing, the older data-protection decree). Issue #45 calls the
+first of those a different regime and none of the rest is confirmed, so their numbers are removed and
+the questions they raised are in 7.5.
+
+| Instrument | Reported content | What it means here | Source | Status |
+|---|---|---|---|---|
+| Decree 252/2026/ND-CP, Art. 43 (in force 1 Jul 2026) | A platform with online ordering **and** payment withholds VAT + PIT per transaction. The issue's example: 5% + 2% on a 520,000 VND session = 36,400 VND (rates as reported) | Withholding is triggered by ordering and payment both happening on the platform. The booking ladder plus VietQR (`/q/:ref/book`, `/b/:ref`) is both. Nothing in the code withholds, invoices or records a withholding today | issue #45 | reported, needs counsel confirmation |
+| Decree 52/2024 | Reported as the licensing consequence of becoming merchant of record: VND 50bn charter capital | Out of reach for this product; see shape B in 7.3 | issue #45 | reported, needs counsel confirmation |
+| Law 122/2025/QH15 + Decree 248/2026/ND-CP (1 Jul 2026; reported to replace Decrees 52/2013 and 85/2021) | Seller identity e-verification from 1 Jan 2027; seller accounts linked to VNeID; VND 20bn deposit for foreign platforms | A practitioner is a seller. Onboarding (`/admin/experts`, invitations) would need a verification step by that date. Whether the deposit applies to this operator is not known | issue #45 | reported, needs counsel confirmation |
+| Law 91/2025/QH15 + Decree 356/2025/ND-CP (1 Jan 2026) | A DPIA; a cross-border transfer impact assessment filed within 60 days of first transfer, with the transfer agreement attached; penalties up to 5% of prior-year revenue | `src/llm.mjs` posts question text and retrieved notes to the offshore gateway (`GEMBA_LLM_BASE_URL`). On the issue's reading that is a cross-border transfer. `src/gate.mjs` constrains what is **published**, not what **leaves**: egress is unguarded today | issue #45 | reported, needs counsel confirmation |
+
+### 7.2 How money moves today
+
+One bank account per instance (`GEMBA_BANK_BIN`, `GEMBA_BANK_ACCOUNT`) receives the **full price** of
+every session. `/b/:ref` shows a VietQR for that account with the booking reference; the buyer transfers;
+the operator matches the bank line and marks it received. The practitioner's share is later paid out by
+the operator (`payout_paid_at`) and a refund is sent by the operator (`refunded_at`). §6 has the
+amounts. Until the operator marks a payout sent it is recorded as owed.
+
+The earlier sentence "the platform never holds money" is **withdrawn**: the full price lands in an
+account the operator controls, and the code records what is owed from it. Whether that amounts to
+collecting money on behalf of others, and what it triggers, is a question for counsel (7.5, question 2).
+The software does no withholding, no invoicing and no tax registration.
+
+### 7.3 Three money shapes
+
+| Shape | How money moves | Consequence |
+|---|---|---|
+| **A. PSP split at source** | A licensed payment provider collects, splits the price into the practitioner's share and the platform fee, and pays each. The withholding point is the split | The platform computes VAT + PIT per transaction and keeps a withholding and invoice record per session; it needs a PSP integration. It holds nothing, so the "holds money" question does not arise. Rates and who remits are reported, to confirm |
+| **B. Merchant of record** | The platform collects, withholds and pays out itself | The issue reports this triggers Decree 52/2024 licensing at VND 50bn charter capital. Out of reach for this product |
+| **C. Drop the booking ladder** | No payment on the platform; the buyer and the practitioner settle outside it | As reported, the withholding trigger (ordering **and** payment) falls away. The product loses rung 4 of the ladder and its only revenue |
+
+**Recommendation (engineering, not legal): A.** It is what issue #45 recommends, it keeps the ladder, and
+it is the only shape that gives withholding an actual point to happen. Nothing in the code changes until
+counsel has answered 7.5.
+
+### 7.4 Data egress
+
+Before the first real question, one of two things has to exist, and neither does today: the DPIA and
+the transfer impact assessment (counsel's work), or a redaction check in front of `src/llm.mjs`. The
+second is the cheaper one to build, because the gate's block-class checks (contact, document, customer
+and person patterns) already run on text and could run on the question before it is sent. It would
+shrink what leaves, not remove the question of whether a transfer happens at all; whether it removes the
+duty is open question 6. Not built in this slice.
+
+### 7.5 Open questions for Vietnamese counsel
+
+1. Does the current flow (a booking page, a VietQR for one account, an operator who confirms) already count as online ordering **and** payment under Decree 252/2026/ND-CP?
+2. Is an operator-held account that receives the full price and later pays practitioners a payment-intermediary activity, or collection on behalf of others?
+3. Which PSP products split at source and remit withholding, and who is the withholding party in that arrangement?
+4. What is the invoice path for a session, and which instrument and VAT rate govern a consulting service sold this way?
+5. What does seller verification require of a practitioner who is an employee elsewhere, and does the VND 20bn deposit apply to a domestic operator?
+6. Does the DPIA / transfer impact assessment cover an LLM gateway that may re-route between providers, and does a redaction check in front of it change the duty?
+7. Does the Q&A and notes surface need a social-network licence or a notification, and from what size?
+8. Is there a household-revenue threshold under which a part-time practitioner is outside withholding, and does it matter to the platform's own duty?
+9. Is registration or notification with the trade authority required before the first paid session?
+
+**Consequence for the architecture:** none yet; the shape to build toward is A in 7.3, pending 7.5.
 
 ## 8. Demand — who buys factory advice in Vietnam, and what already pays for it
+
+**The market around it:** management consulting in Vietnam ≈ **USD 2.63bn (2025) → 3.84bn (2031)**; manufacturing took **USD 22.88bn of 27.62bn** realised FDI in 2025 (82.8%) — there is a large, target-rich factory base and proven willingness to buy advice (Mordor Intelligence; Datagent citing MoF/VIR; *not re-verified*).
 
 Research pass of 2026-10-10, each figure with the page it came from. The Vietnamese-language pages
 were read by that pass and **not re-read** by me, so read this section as direction to verify rather
@@ -301,8 +351,9 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
    corpus with one leak is not a prototype, it is a liability.
 3. **Zero dependencies** (`node:http`, `node:sqlite`, no build step): it has to run on a small LXC
    and be readable end to end. Instrumenting a framework buys nothing here.
-4. **Money is integers, and the platform never holds funds** (see §7).
-5. **One language at a time, and it is English.** The UI, the corpus and the model's instructions
+4. **Money is integers, and the money flow is an open question** (see §7). The buyer pays the instance's one account and the operator pays out; the software does no withholding or invoicing. The earlier claim that the platform never holds funds is withdrawn.
+5. **English, except nine places a Vietnamese supervisor reads in Vietnamese when the question was asked
+   in Vietnamese (`src/i18n.mjs`).** The corpus, the model's instructions and the rest of the UI
    are English; a raw state token (`awaiting_payment`, `blocked`) leaking into a page is a bug (there
    is a test for it). The gate's *rules* still carry the Vietnamese patterns alongside the English
    ones, because the raw notes a practitioner actually writes are Vietnamese.
@@ -376,22 +427,21 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
 
 ## 11. Open questions — decide before selling anything
 
-1. **Legal/tax shape**: MoIT registration or notification; who withholds PIT on expert payouts and
-   under which threshold; VAT treatment of a consulting service; invoice path. Needs Vietnamese
-   counsel — the rows in §7 marked *not re-verified* are the shopping list.
+1. **Legal/tax shape**: which of the three money shapes in §7.3 to build, and the questions in §7.5.
+   Needs Vietnamese counsel; nothing in §7 is settled.
 2. **Who the first expert is**, and whether his employer's policy allows paid outside advice
    (moonlighting clauses are the real blocker, not the technology).
 3. **Who owns a note once the machine answers from it** — the expert, the platform, or neither.
 4. **Accounts**: is email verification or a password reset required before a stranger's account
-   matters? Is there any PII obligation (Decree 13/2023 on personal data) once real emails and plant
+   matters? Is there any PII obligation (Law 91/2025/QH15 on personal data, §7) once real emails and plant
    names sit in the same table as questions? A sign-in rate limit is the minimum before exposure.
 5. **Does signing in change the refusal rate?** The product's best lead is a refused question; if
    accounts let us see the *same* plant asking twice, that is worth more than the count.
-4. **Marketplace or consultancy**: one vetted practitioner (simpler, defensible) versus an open
+6. **Marketplace or consultancy**: one vetted practitioner (simpler, defensible) versus an open
    expert marketplace (needs vetting, disputes, tiers).
-5. **Refusal economics**: how many refused questions convert to a paid session before the model's
+7. **Refusal economics**: how many refused questions convert to a paid session before the model's
    own answering quality starts eating the revenue it creates.
-6. **Interview capture at scale**: whether a practitioner will keep answering an AI interviewer in
+8. **Interview capture at scale**: whether a practitioner will keep answering a scripted interview in
    week six.
 
 ## 12. Roadmap (order matters)
@@ -400,7 +450,7 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
    test of the ladder that counts.
 2. Check what the state will pay for (§8): an "improvement solution" consulting contract can be half
    funded up to VND 200m a year per enterprise. Cheap to verify, and it changes who the buyer is.
-3. Withholding + invoice module for payouts (small, and it is the thing that stops you paying anyone).
+3. Withholding + invoice module for payouts — gated on the money-shape decision in §7.3, not started.
 4. Delivery of the answer where the supervisor already is (Zalo/email) instead of a page he must
    come back to.
 5. A second topic area, to see whether the corpus or the expert is the constraint.
@@ -421,10 +471,10 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
     address could only be refused) and why `/desk` sends an asker somewhere useful instead of showing
     an empty workspace.
 
-22. **Cancelling a paid session is money owed back, not a status change.** The platform instructs payment
-    and never holds it (ADR-0008), so `/admin/bookings` records `refund_vnd` and shows a *Refunds owed*
-    list: an instruction for the operator to send, never a claim that the platform reversed a transfer
-    it never made. A cancelled paid session that quietly lost its amount would become free.
+22. **Cancelling a paid session is money owed back, not a status change.** The buyer paid the instance's
+    account, so `/admin/bookings` records `refund_vnd` and shows a *Refunds owed*
+    list: an instruction for the operator to send, never a claim that the software reversed a transfer
+    it did not make. A cancelled paid session that quietly lost its amount would become free.
 23. **An error handler that can throw is a way to lose the whole server.** The request handler's outer
     catch called `fail`, which lives inside the request closure and is not in scope there — so the first
     unhandled error threw a second error while handling the first, killed the process, and left every

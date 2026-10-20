@@ -29,11 +29,11 @@ export const STRINGS = Object.freeze({
   cost_when: { vi: 'Thời gian', en: 'When' },
   cost_when_value: { vi: '{when} (giờ Việt Nam, UTC+7)', en: '{when} (Vietnam time, UTC+7)' },
   cost_total: { vi: 'Tổng cộng', en: 'Total' },
-  cost_fee: { vi: 'Phí nền tảng (20%)', en: 'Platform fee (20%)' },
+  cost_fee: { vi: 'Phí nền tảng', en: 'Platform fee' },
   cost_payout: { vi: 'Chuyên gia nhận', en: 'Paid to the practitioner' },
   cost_hint: {
-    vi: 'Chỉ tính bằng đồng, không có số lẻ. Nền tảng hướng dẫn thanh toán nhưng không giữ tiền của bạn.',
-    en: 'Whole VND only, and the platform instructs the payment — it never holds the money.'
+    vi: 'Chỉ tính bằng đồng, không có số lẻ. Bạn chuyển toàn bộ số tiền vào tài khoản của đơn vị vận hành, kèm mã đặt lịch; đơn vị vận hành xác nhận khi nhận được.',
+    en: 'Whole VND only. You transfer the full price to the operator\'s account with the booking reference; the operator confirms it when it arrives.'
   },
   // 4. how to pay
   pay_heading: { vi: 'Cách thanh toán', en: 'How to pay' },
@@ -52,6 +52,10 @@ export const STRINGS = Object.freeze({
   routed_notice: {
     vi: 'Đã gửi tới {n} chuyên gia phụ trách chủ đề này ({names}). Câu trả lời sẽ hiện ngay trên trang này.',
     en: 'Sent to {n} practitioner{s} covering this topic ({names}). The answer will appear on this page.'
+  },
+  nobody_notice: {
+    vi: 'Hiện chưa có chuyên gia nào nhận câu hỏi mới về chủ đề này; bạn vẫn có thể đặt một buổi tư vấn có phí ở bên dưới.',
+    en: 'No practitioner is taking new questions on this topic right now; a paid session is still available below.'
   },
   // 6. the ask box
   ask_heading: { vi: 'Câu hỏi của bạn về sản xuất', en: 'Your question about production' },

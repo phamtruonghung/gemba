@@ -28,8 +28,9 @@ test('gate: a craft note with no employer facts is clean', () => {
   assert.equal(report.verdict, 'clean');
 });
 
-test('gate: the employer name is blocked', () => {
-  const report = checkNote({ title: 'Note', body: `${CRAFT}\nThe RELATS procedure says to do the opposite.` });
+test('gate: a deployment\'s employer name is blocked', () => {
+  const rules = loadRules({ block_terms: ['acme-fab'] });
+  const report = checkNote({ title: 'Note', body: `${CRAFT}\nThe ACME-FAB procedure says to do the opposite.` }, rules);
   assert.equal(report.ok, false);
   assert.equal(report.verdict, 'blocked');
   assert.ok(report.findings.some((f) => f.rule === 'block_term' && f.severity === 'block'));

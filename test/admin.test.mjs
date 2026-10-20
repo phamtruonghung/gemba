@@ -193,6 +193,36 @@ test('settings refuse a value that is not an integer even through the form', asy
   assert.equal(loadSettings(app.db).platform_take_rate, 42);
 });
 
+test('public pages quote the fee and the minimum the operator saved, not 20% and 30 minutes', async () => {
+  const { cookie } = await signInAsOperator();
+  const was = loadSettings(app.db);
+  const save = (take, min) => post('/admin/settings', { platform_take_rate: String(take), min_minutes: String(min), default_minutes: String(was.default_minutes), default_rate_vnd: String(was.default_rate_vnd) }, cookie);
+  try {
+    assert.equal((await save(25, 40)).status, 303);
+    const asked = await (await fetch(`${base}/api/ask`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ question: 'rules for seasonal labour contracts outside the plant' })
+    })).json();
+    const pages = {
+      '/': await (await fetch(`${base}/`)).text(),
+      '/how-it-works': await (await fetch(`${base}/how-it-works`)).text(),
+      '/experts': await (await fetch(`${base}/experts`)).text(),
+      [`/q/${asked.ref}`]: await (await fetch(`${base}/q/${asked.ref}`)).text()
+    };
+    assert.match(pages['/'], /25% platform fee/);
+    assert.match(pages['/'], /40-minute minimum/);
+    assert.match(pages['/how-it-works'], /40-minute minimum/);
+    assert.match(pages['/experts'], /25% platform fee/);
+    assert.match(pages['/experts'], /minimum 40 minutes/);
+    assert.match(pages[`/q/${asked.ref}`], /platform fee is 25%/);
+    for (const [path, html] of Object.entries(pages)) {
+      assert.doesNotMatch(html, /20% platform|30-minute|30 min minimum|minimum 30 minutes|platform fee is 20%/, `${path} still quotes the old defaults`);
+    }
+  } finally {
+    await save(was.platform_take_rate, was.min_minutes);
+  }
+});
+
 test('the gate protects anonymous visitors, and steps aside for a session', async () => {
   // The whole point of the shared password is the anonymous surface. Once someone has an account, a
   // password every expert also has to hold is the weakest link in the chain — so a request carrying a

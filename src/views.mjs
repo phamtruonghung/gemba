@@ -718,7 +718,10 @@ ${error ? `<p class="field-error" id="${id}-err">${icon('warn')} ${esc(error)}</
 </div>`;
 }
 
-function expertCard(e, { compact = false } = {}) {
+/** The fee and the minimum the operator has set (src/settings.mjs), falling back to the code defaults. */
+const termsOf = (pricing = {}) => ({ pct: pricing.takePct ?? PLATFORM_TAKE_PCT, min: pricing.minMinutes ?? MIN_MINUTES });
+
+function expertCard(e, { compact = false, pricing = {} } = {}) {
   // The band cards are narrow. Two chips wrapped to a second line on the cards whose labels were
   // long, so one card in the row carried an extra line and its button sat lower than its neighbours'.
   // In the narrow context a card shows one topic plus a count — a chip row that cannot wrap is a row
@@ -736,7 +739,7 @@ function expertCard(e, { compact = false } = {}) {
   </div>
   <p class="stack-sm" style="margin:0">${chips}</p>
   <p class="small muted" style="margin:0">${e.years ? `${esc(e.years)} years on the line` : 'Practitioner'}</p>
-  <p style="margin:0"><strong>${formatVnd(e.rate_vnd)}</strong> <span class="small muted">an hour · minimum ${MIN_MINUTES} minutes</span></p>
+  <p style="margin:0"><strong>${formatVnd(e.rate_vnd)}</strong> <span class="small muted">an hour · minimum ${termsOf(pricing).min} minutes</span></p>
   <p class="push"><a class="btn alt sm" href="/experts#${esc(e.slug)}">${icon('people')}Book a 1:1 session</a></p>
 </article>`;
 }
@@ -801,11 +804,12 @@ function refusalPanel({ heading, missing = '', escalation = '' }) {
 
 // --- pages -----------------------------------------------------------------
 
-export function home({ stats, experts, notes, user = null, place = null }) {
+export function home({ stats, experts, notes, user = null, place = null, pricing = {} }) {
+  const terms = termsOf(pricing);
   const chips = topicList()
     .map(([slug, label]) => `<a class="badge" href="/library?topic=${encodeURIComponent(slug)}">${esc(label)}</a>`)
     .join('');
-  const expertCards = experts.slice(0, 3).map((e) => expertCard(e, { compact: true })).join('');
+  const expertCards = experts.slice(0, 3).map((e) => expertCard(e, { compact: true, pricing })).join('');
   const noteCards = notes.slice(0, 3).map(noteCard).join('');
   return layout({
     title: 'Ask someone who has run the line',
@@ -911,19 +915,19 @@ export function home({ stats, experts, notes, user = null, place = null }) {
       <div>
         <p class="eyebrow">What a practitioner is paid</p>
         <h2>Your time is worth ${formatVnd(600000).replace('\u00a0₫', '')}–${formatVnd(800000)} an hour</h2>
-        <p class="lead">A session is priced in whole VND at the practitioner's own rate, with a 30-minute minimum, split into a 20% platform fee and the rest paid out to them. The platform instructs the payment and never holds the money.</p>
+        <p class="lead">A session is priced in whole VND at the practitioner's own rate, with a ${terms.min}-minute minimum, split into a ${terms.pct}% platform fee and the rest paid out to them. The buyer transfers the full price to the operator's bank account with the booking reference; the operator confirms it and pays the practitioner's share.</p>
         <ul class="prose">
           <li><strong>A fixed, published rate.</strong> No bidding, no haggling, no surprise at the end of the call.</li>
           <li><strong>Transfer, not escrow.</strong> The booking page shows the amount and a transfer code; the operator matches the bank line before anything is scheduled.</li>
-          <li><strong>Withheld where the law says so.</strong> The platform is the withholding party on a payout — it is not a payment intermediary, and it holds no customer funds.</li>
+          <li><strong>Tax withholding and invoicing are not built yet.</strong> This software does not withhold tax or issue invoices today; the operator handles both outside it.</li>
         </ul>
         <p><a class="btn alt" href="/experts">See the rates ${icon('arrow')}</a></p>
       </div>
       <div class="mock">
         <span class="float tl"><span class="eyebrow" style="margin:0">One hour at the rate</span><span class="n">${formatVnd(800000)}</span></span>
-        <span class="float br"><span class="eyebrow" style="margin:0">Paid to the practitioner</span><span class="n">${formatVnd(640000)}</span></span>
+        <span class="float br"><span class="eyebrow" style="margin:0">Paid to the practitioner</span><span class="n">${formatVnd(quote(800000, 60, terms.pct, terms.min).payout_vnd)}</span></span>
         <div class="mock-card">
-          <p class="row tight-gap" style="margin:0 0 var(--space-2)"><span class="badge tag">Booking</span><span class="badge">30 min minimum</span></p>
+          <p class="row tight-gap" style="margin:0 0 var(--space-2)"><span class="badge tag">Booking</span><span class="badge">${terms.min} min minimum</span></p>
           <h4>1:1 session — Hung</h4>
           <p class="small muted">Production supervisor, 20 years on assembly lines. The agenda is in your own words; the practitioner answers in writing and on the call.</p>
           <p class="small mono" style="margin:0">Transfer code · B-2026…</p>
@@ -1097,7 +1101,7 @@ export function modeLabel(mode) {
   return { label: 'answered from the library', badge: 'quoted from notes', ok: false };
 }
 
-export function questionPage({ q, aiCitations, answers, experts, routedNames = [], bankConfigured, user = null, claimed = false, url = '', text = 'normal', pricing = {} }) {
+export function questionPage({ q, aiCitations, answers, experts, routedNames = [], bankConfigured, user = null, claimed = false, nobody = false, url = '', text = 'normal', pricing = {} }) {
   // The stored contact (a phone number, an email) is the asker's. A page that can be shared by link
   // must not hand it to whoever holds the link, so it is prefilled only for the owner; anyone else
   // gets their own signed-in email, or an empty field.
@@ -1105,6 +1109,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
   const cov = q.ai_coverage === 'thin';
   // The page speaks the language the question was asked in; the strings that decide trust come from src/i18n.mjs.
   const lang = q.lang === 'vi' ? 'vi' : 'en';
+  const terms = termsOf(pricing);
   const L = (key, vars) => esc(t(key, lang, vars));
   const cites = aiCitations
     .map(
@@ -1192,10 +1197,11 @@ ${answerBlocks}
       ? `You can send it to other practitioners now, or book a paid 1:1 session below.</div></div>
     <form method="post" action="/q/${esc(q.ref)}/reroute" class="actionbar"><button class="btn" type="submit">${icon('people')}Send it to other practitioners</button></form>`
       : 'The person who asked can send it on to others.</div></div>'}` : ''}
+    ${nobody ? `<div class="notice warn" role="status">${icon('people')} ${L('nobody_notice')}</div>` : ''}
     ${q.status === 'routed' ? `<div class="notice warn">${icon('people')} ${L('routed_notice', { n: routedNames.length || 1, s: (routedNames.length || 1) === 1 ? '' : 's', names: routedNames.join(', ') || (lang === 'vi' ? 'chuyên gia trực' : 'the practitioner on duty') })}</div>` : ''}
     <div class="card" id="book">
       <h2 style="font-size:24px">Book a 1:1 session</h2>
-      <p class="muted small">An online session, paid by bank transfer. The platform keeps 20% and instructs the payment; it never holds the money.</p>
+      <p class="muted small">An online session, paid by bank transfer to the operator's account. The platform fee is ${terms.pct}%; the operator confirms the transfer and pays the practitioner's share.</p>
       ${experts.length
       ? `<form method="post" action="/q/${esc(q.ref)}/book">
     <div class="form-row two">
@@ -1415,7 +1421,8 @@ export function notePage({ note, expert, user = null, links = null, highlight = 
   });
 }
 
-export function howItWorksPage({ user = null } = {}) {
+export function howItWorksPage({ user = null, pricing = {} } = {}) {
+  const terms = termsOf(pricing);
   return layout({
     title: 'How this platform works',
     user,
@@ -1487,8 +1494,8 @@ export function howItWorksPage({ user = null } = {}) {
     <p class="eyebrow">Being a practitioner here</p>
     <h2>Your knowledge stays yours</h2>
     <div class="cols three" style="margin-top:var(--space-5)">
-      <div><h3>Talk, do not write</h3><p class="muted small">An AI-moderated interview turns what you say about a problem into a draft note. You edit it, and nothing is published without you.</p></div>
-      <div><h3>Paid at your rate</h3><p class="muted small">A published hourly rate in whole VND, a 30-minute minimum, and a written answer you can point to later.</p></div>
+      <div><h3>Talk, do not write</h3><p class="muted small">A short scripted interview turns what you say about a problem into a draft note. You edit it, attest it, and nothing is published without you.</p></div>
+      <div><h3>Paid at your rate</h3><p class="muted small">A published hourly rate in whole VND, a ${terms.min}-minute minimum, and a written answer you can point to later.</p></div>
       <div><h3>No employer data</h3><p class="muted small">The gate exists to make outside advice safe to give: what you publish is your craft, not your plant.</p></div>
     </div>
   </div>
@@ -1521,7 +1528,7 @@ export function expertListPage({ experts, topics, user = null, pricing = {} }) {
       <div><h3 style="margin:0">${esc(e.name)}</h3><p class="small muted" style="margin:0">${esc(e.headline)}</p></div>
     </div>
     <p class="stack-sm" style="margin:0">${topicSlugs(e.topics).map((t) => `<span class="badge">${esc(topicLabel(t))}</span>`).join(' ')}</p>
-    <p style="margin:0">${e.years ? `<strong>${esc(e.years)} years</strong> on the line · ` : ''}<strong>${formatVnd(e.rate_vnd)}</strong> <span class="small muted">an hour, minimum ${MIN_MINUTES} minutes</span></p>
+    <p style="margin:0">${e.years ? `<strong>${esc(e.years)} years</strong> on the line · ` : ''}<strong>${formatVnd(e.rate_vnd)}</strong> <span class="small muted">an hour, minimum ${termsOf(pricing).min} minutes</span></p>
     ${e.bio ? `<p class="small muted" style="margin:0">${esc(e.bio)}</p>` : ''}
     <form method="post" action="/book">
       <input type="hidden" name="expert" value="${esc(e.slug)}">
@@ -1563,13 +1570,13 @@ export function expertListPage({ experts, topics, user = null, pricing = {} }) {
     <div class="split">
       <div>
         <p class="eyebrow">Practitioners</p>
-        <h2>Answering pays, and the platform never holds your money</h2>
-        <p class="lead">Your rate is published. A session splits into a 20% platform fee and your payout, and the money moves by bank transfer with the booking reference in the note — the platform instructs it and never holds it, which is also why it needs no payment licence.</p>
+        <h2>Answering pays, at the rate you publish</h2>
+        <p class="lead">Your rate is published. A session splits into a ${termsOf(pricing).pct}% platform fee and your payout. The buyer transfers the full price to the operator's bank account with the booking reference in the note; the operator confirms it and pays you your share.</p>
         <p><a class="link-cta" href="/c/demo-hung-7f3a91">Open a practitioner desk (sample) ${icon('arrow')}</a></p>
       </div>
       <div class="card" style="margin:0">
         <h3>Write, or be interviewed</h3>
-        <p class="muted small">A note you submit passes the publishability gate before anyone reads it. If writing is not your thing, an AI-moderated interview turns a conversation into a draft you edit.</p>
+        <p class="muted small">A note you submit passes the publishability gate before anyone reads it. If writing is not your thing, a short scripted interview turns a conversation into a draft you edit.</p>
         <p class="muted small" style="margin:0">Employer-owned information — order numbers, part codes, prices, output figures, names — is blocked by the gate, not by trust.</p>
       </div>
     </div>
@@ -2222,7 +2229,7 @@ export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue =
 </div></section>
 ${refunds.length ? `<section class="tight"><div class="wrap">
   <h2>Refunds owed</h2>
-  <p class="muted">Sessions cancelled after the client paid. The platform instructs payment and never holds it, so these are instructions to send back — not money waiting here.</p>
+  <p class="muted">Sessions cancelled after the client paid. The full price was transferred to the operator's account, so these are amounts the operator sends back.</p>
   <div class="table-wrap"><table><thead><tr><th>Ref</th><th>Practitioner</th><th>Client</th><th>Amount</th><th>Reason</th><th></th></tr></thead><tbody>${refundRows}</tbody></table></div>
 </div></section>` : ''}
 <section class="tight"><div class="wrap">
@@ -2516,7 +2523,7 @@ export const LEGAL_PAGES = {
 <h2>3. Câu hỏi miễn phí và buổi tư vấn có phí</h2>
 <p>Hỏi thư viện và gửi câu hỏi tới chuyên gia là miễn phí; chuyên gia được mong đợi trả lời trong vòng 48 giờ. Nếu quá hạn, chúng tôi báo cho bạn và cho phép gửi lại tới chuyên gia khác. Buổi tư vấn 1:1 được tính phí theo mức giá của chuyên gia, hiển thị đầy đủ trước khi bạn chuyển tiền.</p>
 <h2>4. Thanh toán</h2>
-<p>Thanh toán bằng chuyển khoản ngân hàng theo hướng dẫn trên trang đặt lịch. Nền tảng chỉ hướng dẫn thanh toán và không giữ tiền của bạn. Một buổi chỉ được coi là đã thanh toán khi người vận hành đối chiếu sao kê ngân hàng.</p>
+<p>Thanh toán bằng chuyển khoản ngân hàng theo hướng dẫn trên trang đặt lịch. Bạn chuyển toàn bộ số tiền vào tài khoản ngân hàng của đơn vị vận hành, kèm mã đặt lịch. Một buổi chỉ được coi là đã thanh toán khi người vận hành đối chiếu sao kê ngân hàng.</p>
 <h2>5. Hoàn tiền</h2>
 <p>Nếu một buổi bị hủy sau khi bạn đã thanh toán, nền tảng ghi nhận số tiền phải hoàn và người vận hành chuyển lại cho bạn, rồi đánh dấu đã gửi. Buổi bị chuyên gia từ chối trước khi thanh toán thì không phát sinh khoản nào. [THỜI HẠN HOÀN TIỀN — luật sư xác nhận]</p>
 <h2>6. Nội dung do chuyên gia viết</h2>
