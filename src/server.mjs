@@ -127,6 +127,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       ai_citations: ai.citations,
       ai_coverage: ai.coverage,
       ai_mode: ai.mode,
+      ai_missing: ai.missing,
       user_id
     });
     dbm.logEvent(db, 'ask', q.ref, `coverage=${ai.coverage} mode=${ai.mode} hits=${hits.length}`);
@@ -288,6 +289,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         }),
         coverage: out.question.ai_coverage,
         mode: out.question.ai_mode,
+        missing: out.question.ai_missing,
         hits: out.hits.map((h) => ({ slug: h.note.slug, title: h.note.title, score: h.score })),
         why: out.cov.why
       });

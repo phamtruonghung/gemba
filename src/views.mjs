@@ -56,7 +56,14 @@ const QUESTION_STATUS = { open: 'answered from the library', routed: 'sent to a 
 const BOOKING_STATUS = { requested: 'waiting for transfer instructions', awaiting_payment: 'you reported the transfer — being checked', paid: 'payment received', completed: 'session completed', cancelled: 'cancelled' };
 const NOTE_STATUS = { published: 'published in the library', blocked: 'blocked by the gate', draft: 'draft' };
 
-export const questionStatus = (s) => QUESTION_STATUS[s] ?? s;
+// `open` covers both an answer and a refusal; only the coverage says which, so a refusal never claims an answer.
+export const questionStatus = (s, coverage = 'ok') => (s === 'open' && coverage === 'thin' ? 'refused — the library had nothing for this' : QUESTION_STATUS[s] ?? s);
+
+// What the page may say about a refusal: the model's own reason, with the marker stripped, or a plain fixed sentence.
+export function missingReason(q) {
+  const reason = String(q.ai_missing ?? '').replace(/INSUFFICIENT_DATA/g, '').trim();
+  return reason || 'No note in the library answers this question closely enough to cite.';
+}
 export const bookingStatus = (s) => BOOKING_STATUS[s] ?? s;
 export const noteStatus = (s) => NOTE_STATUS[s] ?? s;
 
@@ -739,7 +746,7 @@ function noteCard(n) {
 // and the way forward. It is an answer, not a failure, and not the brand's own accent.
 function refusalPanel({ heading, missing = '', escalation = '' }) {
   return `<div class="refusal">
-  <p style="margin:0"><span class="tag">${icon('scale')}INSUFFICIENT_DATA</span></p>
+  <p style="margin:0"><span class="tag">${icon('scale')}Refused</span></p>
   <h2 style="font-size:clamp(20px,2.4vw,26px)">${esc(heading)}</h2>
   ${missing ? `<p class="muted">${esc(missing)}</p>` : ''}
   <p class="small muted" style="margin-bottom:0">Nothing here is guessed. A note written by someone who has run the line is what makes an answer; until one covers this question, the honest answer is that we do not know.</p>
@@ -760,7 +767,7 @@ export function home({ stats, experts, notes, questions, user = null, place = nu
     .map(
       (q) => `<li><a href="/q/${esc(q.ref)}">${esc(q.text.slice(0, 90))}${q.text.length > 90 ? '…' : ''}</a>
       <div class="stack-sm"><span class="badge ${q.ai_coverage === 'thin' ? 'warn' : 'ok'}">${q.ai_coverage === 'thin' ? 'the library could not cover it' : 'answered from the library'}</span>
-      <span class="muted small">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status))}</span></div></li>`
+      <span class="muted small">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status, q.ai_coverage))}</span></div></li>`
     )
     .join('');
   return layout({
@@ -795,7 +802,7 @@ export function home({ stats, experts, notes, questions, user = null, place = nu
       <div>
         <p style="margin:0 0 var(--space-3)"><span class="badge tag">Refuses</span></p>
         <h3>An answer, or an honest no</h3>
-        <p class="muted small">Every answer is built from published notes and names them. When the corpus does not cover a question, the answer is <span class="mono">INSUFFICIENT_DATA</span> — never a plausible guess.</p>
+        <p class="muted small">Every answer is built from published notes and names them. When the corpus does not cover a question, the answer is a refusal that says what is missing — never a plausible guess.</p>
       </div>
       <div>
         <p style="margin:0 0 var(--space-3)"><span class="badge tag">Cites</span></p>
@@ -896,7 +903,7 @@ export function home({ stats, experts, notes, questions, user = null, place = nu
     <div class="cols three" style="margin-top:var(--space-5)">
       <div class="card" style="margin:0"><p style="margin:0 0 var(--space-3)"><span class="badge tag">Covered</span></p><p>“A machine stops mid-shift and the line is down. The order you check in matters more than the speed you check at.”</p><p class="small muted" style="margin:0">From a published note on machine stops and escalation.</p></div>
       <div class="card" style="margin:0"><p style="margin:0 0 var(--space-3)"><span class="badge tag">Covered</span></p><p>“OEE has three parts. Used as one number it hides which of them you actually lost.”</p><p class="small muted" style="margin:0">From a published note on measuring equipment effectiveness.</p></div>
-      <div class="card" style="margin:0"><p style="margin:0 0 var(--space-3)"><span class="badge tag">Refused</span></p><p class="mono" style="margin:0">INSUFFICIENT_DATA</p><p class="small muted" style="margin:0">“The passages cover TPM, machine-stop escalation and Hoshin Kanri; none address office recruitment or salary policy.”</p><p class="small muted" style="margin:0">Nothing is guessed — the question is offered to a practitioner instead.</p></div>
+      <div class="card" style="margin:0"><p style="margin:0 0 var(--space-3)"><span class="badge tag">Refused</span></p><p class="small muted" style="margin:0">“The passages cover TPM, machine-stop escalation and Hoshin Kanri; none address office recruitment or salary policy.”</p><p class="small muted" style="margin:0">Nothing is guessed — the question is offered to a practitioner instead.</p></div>
     </div>
   </div>
 </section>
@@ -1004,7 +1011,7 @@ export function accountPage({ user, questions = [], bookings = [], sessions = 0,
       <a href="/q/${esc(q.ref)}">${esc(q.text.slice(0, 92))}${q.text.length > 92 ? '…' : ''}</a>
       <div class="stack-sm">
         <span class="badge ${q.ai_coverage === 'thin' ? 'warn' : 'ok'}">${q.ai_coverage === 'thin' ? 'the library could not cover it' : 'answered from the library'}</span>
-        <span class="small muted">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status))} · ${esc((q.created_at ?? '').slice(0, 10))}</span>
+        <span class="small muted">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status, q.ai_coverage))} · ${esc((q.created_at ?? '').slice(0, 10))}</span>
       </div>
       <div class="small muted">Ref ${esc(q.ref)}</div></li>`
     )
@@ -1080,7 +1087,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
     body: `
 <section class="page-head">
   <div class="wrap narrow">
-    <p class="eyebrow">Question ${esc(q.ref)} ${icon('chevron')} ${esc(questionStatus(q.status))}</p>
+    <p class="eyebrow">Question ${esc(q.ref)} ${icon('chevron')} ${esc(questionStatus(q.status, q.ai_coverage))}</p>
     <h1 style="font-size:clamp(28px,3.6vw,44px)">${esc(q.text)}</h1>
     <p class="row muted tight-gap">
       <span class="badge">${esc(topicLabel(q.topic))}</span>
@@ -1097,7 +1104,7 @@ ${keepBanner}
 ${cov
       ? refusalPanel({
           heading: 'The library cannot cover this one yet',
-          missing: q.ai_answer || 'No note in the library answers this question closely enough to cite.',
+          missing: missingReason(q),
           escalation: `<form method="post" action="/q/${esc(q.ref)}/ask-expert" style="margin-top:var(--space-4)">
   <div class="field">
     <label for="asker">Your name</label>
@@ -1316,7 +1323,7 @@ export function howItWorksPage({ user = null } = {}) {
       <ul class="prose">
         <li><strong>Ask.</strong> The question is matched against the published corpus by a small keyword index, weighted so the distinctive terms decide coverage rather than the common ones.</li>
         <li><strong>Answer, with citations.</strong> When the corpus covers the question the answer is written from those notes only, and every point names the note it came from.</li>
-        <li><strong>Refuse.</strong> When it does not cover the question the answer is <span class="mono">INSUFFICIENT_DATA</span>, with the reason: what the closest passages cover and what was missing.</li>
+        <li><strong>Refuse.</strong> When it does not cover the question the answer is a refusal, with the reason: what the closest passages cover and what was missing.</li>
         <li><strong>Escalate.</strong> A refused question can go to a practitioner for a written answer, or be booked as a paid 1:1 session.</li>
       </ul>
     </div>
@@ -2118,7 +2125,7 @@ export function adminPage({ token, stats, pendingBookings, blockedNotes, openQue
   const qRows = openQuestions
     .map(
       (q) => `<li><a href="/q/${esc(q.ref)}">${esc(q.text.slice(0, 80))}</a>
-      <div class="stack-sm"><span class="badge">${esc(questionStatus(q.status))}</span>
+      <div class="stack-sm"><span class="badge">${esc(questionStatus(q.status, q.ai_coverage))}</span>
       <span class="muted small">${esc(topicLabel(q.topic))}${q.due_at ? ` · due ${esc(q.due_at.slice(0, 10))}` : ''}</span></div></li>`
     )
     .join('');

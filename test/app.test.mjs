@@ -260,7 +260,9 @@ test('the home page states the ladder and the demo status plainly', async () => 
   assert.match(html, /Prototype/);
   const how = await (await fetch(`${base}/how-it-works`)).text();
   assert.match(how, /The gate/);
-  assert.match(how, /INSUFFICIENT_DATA/);
+  // The refusal is explained in words; the machine marker stays out of the page.
+  assert.match(how, /refusal/);
+  assert.doesNotMatch(how, /INSUFFICIENT_DATA/);
 });
 
 test('no raw state token reaches a page', async () => {

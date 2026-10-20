@@ -98,7 +98,8 @@ export async function askFromCorpus({ question, hits, plantType = '', coverageVe
       coverage: thin ? 'thin' : 'ok',
       mode: cfg.enabled ? 'llm-unusable-fallback' : 'extractive',
       model: '',
-      missing: thin ? coverageVerdict?.why ?? '' : ''
+      // The retrieval score is machinery, not a reason a person can use; it stays in `why`.
+      missing: ''
     };
   };
 
