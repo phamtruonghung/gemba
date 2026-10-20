@@ -17,11 +17,15 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The floor the code claims (node:sqlite arrives in 22.13) and whatever 22 is today.
+        node: ['22.13.0', '22']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node }}
       - run: node --version
       - name: Unit and end-to-end tests (node:test, no dependencies)
         run: node --test test/*.test.mjs

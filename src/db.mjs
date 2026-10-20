@@ -2,6 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 export const SCHEMA = `
 create table if not exists experts (
@@ -145,7 +146,12 @@ create index if not exists idx_bookings_status on bookings(status);
 export function openDb(path = 'data/gemba.db') {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
+  // busy_timeout first: switching the journal mode takes a lock of its own, and a second process (the
+  // seeder, a backup, a script) holding the file would otherwise fail every statement with
+  // "database is locked" at once. It waits up to 5 s on a single thread; the 503 mapping catches the rest.
+  db.exec('pragma busy_timeout = 5000;');
   db.exec('pragma journal_mode = wal;');
+  db.exec('pragma synchronous = normal;'); // safe under WAL, and one fsync fewer per commit
   db.exec('pragma foreign_keys = on;');
   db.exec(SCHEMA);
   migrate(db);
@@ -166,7 +172,11 @@ export function migrate(db) {
   // Accounts: a question or a booking can belong to a signed-in person. Nullable on purpose —
   // everything asked before accounts existed stays valid and keeps its display name.
   addColumn('questions', 'user_id', 'user_id integer references users(id)');
+  // The CSRF token a session's forms carry. '' on rows that predate it; csrfFor() fills them on first use.
+  addColumn('sessions', 'csrf', "csrf text not null default ''");
   addColumn('questions', 'ai_missing', "ai_missing text not null default ''");
+  // sha256 of the one-time claim a guest's browser holds; '' once claimed, and for questions asked before it existed.
+  addColumn('questions', 'claim_hash', "claim_hash text not null default ''");
   addColumn('bookings', 'user_id', 'user_id integer references users(id)');
   // Roles arrived after accounts did: everyone who signed up before this was an asker, and that is
   // exactly what the default says. A locked account keeps its history; it just cannot sign in.
@@ -190,6 +200,19 @@ export function migrate(db) {
   } catch (err) {
     console.warn(`bookings: open-slot index not built (${err.message}); the booking check still holds`);
   }
+  // Indexes last. Some of these are on columns migrate() has just added, so on an existing database they
+  // cannot live in SCHEMA, which runs before any column exists.
+  for (const ddl of [
+    'create index if not exists idx_answers_question on answers(question_id)',
+    'create index if not exists idx_bookings_expert on bookings(expert_id, starts_at)',
+    'create index if not exists idx_bookings_user on bookings(user_id)',
+    'create index if not exists idx_bookings_starts on bookings(starts_at)',
+    'create index if not exists idx_sessions_user on sessions(user_id)',
+    'create index if not exists idx_notes_expert on notes(expert_id)',
+    'create index if not exists idx_events_kind on events(kind, id)',
+    'create index if not exists idx_questions_expert on questions(expert_id)',
+    'create index if not exists idx_questions_user on questions(user_id)'
+  ]) db.exec(ddl);
   return db;
 }
 
@@ -197,13 +220,25 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
-let refSeq = 0;
+// Uppercase Crockford base32 (no I, L, O, U): a ref is printed on pages, typed into a bank transfer memo
+// (which banks upper-case and strip), and read aloud. 16 characters from 10 random bytes is 80 bits, so a
+// stranger cannot walk the space; the old date-stamped ref had about 10 bits of entropy a day.
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 export function makeRef(prefix) {
-  refSeq += 1;
-  const d = new Date();
-  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-  const rand = Math.random().toString(36).slice(2, 5).toUpperCase();
-  return `${prefix}-${stamp}-${rand}${refSeq}`;
+  const bytes = randomBytes(10);
+  let bits = 0;
+  let acc = 0;
+  let out = '';
+  for (const byte of bytes) {
+    acc = (acc << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += CROCKFORD[(acc >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+    acc &= (1 << bits) - 1;
+  }
+  return `${prefix}-${out}`;
 }
 
 const txDepth = new WeakMap();
@@ -493,14 +528,30 @@ export function expertStatement(db, expertId) {
 }
 
 export function createSession(db, { id, userId, expiresAt, userAgent = '' }) {
-  db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent) values (?, ?, ?, ?, ?)').run(
+  db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent, csrf) values (?, ?, ?, ?, ?, ?)').run(
     id,
     userId,
     nowIso(),
     expiresAt,
-    String(userAgent).slice(0, 200)
+    String(userAgent).slice(0, 200),
+    randomBytes(24).toString('base64url')
   );
   return id;
+}
+
+/** The CSRF token for a session, minted on first use for a row that predates the column. '' for no session. */
+export function csrfFor(db, sessionId) {
+  if (!sessionId) return '';
+  const row = db.prepare('select csrf from sessions where id = ?').get(String(sessionId));
+  if (!row) return '';
+  if (row.csrf) return row.csrf;
+  const token = randomBytes(24).toString('base64url');
+  db.prepare('update sessions set csrf = ? where id = ?').run(token, String(sessionId));
+  return token;
+}
+
+export function setPasswordHash(db, userId, hash) {
+  return db.prepare('update users set password_hash = ? where id = ?').run(hash, userId).changes;
 }
 
 /** The user behind a session id, or null. Expired rows are deleted on sight, so the table cannot
@@ -545,13 +596,13 @@ export function bookingsForUser(db, userId, limit = 50) {
 
 /**
  * Attach an already-asked question to the account that just signed in. Only an unclaimed question
- * is claimed, and only by the person holding its ref — a ref is a random 3-character suffix on top
- * of the date, but "who owns this row" is not something to decide optimistically.
+ * is claimed. This function does not decide *whether the caller may*: the route proves ownership (the
+ * guest's claim cookie, or a contact that is the account's email) before it calls here.
  */
 export function claimQuestion(db, ref, userId) {
   const q = questionByRef(db, ref);
   if (!q || q.user_id) return null;
-  db.prepare('update questions set user_id = ? where id = ?').run(userId, q.id);
+  db.prepare("update questions set user_id = ?, claim_hash = '' where id = ?").run(userId, q.id);
   return questionByRef(db, ref);
 }
 
@@ -759,6 +810,17 @@ export function publishedNotes(db) {
   return db.prepare(`select * from notes where status = 'published' order by id`).all();
 }
 
+export const LIBRARY_PAGE_SIZE = 50;
+
+/** One page of the library, with the topic filter in the query rather than applied to every note. */
+export function publishedNotesPage(db, { topic = '', limit = LIBRARY_PAGE_SIZE, offset = 0 } = {}) {
+  const where = topic ? `status = 'published' and topic = ?` : `status = 'published'`;
+  const args = topic ? [topic] : [];
+  const total = db.prepare(`select count(*) n from notes where ${where}`).get(...args).n;
+  const notes = db.prepare(`select * from notes where ${where} order by id limit ? offset ?`).all(...args, limit, offset);
+  return { notes, total };
+}
+
 export function noteBySlug(db, slug) {
   return db.prepare('select * from notes where slug = ?').get(slug);
 }
@@ -772,9 +834,9 @@ export function notesForExpert(db, expertId) {
 export function insertQuestion(db, q) {
   const ref = q.ref ?? makeRef('X');
   db.prepare(
-    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, ai_missing, status, user_id, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`
-  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.ai_missing ?? '', q.user_id ?? null, nowIso());
+    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, ai_missing, status, user_id, claim_hash, created_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
+  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.ai_missing ?? '', q.user_id ?? null, q.claim_hash ?? '', nowIso());
   return questionByRef(db, ref);
 }
 
@@ -796,9 +858,22 @@ export function routeQuestion(db, ref, expertIds, dueAt) {
  */
 export function openQuestionsFor(db, expert) {
   const topics = Array.isArray(expert.topics) ? expert.topics : JSON.parse(expert.topics || '[]');
-  const rows = db.prepare(`select * from questions where status = 'routed' order by routed_at`).all();
-  const answered = new Set(db.prepare('select distinct question_id from answers').all().map((r) => r.question_id));
-  return rows.filter((q) => (topics.includes(q.topic) || (expert.id != null && q.expert_id === expert.id)) && !answered.has(q.id));
+  return db
+    .prepare(
+      `select q.* from questions q
+       where q.status = 'routed'
+         and (q.topic in (select value from json_each(?)) or q.expert_id = ?)
+         and not exists (select 1 from answers a where a.question_id = q.id)
+       order by q.routed_at`
+    )
+    .all(JSON.stringify(topics), expert.id ?? null);
+}
+
+/** Routed questions nobody has answered yet, whoever they were routed to (the operator's view). */
+export function unansweredRouted(db) {
+  return db
+    .prepare(`select q.* from questions q where q.status = 'routed' and not exists (select 1 from answers a where a.question_id = q.id)`)
+    .all();
 }
 
 export function addAnswer(db, { questionRef, expertId, body }) {

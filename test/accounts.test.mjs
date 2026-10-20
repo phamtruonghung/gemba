@@ -12,6 +12,8 @@ import {
   parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, sessionExpiry, SESSION_COOKIE
 } from '../src/auth.mjs';
 
+// Not under test here: the limiter has its own tests (test/hardening.test.mjs); this fixture signs in many times from one address.
+const R = { capacity: 10_000, perMs: 60_000 };
 let app;
 let base;
 
@@ -25,6 +27,7 @@ before(async () => {
       dbPath: ':memory:',
       dataDir: 'data',
       adminToken: 'admin-token',
+      limits: { askIp: R, askIdentity: R, signinIp: R, signinEmail: R, signupIp: R },
       bankBin: '',
       bankAccount: '',
       llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 }
@@ -57,7 +60,19 @@ const cookieOf = (res) => (res.headers.getSetCookie?.() ?? [res.headers.get('set
   .filter(Boolean)
   .join('; ');
 
-function post(path, data = {}, cookie = '') {
+// A client following the protocol: a signed-in POST carries the session's CSRF token, read from the page
+// the way a browser would (the hidden field the server injects into every post form).
+const csrfCache = new Map();
+async function csrfOf(cookie) {
+  if (!csrfCache.has(cookie)) {
+    const html = await (await fetch(`${base}/account`, { redirect: 'manual', headers: { cookie } })).text();
+    csrfCache.set(cookie, /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? '');
+  }
+  return csrfCache.get(cookie);
+}
+
+async function post(path, data = {}, cookie = '') {
+  if (cookie && data.csrf === undefined) { const csrf = await csrfOf(cookie); if (csrf) data = { ...data, csrf }; }
   return fetch(`${base}${path}`, {
     method: 'POST',
     redirect: 'manual',
@@ -70,7 +85,7 @@ function post(path, data = {}, cookie = '') {
 
 test('auth: a password verifies against its own hash, and only its own', async () => {
   const hash = await hashPassword('a long enough sentence');
-  assert.match(hash, /^scrypt\$16384\$8\$1\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/, 'the parameters travel with the hash');
+  assert.match(hash, /^scrypt\$131072\$8\$1\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/, 'the parameters travel with the hash');
   assert.equal(await verifyPassword('a long enough sentence', hash), true);
   assert.equal(await verifyPassword('a longer enough sentence', hash), false);
 });
@@ -171,7 +186,8 @@ test('accounts: signing in keeps the guest question that was open', async () => 
   const asked = await post('/ask', { q: 'the machine stops mid-shift, what do I check and in what order', asker: 'Guest' });
   const ref = asked.headers.get('location').split('/').pop();
 
-  const signin = await post('/signin', { email: 'third@example.com', password: 'a sentence of ten', keep: ref });
+  // the browser that asked holds the claim cookie the /ask answer set, and sends it on the way to /signin
+  const signin = await post('/signin', { email: 'third@example.com', password: 'a sentence of ten', keep: ref }, cookieOf(asked));
   assert.equal(signin.status, 303);
   assert.equal(signin.headers.get('location'), `/q/${ref}`);
   const cookie = cookieOf(signin);

@@ -11,6 +11,8 @@ import { loadRules } from '../src/gate.mjs';
 import { upsertExpert } from '../src/db.mjs';
 import { hashPassword } from '../src/auth.mjs';
 
+// Not under test here: the limiter has its own tests (test/hardening.test.mjs); this fixture signs in many times from one address.
+const R = { capacity: 10_000, perMs: 60_000 };
 let app;
 let base;
 
@@ -24,7 +26,8 @@ before(async () => {
     rules: loadRules(),
     config: {
       port: 0, host: '127.0.0.1', dbPath: ':memory:', dataDir: 'data',
-      adminToken: 'admin-token', bankBin: '', bankAccount: '',
+      adminToken: 'admin-token',
+      limits: { askIp: R, askIdentity: R, signinIp: R, signinEmail: R, signupIp: R }, bankBin: '', bankAccount: '',
       llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 }
     }
   });
@@ -45,7 +48,19 @@ const cookieOf = (res) =>
   (res.headers.getSetCookie?.() ?? [res.headers.get('set-cookie') ?? ''])
     .map((c) => c.split(';')[0]).filter(Boolean).join('; ');
 
+// A client following the protocol: a signed-in POST carries the session's CSRF token, read from the page
+// the way a browser would (the hidden field the server injects into every post form).
+const csrfCache = new Map();
+async function csrfOf(cookie) {
+  if (!csrfCache.has(cookie)) {
+    const html = await (await fetch(`${base}/account`, { redirect: 'manual', headers: { cookie } })).text();
+    csrfCache.set(cookie, /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? '');
+  }
+  return csrfCache.get(cookie);
+}
+
 async function post(path, data = {}, cookie = '') {
+  if (cookie && data.csrf === undefined) { const csrf = await csrfOf(cookie); if (csrf) data = { ...data, csrf }; }
   return fetch(base + path, {
     method: 'POST', redirect: 'manual',
     headers: { 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },

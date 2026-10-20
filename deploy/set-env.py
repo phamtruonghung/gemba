@@ -30,6 +30,16 @@ def main(argv):
         if "\n" in value or "\r" in value:
             print(f"refusing {key}: a newline cannot be stored in a line-oriented file", file=sys.stderr)
             return 2
+        # Two programs read this file and they disagree: systemd's EnvironmentFile= unescapes backslashes
+        # and strips surrounding quotes and whitespace; the app's own reader strips quotes only. A value
+        # that would read differently in each is a password that works in one and not the other, so it is
+        # refused here. `&`, `|`, `$`, `#`, backticks and inner spaces are all stored verbatim.
+        if "\\" in value:
+            print(f"refusing {key}: a backslash is read differently by systemd and by the app; choose a value without one", file=sys.stderr)
+            return 2
+        if value != value.strip() or value[:1] in "\"'" or value[-1:] in "\"'":
+            print(f"refusing {key}: a value that starts or ends with a quote or a space is rewritten by systemd; choose one that does not", file=sys.stderr)
+            return 2
 
     try:
         with open(path, encoding="utf-8") as fh:

@@ -512,6 +512,16 @@ const NAV = [
   ['/how-it-works', 'How it works', 'rules']
 ];
 
+/**
+ * Give every POST form a hidden CSRF field. It is a plain input, so it works with JavaScript off.
+ * Only `method="post"` forms get one: a GET form must never carry the token into a URL.
+ */
+export function withCsrf(html, token) {
+  if (!token) return html;
+  const field = `<input type="hidden" name="csrf" value="${esc(token)}">`;
+  return html.replace(/<form\b[^>]*\bmethod="post"[^>]*>/gi, (tag) => `${tag}\n  ${field}`);
+}
+
 /** Put the reader's text-size preference on <html>; only the two known sizes are ever emitted. */
 export function withTextSize(html, size) {
   return size === 'large' || size === 'xl' ? html.replace('<html lang="en">', `<html lang="en" data-text="${size}">`) : html;
@@ -757,20 +767,12 @@ function refusalPanel({ heading, missing = '', escalation = '' }) {
 
 // --- pages -----------------------------------------------------------------
 
-export function home({ stats, experts, notes, questions, user = null, place = null }) {
+export function home({ stats, experts, notes, user = null, place = null }) {
   const chips = topicList()
     .map(([slug, label]) => `<a class="badge" href="/library?topic=${encodeURIComponent(slug)}">${esc(label)}</a>`)
     .join('');
   const expertCards = experts.slice(0, 3).map((e) => expertCard(e, { compact: true })).join('');
   const noteCards = notes.slice(0, 3).map(noteCard).join('');
-  const recent = questions
-    .slice(0, 6)
-    .map(
-      (q) => `<li><a href="/q/${esc(q.ref)}">${esc(q.text.slice(0, 90))}${q.text.length > 90 ? '…' : ''}</a>
-      <div class="stack-sm"><span class="badge ${q.ai_coverage === 'thin' ? 'warn' : 'ok'}">${q.ai_coverage === 'thin' ? 'the library could not cover it' : 'answered from the library'}</span>
-      <span class="muted small">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status, q.ai_coverage))}</span></div></li>`
-    )
-    .join('');
   return layout({
     title: 'Ask someone who has run the line',
     user,
@@ -927,15 +929,6 @@ ${noteCards
     <p class="lead">Every note here passed the publishability gate, and the library answers from them by name.</p>
     <div class="grid" style="margin-top:var(--space-5)">${noteCards}</div>
     <p style="margin:var(--space-5) 0 0"><a class="btn alt" href="/library">Read all ${stats.notes} notes ${icon('arrow')}</a></p>
-  </div>
-</section>`
-      : ''}
-${recent
-      ? `<section class="tight">
-  <div class="wrap narrow">
-    <p class="eyebrow">Recently asked</p>
-    <h2>Questions people brought</h2>
-    <ul class="plain">${recent}</ul>
   </div>
 </section>`
       : ''}
@@ -1106,7 +1099,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
       }).join('')}</tbody></table></div>`
     : '';
   const keepBanner =
-    user && claimed
+    user && claimed && q.user_id === user.id
       ? `<div class="notice ok" role="status">${icon('check')} This question is now saved to your account — it will be here when you come back.</div>`
       : !user
         ? `<div class="notice">${icon('account')} <strong>Keep this question.</strong> <a href="/signin?keep=${encodeURIComponent(q.ref)}">Sign in</a> or <a href="/signup?keep=${encodeURIComponent(q.ref)}">create an account</a> and it will be waiting, with its answer and any escalation, next time.</div>`
@@ -1122,7 +1115,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
     <p class="row muted tight-gap">
       <span class="badge">${esc(topicLabel(q.topic))}</span>
       ${q.plant_type ? `<span class="badge">${esc(q.plant_type)}</span>` : ''}
-      ${q.asker ? `<span class="badge">asked by ${esc(q.asker)}</span>` : '<span class="badge">asked as a guest</span>'}
+      ${claimed && q.asker ? `<span class="badge">asked by ${esc(q.asker)}</span>` : '<span class="badge">asked as a guest</span>'}
       ${q.due_at && q.status === 'routed' ? `<span class="badge">practitioner answers by ${esc(q.due_at.slice(0, 10))}</span>` : ''}
     </p>
 ${keepBanner}
@@ -1138,7 +1131,7 @@ ${cov
           escalation: `<form method="post" action="/q/${esc(q.ref)}/ask-expert" style="margin-top:var(--space-4)">
   <div class="field">
     <label for="asker">Your name</label>
-    <input id="asker" name="asker" value="${esc(q.asker || (user?.name ?? ''))}">
+    <input id="asker" name="asker" value="${esc((claimed && q.asker) || (user?.name ?? ''))}">
   </div>
   <div class="field">
     <label for="contact">Email or phone, so the answer can reach you</label>
@@ -1258,7 +1251,7 @@ ${b.status === 'requested'
   });
 }
 
-export function corpusPage({ notes, topic, topics, user = null, place = null }) {
+export function corpusPage({ notes, total = notes.length, page = 1, pages = 1, topic, topics, user = null, place = null }) {
   const chips = topics
     .map(
       ([slug, label]) =>
@@ -1266,6 +1259,11 @@ export function corpusPage({ notes, topic, topics, user = null, place = null }) 
     )
     .join('');
   const cards = notes.map(noteCard).join('');
+  // Plain links, no script: the topic is kept, so paging through one topic stays in it.
+  const pageHref = (n) => `/library?${topic ? `topic=${encodeURIComponent(topic)}&amp;` : ''}page=${n}`;
+  const pager = pages > 1
+    ? `<nav class="row center-cta" aria-label="Pages" style="margin-top:var(--space-5)">${page > 1 ? `<a class="btn alt" rel="prev" href="${pageHref(page - 1)}">Previous</a>` : ''}<span class="muted small">Page ${page} of ${pages}</span>${page < pages ? `<a class="btn alt" rel="next" href="${pageHref(page + 1)}">Next</a>` : ''}</nav>`
+    : '';
   return layout({
     title: 'Knowledge library',
     user,
@@ -1275,13 +1273,13 @@ export function corpusPage({ notes, topic, topics, user = null, place = null }) 
   <div class="wrap">
     <p class="eyebrow">The library</p>
     <h1 style="font-size:clamp(30px,4.4vw,52px)">${topic ? esc(topicLabel(topic)) : 'Every published note'}</h1>
-    <p class="lead">${notes.length} note${notes.length === 1 ? '' : 's'}${topic ? ` filed under ${esc(topicLabel(topic))}` : ''}. Only notes that passed the gate are in here: no customer names, no plant figures, no internal documents.</p>
+    <p class="lead">${total} note${total === 1 ? '' : 's'}${topic ? ` filed under ${esc(topicLabel(topic))}` : ''}. Only notes that passed the gate are in here: no customer names, no plant figures, no internal documents.</p>
     ${continueLink(place)}
     <p class="stack-sm" style="margin-top:var(--space-5)">${chips}<a class="badge" href="/library"${topic ? '' : ' aria-current="true"'}>All topics</a> <a class="badge" href="/how-it-works">The rules</a></p>
   </div>
 </section>
 <section class="tight">
-  <div class="wrap">${cards ? `<div class="grid">${cards}</div>` : '<div class="card" style="margin:0"><p class="muted" style="margin:0">Nothing in this topic yet. <a href="/library">See every note</a>.</p></div>'}</div>
+  <div class="wrap">${cards ? `<div class="grid">${cards}</div>` : '<div class="card" style="margin:0"><p class="muted" style="margin:0">Nothing in this topic yet. <a href="/library">See every note</a>.</p></div>'}${pager}</div>
 </section>
 <section class="tight">
   <div class="wrap">
@@ -1747,7 +1745,7 @@ export function adminLoginPage({ email = '', error = '' } = {}) {
   });
 }
 
-export function adminOverviewPage({ admin, stats, settings, events = [], flash = '' }) {
+export function adminOverviewPage({ admin, stats, settings, events = [], flash = '', qtLink = '', qtFromEnv = false }) {
   const cards = [
     ['Notes', stats.notes, `${stats.experts} practitioner profiles`],
     ['Questions', stats.questions, `${stats.thin} the library could not cover`],
@@ -1774,6 +1772,16 @@ export function adminOverviewPage({ admin, stats, settings, events = [], flash =
     body: `
 <section class="tight"><div class="wrap">
   <div class="grid four">${cards}</div>
+</div></section>
+<section class="tight"><div class="wrap">
+  <h2>The /qt link</h2>
+  <div class="card">
+    <p class="small muted" style="margin-top:0">The bookmarked console at <span class="mono">/qt/&lt;token&gt;</span> is read from <span class="mono">admin.token</span> in the data directory. Rotating it makes the old link stop working at once.</p>
+    ${qtLink ? `<p class="notice ok" role="status">New link: <a class="mono" href="${esc(qtLink)}">${esc(qtLink)}</a> — copy it now; it is not shown again here.</p>` : ''}
+    ${qtFromEnv
+      ? '<p class="small muted" style="margin-bottom:0">The token is set in the environment (GEMBA_ADMIN_TOKEN) — change it there.</p>'
+      : '<form method="post" action="/admin/qt-link/rotate"><button class="btn alt sm" type="submit">Rotate the /qt link</button></form>'}
+  </div>
 </div></section>
 <section class="tight"><div class="wrap">
   <h2>What it charges</h2>
@@ -2406,7 +2414,7 @@ export function offlinePage() {
   });
 }
 
-export function errorPage({ code, message, user = null }) {
+export function errorPage({ code, message, user = null, lead = 'Nothing is guessed here either — this page is simply missing.', retry = '' }) {
   return layout({
     title: `Error ${code}`,
     user,
@@ -2415,8 +2423,8 @@ export function errorPage({ code, message, user = null }) {
   <div class="wrap narrow">
     <p class="eyebrow">${esc(code)}</p>
     <h1 style="font-size:clamp(30px,4vw,44px)">${esc(message)}</h1>
-    <p class="lead">Nothing is guessed here either — this page is simply missing.</p>
-    <p class="row center-cta" style="margin-top:var(--space-5)"><a class="btn" href="/">${icon('ask')}Ask a question</a><a class="btn alt" href="/library">${icon('book')}Read the notes</a></p>
+    <p class="lead">${esc(lead)}</p>
+    <p class="row center-cta" style="margin-top:var(--space-5)">${retry ? `<a class="btn" href="${esc(retry)}">Go back and try again</a>` : ''}<a class="btn${retry ? ' alt' : ''}" href="/">${icon('ask')}Ask a question</a><a class="btn alt" href="/library">${icon('book')}Read the notes</a></p>
   </div>
 </section>`
   });
