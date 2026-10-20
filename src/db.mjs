@@ -171,6 +171,13 @@ export function migrate(db) {
   addColumn('bookings', 'cancelled_at', 'cancelled_at text')
   addColumn('bookings', 'refund_vnd', 'refund_vnd integer not null default 0')
   addColumn('bookings', 'cancel_reason', "cancel_reason text not null default ''");
+  // A backstop for "one slot, one open booking". Old rows hold free-text starts_at and may collide, so
+  // a failed build must not stop the app from booting: the check inside createBookingOnce is the guarantee.
+  try {
+    db.exec("create unique index if not exists idx_bookings_open_slot on bookings(expert_id, starts_at) where status in ('requested','awaiting_payment','paid')");
+  } catch (err) {
+    console.warn(`bookings: open-slot index not built (${err.message}); the booking check still holds`);
+  }
   return db;
 }
 
@@ -185,6 +192,34 @@ export function makeRef(prefix) {
   const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
   const rand = Math.random().toString(36).slice(2, 5).toUpperCase();
   return `${prefix}-${stamp}-${rand}${refSeq}`;
+}
+
+const txDepth = new WeakMap();
+
+/**
+ * Run `fn` in one transaction: begin immediate, commit, or roll back and rethrow. Re-entrant, so a
+ * guarded helper called from inside a route's transaction joins it. node:sqlite is synchronous on one
+ * shared connection, so `fn` must be synchronous too: an `await` inside would let another request run
+ * its statements inside this transaction.
+ */
+export function tx(db, fn) {
+  const depth = txDepth.get(db) ?? 0;
+  if (depth > 0) return fn();
+  db.exec('begin immediate');
+  txDepth.set(db, 1);
+  try {
+    const out = fn();
+    if (out && typeof out.then === 'function') {
+      throw new TypeError('tx() body must be synchronous: an await inside a transaction lets other requests write into it');
+    }
+    db.exec('commit');
+    return out;
+  } catch (err) {
+    try { db.exec('rollback'); } catch { /* nothing open */ }
+    throw err;
+  } finally {
+    txDepth.set(db, 0);
+  }
 }
 
 export function logEvent(db, kind, ref = '', detail = '') {
@@ -301,18 +336,52 @@ export function countActiveAdmins(db) {
 /**
  * A cancellation is not just a status. If the client had already paid, the platform owes them a refund
  * *instruction* — so the amount is recorded, and `refundsOwed` is what an operator works from. Losing
- * that on cancellation would mean a cancelled paid session quietly became free.
+ * that on cancellation would mean a cancelled paid session quietly became free. Only a `paid` booking
+ * has money to give back: a `completed` one cannot be cancelled at all.
  */
-export function cancelBooking(db, ref, { reason = '', refundVnd = 0 } = {}) {
-  return db
-    .prepare("update bookings set status = 'cancelled', cancelled_at = ?, cancel_reason = ?, refund_vnd = ? where ref = ?")
-    .run(nowIso(), String(reason).slice(0, 300), Math.max(0, Math.round(refundVnd)), ref).changes;
+export function cancelBooking(db, ref, { reason = '', actor = '' } = {}) {
+  return tx(db, () => {
+    const b = bookingByRef(db, ref);
+    if (!b) return { ok: false, error: 'No such booking.' };
+    return transitionBooking(db, ref, 'cancelled', {
+      actor,
+      note: `reason="${String(reason).slice(0, 80)}" refund_owed=${b.status === 'paid' ? b.price_vnd : 0}`,
+      fields: { cancelled_at: nowIso(), cancel_reason: String(reason).slice(0, 300), refund_vnd: b.status === 'paid' ? b.price_vnd : 0 }
+    });
+  });
 }
 
-export function rescheduleBooking(db, ref, { startsAt, minutes, priceVnd, feeVnd, payoutVnd }) {
-  return db
-    .prepare('update bookings set starts_at = ?, minutes = ?, price_vnd = ?, fee_vnd = ?, payout_vnd = ? where ref = ?')
-    .run(startsAt, minutes, priceVnd, feeVnd, payoutVnd, ref).changes;
+const RESCHEDULABLE = ['requested', 'awaiting_payment', 'paid'];
+
+/**
+ * Move a session. The length (and so the price) can change only while nothing has been asked of the
+ * client: once payment was requested the amount is a promise, and rewriting it would charge someone
+ * for minutes they did not agree to. `money` is the quote for the requested minutes, or null.
+ */
+export function rescheduleBooking(db, ref, { startsAt, minutes, money, actor = '' }) {
+  return tx(db, () => {
+    const b = bookingByRef(db, ref);
+    if (!b) return { ok: false, error: 'No such booking.' };
+    if (!RESCHEDULABLE.includes(b.status)) {
+      return { ok: false, error: `Booking ${ref} is ${b.status}; it cannot be moved.` };
+    }
+    const changesLength = minutes !== b.minutes;
+    if (changesLength && b.status !== 'requested') {
+      return { ok: false, error: `Payment was requested for ${b.minutes} minutes. Cancel and rebook to change the length.` };
+    }
+    const clash = findOpenOverlap(db, b.expert_id, startsAt, minutes, ref);
+    if (clash) return { ok: false, error: SLOT_TAKEN(b.expert_name) };
+    const m = changesLength ? money : { price_vnd: b.price_vnd, fee_vnd: b.fee_vnd, payout_vnd: b.payout_vnd };
+    try {
+      db.prepare('update bookings set starts_at = ?, minutes = ?, price_vnd = ?, fee_vnd = ?, payout_vnd = ? where ref = ? and status = ?')
+        .run(startsAt, minutes, m.price_vnd, m.fee_vnd, m.payout_vnd, ref, b.status);
+    } catch (err) {
+      if (/constraint/i.test(String(err.message))) return { ok: false, error: SLOT_TAKEN(b.expert_name) };
+      throw err;
+    }
+    logEvent(db, 'booking', ref, `actor=${actor} rescheduled to ${startsAt} ${minutes}p price ${b.price_vnd}->${m.price_vnd}`);
+    return { ok: true, booking: bookingByRef(db, ref), before: b };
+  });
 }
 
 export function refundsOwed(db) {
@@ -517,9 +586,10 @@ export function inviteState(invite, at = new Date()) {
   return 'pending';
 }
 
-export function acceptInvite(db, inviteId) {
-  return db.prepare('update invites set accepted_at = ? where id = ? and accepted_at is null')
-    .run(nowIso(), inviteId).changes;
+/** Claim an invitation: 1 if this call redeemed it, 0 if it was already used or has lapsed. */
+export function acceptInvite(db, inviteId, now = new Date()) {
+  return db.prepare('update invites set accepted_at = ? where id = ? and accepted_at is null and expires_at > ?')
+    .run(now.toISOString(), inviteId, now.toISOString()).changes;
 }
 
 export function listInvites(db, limit = 100) {
@@ -666,8 +736,10 @@ export function openQuestionsFor(db, expert) {
 export function addAnswer(db, { questionRef, expertId, body }) {
   const q = questionByRef(db, questionRef);
   if (!q) return null;
-  db.prepare('insert into answers (question_id, expert_id, body, created_at) values (?, ?, ?, ?)').run(q.id, expertId ?? null, body, nowIso());
-  db.prepare(`update questions set status = 'answered' where id = ?`).run(q.id);
+  tx(db, () => {
+    db.prepare('insert into answers (question_id, expert_id, body, created_at) values (?, ?, ?, ?)').run(q.id, expertId ?? null, body, nowIso());
+    db.prepare(`update questions set status = 'answered' where id = ?`).run(q.id);
+  });
   return questionByRef(db, questionRef);
 }
 
@@ -688,13 +760,49 @@ export function recentQuestions(db, limit = 20) {
 
 // --- bookings --------------------------------------------------------------
 
-export function insertBooking(db, b) {
-  const ref = b.ref ?? makeRef('B');
-  db.prepare(
-    `insert into bookings (ref, expert_id, asker, contact, topic, agenda, starts_at, minutes, price_vnd, fee_vnd, payout_vnd, status, user_id, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)`
-  ).run(ref, b.expert_id, b.asker, b.contact, b.topic ?? '', b.agenda ?? '', b.starts_at, b.minutes, b.price_vnd, b.fee_vnd, b.payout_vnd, b.user_id ?? null, nowIso());
-  return bookingByRef(db, ref);
+const SLOT_TAKEN = (name) => `That time is already booked with ${name || 'this practitioner'}. Choose another time.`;
+
+/** An open booking of this expert whose interval overlaps [startsAt, +minutes). Legacy free-text times are skipped. */
+function findOpenOverlap(db, expertId, startsAt, minutes, exceptRef = '') {
+  const start = Date.parse(startsAt);
+  if (Number.isNaN(start)) return null;
+  const end = start + minutes * 60000;
+  const rows = db
+    .prepare(`select * from bookings where expert_id = ? and ref != ? and status in ('requested','awaiting_payment','paid')`)
+    .all(expertId, exceptRef);
+  return rows.find((r) => {
+    const s = Date.parse(r.starts_at);
+    return !Number.isNaN(s) && start < s + r.minutes * 60000 && s < end;
+  }) ?? null;
+}
+
+/**
+ * One form post, one booking. The same person asking again for the same slot gets the booking they
+ * already have; anyone else asking for an overlapping slot is told it is taken.
+ */
+export function createBookingOnce(db, b) {
+  return tx(db, () => {
+    const clash = findOpenOverlap(db, b.expert_id, b.starts_at, b.minutes);
+    if (clash) {
+      const sameWho = (b.user_id != null && clash.user_id === b.user_id)
+        || String(clash.contact).trim().toLowerCase() === String(b.contact).trim().toLowerCase();
+      if (sameWho && clash.starts_at === b.starts_at && clash.minutes === b.minutes) {
+        return { ok: true, booking: bookingByRef(db, clash.ref), duplicate: true };
+      }
+      return { ok: false, error: SLOT_TAKEN(b.expert_name) };
+    }
+    const ref = b.ref ?? makeRef('B');
+    try {
+      db.prepare(
+        `insert into bookings (ref, expert_id, asker, contact, topic, agenda, starts_at, minutes, price_vnd, fee_vnd, payout_vnd, status, user_id, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)`
+      ).run(ref, b.expert_id, b.asker, b.contact, b.topic ?? '', b.agenda ?? '', b.starts_at, b.minutes, b.price_vnd, b.fee_vnd, b.payout_vnd, b.user_id ?? null, nowIso());
+    } catch (err) {
+      if (/constraint/i.test(String(err.message))) return { ok: false, error: SLOT_TAKEN(b.expert_name) };
+      throw err;
+    }
+    return { ok: true, booking: bookingByRef(db, ref) };
+  });
 }
 
 export function bookingByRef(db, ref) {
@@ -708,23 +816,40 @@ export function bookingByRef(db, ref) {
 
 const BOOKING_STATES = ['requested', 'awaiting_payment', 'paid', 'completed', 'cancelled'];
 
-/** Allowed transitions. Anything else is a programming error, so it throws. */
-export function setBookingStatus(db, ref, status) {
-  const b = bookingByRef(db, ref);
-  if (!b) return null;
-  const from = b.status;
-  const allowed = {
-    requested: ['awaiting_payment', 'cancelled'],
-    awaiting_payment: ['paid', 'cancelled'],
-    paid: ['completed', 'cancelled'],
-    completed: [],
-    cancelled: []
-  };
-  if (!BOOKING_STATES.includes(status)) throw new Error(`unknown booking status: ${status}`);
-  if (!allowed[from].includes(status)) throw new Error(`illegal transition ${from} -> ${status}`);
-  db.prepare('update bookings set status = ? where ref = ?').run(status, ref);
-  logEvent(db, 'booking_status', ref, `${from} -> ${status}`);
-  return bookingByRef(db, ref);
+/** The state machine. `awaiting_payment` means the practitioner confirmed the time and payment was asked for. */
+const ALLOWED = {
+  requested: ['awaiting_payment', 'cancelled'],
+  awaiting_payment: ['paid', 'cancelled'],
+  paid: ['completed', 'cancelled'],
+  completed: [],
+  cancelled: []
+};
+
+/** Columns a caller may set along with a transition. A column name in SQL never comes from a caller. */
+const TRANSITION_FIELDS = ['cancelled_at', 'cancel_reason', 'refund_vnd', 'payment_ref'];
+
+/**
+ * The one place a booking changes state. Never throws for an illegal or stale transition: it returns
+ * a sentence for a page. The update is a compare-and-set on the status that was read, so two requests
+ * racing for the same step cannot both win.
+ */
+export function transitionBooking(db, ref, to, { fields = {}, actor = '', note = '' } = {}) {
+  if (!BOOKING_STATES.includes(to)) throw new Error(`unknown booking status: ${to}`);
+  const keys = Object.keys(fields);
+  for (const k of keys) if (!TRANSITION_FIELDS.includes(k)) throw new Error(`transitionBooking: field not allowed: ${k}`);
+  return tx(db, () => {
+    const b = bookingByRef(db, ref);
+    if (!b) return { ok: false, error: 'No such booking.' };
+    const from = b.status;
+    if (!ALLOWED[from].includes(to)) {
+      return { ok: false, error: `Booking ${ref} is ${from}; it cannot become ${to}.` };
+    }
+    const sets = ['status = ?', ...keys.map((k) => `${k} = ?`)].join(', ');
+    const info = db.prepare(`update bookings set ${sets} where ref = ? and status = ?`).run(to, ...keys.map((k) => fields[k]), ref, from);
+    if (info.changes !== 1) return { ok: false, error: `Booking ${ref} changed while you were working on it. Reload and try again.` };
+    logEvent(db, 'booking_status', ref, `${from} -> ${to}${actor ? ` actor=${actor}` : ''}${note ? ` ${note}` : ''}`);
+    return { ok: true, booking: bookingByRef(db, ref) };
+  });
 }
 
 export function bookingsFor(db, { expertId, status }) {

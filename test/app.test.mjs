@@ -223,7 +223,7 @@ test('money: a booking is priced in VND, split, and never marked paid by the sys
   const res = await post('/book', {
     expert: 'hung-qa',
     minutes: '60',
-    starts_at: '2026-10-20 20:00',
+    starts_at: '2030-10-20 20:00',
     asker: 'Test client',
     contact: 'thu@example.com',
     topic: 'tpm',

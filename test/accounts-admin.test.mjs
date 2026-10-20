@@ -59,14 +59,24 @@ const userBy = (email) => app.db.prepare('select * from users where email = ?').
 const idOf = (email) => userBy(email).id;
 const signUp = (name, email) => post('/signup', { name, email, password: PW });
 
+// Each booking takes its own day: one practitioner cannot be in two open bookings at the same time.
+let nextDay = 1;
 /** Book a session the way a client does, and return its ref. */
 async function bookSession(minutes = 45) {
+  const day = String(nextDay++).padStart(2, '0');
   const res = await post('/book', {
     expert: 'hung-qa', minutes: String(minutes), asker: 'A Client', contact: 'client@example.com',
-    agenda: 'Line stops at shift change', starts_at: '2026-11-02T09:00:00.000Z', topic: 'shift-management'
+    agenda: 'Line stops at shift change', starts_at: `2030-11-${day} 09:00`, topic: 'shift-management'
   });
   assert.equal(res.status, 303, 'the booking form posts');
   return res.headers.get('location').replace('/b/', '');
+}
+
+/** A booking the client has said they paid: the state the operator reconciles from. */
+async function bookAndTransfer(minutes = 45) {
+  const ref = await bookSession(minutes);
+  assert.equal((await post(`/b/${ref}/transferred`)).status, 303);
+  return ref;
 }
 
 test('the operator sees every account, with what it is and whether it is on', async () => {
@@ -173,7 +183,7 @@ test('every account action is audited, with the operator named', async () => {
 
 test('the operator reconciles a booking, and cancelling one says what happens to the money', async () => {
   const cookie = await asOperator();
-  const ref = await bookSession(45);
+  const ref = await bookAndTransfer(45);
   const original = app.db.prepare('select * from bookings where ref = ?').get(ref);
   assert.equal(original.price_vnd, 600000, '45 minutes at 800,000/h');
 
@@ -186,14 +196,23 @@ test('the operator reconciles a booking, and cancelling one says what happens to
   assert.equal((await post(`/admin/bookings/${ref}/paid`, {}, cookie)).status, 303);
   assert.equal(app.db.prepare('select status from bookings where ref = ?').get(ref).status, 'paid');
 
-  const reschedule = await post(`/admin/bookings/${ref}/reschedule`, { starts_at: '2026-11-03T14:00:00.000Z', minutes: '60' }, cookie);
+  // The client paid 600,000 for 45 minutes. Moving the session to a longer length would rewrite the
+  // price after the money moved, so it is refused and nothing changes.
+  const longer = await post(`/admin/bookings/${ref}/reschedule`, { starts_at: '2030-12-03 14:00', minutes: '60' }, cookie);
+  assert.equal(longer.status, 303);
+  assert.match(longer.headers.get('location'), /err=.*Cancel%20and%20rebook/);
+  const same = app.db.prepare('select * from bookings where ref = ?').get(ref);
+  assert.equal(same.price_vnd, 600000, 'the price the client paid is unchanged');
+  assert.equal(same.starts_at, original.starts_at, 'and so is the time');
+
+  const reschedule = await post(`/admin/bookings/${ref}/reschedule`, { starts_at: '2030-12-03 14:00', minutes: '45' }, cookie);
   assert.equal(reschedule.status, 303, 'the session can be moved without cancelling it');
   const moved = app.db.prepare('select * from bookings where ref = ?').get(ref);
-  assert.equal(moved.minutes, 60);
-  assert.match(moved.starts_at, /^2026-11-03/, 'the time moved');
-  assert.equal(moved.price_vnd, 800000, 'and the price was re-quoted for the new length');
-  assert.equal(moved.fee_vnd, 160000, '20% to the platform');
-  assert.equal(moved.payout_vnd, 640000, 'the rest to the practitioner');
+  assert.equal(moved.minutes, 45);
+  assert.equal(moved.starts_at, '2030-12-03T07:00:00.000Z', '14:00 Vietnam time is 07:00 UTC');
+  assert.equal(moved.price_vnd, 600000, 'the price is untouched');
+  assert.equal(moved.fee_vnd, 120000, '20% to the platform');
+  assert.equal(moved.payout_vnd, 480000, 'the rest to the practitioner');
   assert.equal(moved.status, 'paid', 'a reschedule does not lose the payment');
 
   // The booking list is a page of forms, so a refused action redirects back with the reason rather than
@@ -201,7 +220,7 @@ test('the operator reconciles a booking, and cancelling one says what happens to
   const badMove = await post(`/admin/bookings/${ref}/reschedule`, { starts_at: 'not-a-date', minutes: '45' }, cookie);
   assert.equal(badMove.status, 303, 'a reschedule with no valid time is refused');
   assert.match(badMove.headers.get('location'), /err=/);
-  assert.equal(app.db.prepare('select starts_at from bookings where ref = ?').get(ref).starts_at, '2026-11-03T14:00:00.000Z',
+  assert.equal(app.db.prepare('select starts_at from bookings where ref = ?').get(ref).starts_at, '2030-12-03T07:00:00.000Z',
     'and the booking stayed where it was');
 
   assert.equal((await post(`/admin/bookings/${ref}/cancel`, { reason: 'the client cannot make it' }, cookie)).status, 303);
@@ -212,7 +231,7 @@ test('the operator reconciles a booking, and cancelling one says what happens to
   const page = await (await get('/admin/bookings', cookie)).text();
   assert.match(page, /refund/i, 'a cancelled paid booking says a refund is owed, not that it was made');
 
-  const events = app.db.prepare("select detail from events where kind = 'booking' order by id desc").all();
+  const events = app.db.prepare("select detail from events where kind in ('booking', 'booking_status') order by id desc").all();
   assert.ok(events.length >= 3, 'paid, rescheduled and cancelled are each recorded');
   assert.match(events[0].detail, /cancel/);
   assert.match(events[0].detail, /operator@gemba\.test/);
@@ -220,7 +239,7 @@ test('the operator reconciles a booking, and cancelling one says what happens to
 
 test('revenue per practitioner is on the page an operator looks at', async () => {
   const cookie = await asOperator();
-  const ref = await bookSession(30);
+  const ref = await bookAndTransfer(30);
   await post(`/admin/bookings/${ref}/paid`, {}, cookie);
   await post(`/admin/bookings/${ref}/completed`, {}, cookie);
 

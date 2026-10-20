@@ -8,6 +8,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/gemba
+Environment=TZ=Asia/Ho_Chi_Minh
 EnvironmentFile=/etc/gemba/gemba.env
 ExecStart=/opt/node22/bin/node /opt/gemba/src/server.mjs
 Restart=on-failure

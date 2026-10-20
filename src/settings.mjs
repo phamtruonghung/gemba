@@ -13,6 +13,7 @@
 //  * **Range is checked, not clamped.** Silently clamping 90% to 50% would mean the operator's saved
 //    value is not the value they typed. Refuse and say what the range is.
 
+import { tx } from './db.mjs';
 import { PLATFORM_TAKE_RATE, MIN_MINUTES, DEFAULT_MINUTES } from './pricing.mjs';
 
 export const SETTING_SPECS = {
@@ -113,11 +114,13 @@ export function saveSettings(db, values, { actor = '' } = {}) {
       'on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at'
   );
   const changed = [];
-  for (const [key, value] of Object.entries(values)) {
-    const was = db.prepare('select value from settings where key = ?').get(key)?.value;
-    if (String(was) === String(value)) continue;
-    stmt.run(key, String(value), at);
-    changed.push(`${key} ${was ?? SETTING_SPECS[key].fallback}→${value}`);
-  }
+  tx(db, () => {
+    for (const [key, value] of Object.entries(values)) {
+      const was = db.prepare('select value from settings where key = ?').get(key)?.value;
+      if (String(was) === String(value)) continue;
+      stmt.run(key, String(value), at);
+      changed.push(`${key} ${was ?? SETTING_SPECS[key].fallback}→${value}`);
+    }
+  });
   return changed;
 }

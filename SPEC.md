@@ -247,8 +247,20 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
 - `questions` — ref, text, plant type, asker, contact, topic, state (`open`/`routed`/`answered`),
   AI answer, citations (JSON), coverage, due date;
 - `answers` — expert answers to routed questions;
-- `bookings` — expert, asker, contact, topic, agenda, `starts_at`, minutes, price/fee/payout,
-  state (`requested` → `awaiting_payment` → `paid` → `completed`);
+- `bookings` — expert, asker, contact, topic, agenda, `starts_at`, minutes, price/fee/payout, state.
+  - `starts_at` is ISO UTC. The form takes `YYYY-MM-DD HH:MM` as Vietnam time (+07:00, no DST) through
+    one parser (`src/when.mjs`); anything else is a field error. The image sets `TZ=Asia/Ho_Chi_Minh`.
+  - Money is integer VND: `fee + payout === price` for every quote, sessions run 30–480 minutes, and
+    the platform share is a whole percent.
+  - State moves only through `transitionBooking`: `requested → awaiting_payment | cancelled`,
+    `awaiting_payment → paid | cancelled`, `paid → completed | cancelled`; `completed` and `cancelled`
+    are final. An illegal step is a sentence on a page, and the update is a compare-and-set.
+  - A refund is recorded (`refund_vnd`) only when a `paid` booking is cancelled.
+  - The length, and so the price, can change only while the booking is `requested`.
+  - One open booking per practitioner per time: an overlapping request is refused (409), and the same
+    person repeating the same request gets the booking they already have.
+  - Multi-statement writes run in `tx()` (`begin immediate` … `commit`, rollback on a throw). One
+    invitation makes one user: the invite is claimed inside the same transaction that creates the user.
 - `users` — email (unique, lowercased), name, `password_hash` (`scrypt`, salted), created/last seen;
 - `sessions` — session id (32 random bytes), user, expiry, user agent; a session is a row, so signing
   out revokes it;

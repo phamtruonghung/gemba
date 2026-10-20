@@ -25,6 +25,7 @@
 import { formatVnd, MIN_MINUTES } from './pricing.mjs';
 import { ATTESTATION_TEXT } from './gate.mjs';
 import { SCRIPT } from './interview.mjs';
+import { formatLocal } from './when.mjs';
 import { renderMarkdown, markdownToText } from './markdown.mjs';
 import { SETTING_SPECS, SETTING_KEYS } from './settings.mjs';
 
@@ -1018,7 +1019,7 @@ export function accountPage({ user, questions = [], bookings = [], sessions = 0,
     .join('');
   const bRows = bookings
     .map(
-      (b) => `<li>${esc((b.starts_at ?? '').slice(0, 16))} · ${esc(b.expert_name ?? 'a practitioner')} · ${b.minutes} minutes · <strong>${formatVnd(b.price_vnd)}</strong>
+      (b) => `<li>${esc(formatLocal(b.starts_at))} · ${esc(b.expert_name ?? 'a practitioner')} · ${b.minutes} minutes · <strong>${formatVnd(b.price_vnd)}</strong>
       <div class="stack-sm"><span class="badge">${esc(bookingStatus(b.status))}</span> <a href="/b/${esc(b.ref)}">Booking ${esc(b.ref)}</a></div></li>`
     )
     .join('');
@@ -1197,6 +1198,7 @@ export function bookingPage({ b, instruction, bankConfigured, user = null }) {
       <table>
         <tbody>
           <tr><th>Session</th><td>${b.minutes} minutes at ${formatVnd(b.rate_vnd ?? (b.minutes ? Math.round((b.price_vnd / b.minutes) * 60) : 0))} an hour</td></tr>
+          <tr><th>When</th><td>${esc(formatLocal(b.starts_at))} (Vietnam time, UTC+7)</td></tr>
           <tr><th>Total</th><td><strong>${formatVnd(b.price_vnd)}</strong></td></tr>
           <tr><th>Platform fee (20%)</th><td>${formatVnd(b.fee_vnd)}</td></tr>
           <tr><th>Paid to the practitioner</th><td>${formatVnd(b.payout_vnd)}</td></tr>
@@ -1525,7 +1527,7 @@ export function expertWorkspacePage({ expert, expertNotes, queue, bookings }) {
     )
     .join('');
   const bRows = bookings
-    .map((b) => `<li>${esc(b.starts_at)} · ${b.minutes}p · ${formatVnd(b.payout_vnd)} to you · ${esc(b.ref)} <span class="badge">${esc(bookingStatus(b.status))}</span></li>`)
+    .map((b) => `<li>${esc(formatLocal(b.starts_at))} · ${b.minutes}p · ${formatVnd(b.payout_vnd)} to you · ${esc(b.ref)} <span class="badge">${esc(bookingStatus(b.status))}</span></li>`)
     .join('');
   return layout({
     title: `Desk — ${expert.name}`,
@@ -2001,7 +2003,7 @@ export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue =
   <td class="mono">${esc(b.ref)}</td>
   <td>${esc(b.expert_name ?? '—')}</td>
   <td>${esc(b.asker)}<div class="small muted mono">${esc(b.contact)}</div></td>
-  <td>${esc(String(b.starts_at).slice(0, 16).replace('T', ' '))}<div class="small muted">${esc(String(b.minutes))} min</div></td>
+  <td>${esc(formatLocal(b.starts_at))}<div class="small muted">${esc(String(b.minutes))} min</div></td>
   <td class="mono">${formatVnd(b.price_vnd)}<div class="small muted">fee ${formatVnd(b.fee_vnd)} · payout ${formatVnd(b.payout_vnd)}</div></td>
   <td><span class="badge${b.status === 'completed' ? ' ok' : b.status === 'cancelled' ? ' warn' : ''}">${esc(label[b.status] ?? b.status)}</span>
     ${b.status === 'cancelled' && b.refund_vnd > 0 ? `<div class="small" style="color:var(--color-ok-text)">refund ${formatVnd(b.refund_vnd)} owed</div>` : ''}
@@ -2013,7 +2015,7 @@ export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue =
         : `<form method="post" action="/admin/bookings/${esc(b.ref)}/paid"><button class="btn alt sm" type="submit">Payment received</button></form>`}
       <form method="post" action="/admin/bookings/${esc(b.ref)}/reschedule" class="row tight-gap" style="align-items:center">
         <label class="sr-only" for="rs-${esc(b.ref)}">New time for ${esc(b.ref)}</label>
-        <input id="rs-${esc(b.ref)}" name="starts_at" value="${esc(String(b.starts_at).slice(0, 16))}" style="width:170px">
+        <input id="rs-${esc(b.ref)}" name="starts_at" value="${esc(formatLocal(b.starts_at))}" style="width:170px">
         <label class="sr-only" for="rm-${esc(b.ref)}">Minutes for ${esc(b.ref)}</label>
         <input id="rm-${esc(b.ref)}" name="minutes" value="${esc(String(b.minutes))}" style="width:70px">
         <button class="btn ghost sm" type="submit">Move</button>
@@ -2156,7 +2158,7 @@ export function inviteDeadPage({ state, email = '' }) {
 export function adminPage({ token, stats, pendingBookings, blockedNotes, openQuestions, answerable, accounts = 0, user = null }) {
   const bRows = pendingBookings
     .map(
-      (b) => `<tr><td class="mono">${esc(b.ref)}</td><td>${esc(b.expert_name ?? '')}</td><td>${esc(b.contact)}</td><td>${esc(b.starts_at)}</td><td>${formatVnd(b.price_vnd)}</td><td>${esc(bookingStatus(b.status))}</td>
+      (b) => `<tr><td class="mono">${esc(b.ref)}</td><td>${esc(b.expert_name ?? '')}</td><td>${esc(b.contact)}</td><td>${esc(formatLocal(b.starts_at))}</td><td>${formatVnd(b.price_vnd)}</td><td>${esc(bookingStatus(b.status))}</td>
     <td>${b.status === 'awaiting_payment' ? `<form method="post" action="/qt/${esc(token)}/confirm"><input type="hidden" name="ref" value="${esc(b.ref)}"><button class="btn sm">Payment received</button></form>` : b.status === 'paid' ? `<form method="post" action="/qt/${esc(token)}/complete"><input type="hidden" name="ref" value="${esc(b.ref)}"><button class="btn sm">Session done</button></form>` : ''}</td></tr>`
     )
     .join('');
