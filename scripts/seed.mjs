@@ -6,15 +6,16 @@
 // The loading logic lives in src/seed-corpus.mjs so the eval harness seeds the same way.
 
 import { openDb, stats, publishedNotes } from '../src/db.mjs';
-import { loadRules } from '../src/gate.mjs';
+import { loadRules, readRulesFile } from '../src/gate.mjs';
 import { loadConfig } from '../src/server.mjs';
 import { seedDatabase, logSeed } from '../src/seed-corpus.mjs';
 
-const rules = loadRules();
 // The database the server will open, resolved the same way. Hardcoding a relative 'data/gemba.db'
 // here meant the seed wrote to one file while the service read another (GEMBA_DB alone was honoured;
 // GEMBA_DATA_DIR was not), so a fresh corpus never reached the running app.
-const dbPath = loadConfig().dbPath;
+const config = loadConfig();
+const rules = loadRules(readRulesFile(config.gateRulesPath));
+const dbPath = config.dbPath;
 const db = openDb(dbPath);
 
 const result = seedDatabase(db, { rules, log: console.log });

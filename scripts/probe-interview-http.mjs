@@ -1,11 +1,12 @@
 // scratch probe: walk the interview over real HTTP and print what lands in the database.
 import { createApp } from '../src/server.mjs';
-import { loadRules } from '../src/gate.mjs';
+import { loadRules, readRulesFile } from '../src/gate.mjs';
+import { loadConfig } from '../src/server.mjs';
 import { upsertExpert, publishedNotes } from '../src/db.mjs';
 
 const app = createApp({
   dbPath: ':memory:',
-  rules: loadRules(),
+  rules: loadRules(readRulesFile(loadConfig().gateRulesPath)),
   config: { port: 0, host: '127.0.0.1', dbPath: ':memory:', dataDir: 'data', adminToken: 't', bankBin: '', bankAccount: '', llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 } }
 });
 upsertExpert(app.db, { slug: 'hung-qa', name: 'Hung', headline: 'x', topics: ['tpm', 'shift-management'], years: 20, rate_vnd: 800000, token: 'tok' });

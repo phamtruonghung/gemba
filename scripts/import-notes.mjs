@@ -24,16 +24,16 @@ const files = readdirSync(srcDir).filter((f) => f.endsWith('.md') && !SKIP.has(f
 const written = [];
 
 // The portable lessons in a company-scoped vault carry back-links into that scope
-// (`src: relats/raw/daily/...`). The craft is publishable; the pointer to the employer's
-// scope is not, and the gate blocks it. So the corpus copy drops the provenance pointer
-// instead of weakening the rule — the fact of the removal is reported, not hidden.
+// (`src: <vault>/raw/daily/...`). The craft is publishable; the pointer to the employer's
+// scope is not, and the gate blocks it. So the corpus copy drops the provenance pointers
+// into a vault's raw/ folder, whatever the vault is called, instead of weakening the rule — the fact of the removal is reported, not hidden.
 function stripCompanyCitations(text) {
   let removed = 0;
-  const out = text.replace(/\s*`?src:\s*[^`\n]*relats\/[^`\n]*`?/g, () => {
+  const out = text.replace(/\s*`?src:\s*[^`\n]*\braw\/[^`\n]*`?/g, () => {
     removed += 1;
     return '';
   });
-  return { out: out.replace(/\brelats\/[\w./-]*/g, '').replace(/[ \t]+\n/g, '\n'), removed };
+  return { out: out.replace(/[ \t]+\n/g, '\n'), removed };
 }
 
 for (const f of files) {

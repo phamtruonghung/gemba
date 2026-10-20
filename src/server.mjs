@@ -7,7 +7,7 @@ import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 
 import * as dbm from './db.mjs';
-import { checkNote, decidePublication, loadRules } from './gate.mjs';
+import { checkNote, decidePublication, loadRules, readRulesFile } from './gate.mjs';
 import { buildIndex, search, coverage, questionLang } from './retrieval.mjs';
 import { askFromCorpus, llmConfig } from './llm.mjs';
 import { quote, formatVnd, MIN_MINUTES, transferInstruction, suggestRateVnd } from './pricing.mjs';
@@ -133,6 +133,8 @@ export function loadConfig(env = process.env) {
     host: merged.GEMBA_HOST || '0.0.0.0',
     dbPath: merged.GEMBA_DB || `${dataDir}/gemba.db`,
     dataDir,
+    // Deployment-specific gate additions (employer names). Absent file = built-in rules only.
+    gateRulesPath: merged.GEMBA_GATE_RULES || `${dataDir}/gate.rules.json`,
     adminToken,
     adminTokenFile: tokenFile,
     adminTokenFromEnv: Boolean(merged.GEMBA_ADMIN_TOKEN),
@@ -182,7 +184,7 @@ const pricingFor = (db) => {
 };
 const NOT_CONFIRMED = 'The practitioner has not confirmed the time yet; no payment was requested.';
 
-export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), transport = null, sweepEveryMs = 0 } = {}) {
+export function createApp({ dbPath, config = loadConfig(), rules = loadRules(readRulesFile(config.gateRulesPath)), transport = null, sweepEveryMs = 0 } = {}) {
   // The configured path wins. GEMBA_DB / GEMBA_DATA_DIR are what the README, the systemd unit, the
   // installer and the container volume all describe, so the running app has to open *that* file.
   // (It used to default to a relative 'data/gemba.db', which silently ignored the configuration:
@@ -277,7 +279,13 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
     // Nobody else covers the topic: the same practitioners again beat a question that goes nowhere.
     if (!pool.length) pool = candidates.slice(0, MAX_EXPERTS_PER_QUESTION);
     const due = new Date(Date.now() + ROUTE_DUE_HOURS * 3600 * 1000).toISOString();
-    const routed = pool.length ? pool : dbm.listExperts(db).slice(0, 1);
+    // No topic practitioner is accepting: the most senior active practitioner who IS accepting. A paused
+    // practitioner is never the fallback; if nobody is accepting the question waits, and says so.
+    const routed = pool.length ? pool : dbm.listExperts(db).filter((e) => e.accept_questions === 1).slice(0, 1);
+    if (!routed.length) {
+      dbm.logEvent(db, 'escalate', q.ref, 'nobody is accepting questions; not routed');
+      return { question: q, routed: [], nobody: true };
+    }
     const updated = dbm.tx(db, () => {
       const row = dbm.routeQuestion(db, q.ref, routed.map((e) => e.id), due);
       db.prepare('update questions set breach_at = null where id = ?').run(q.id);
@@ -1016,9 +1024,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
 
         if (action === 'cancel') {
           const reason = String(form.reason ?? '').trim();
-          // A cancellation after payment is not a status change, it is money owed back. The platform
-          // instructs payment and never holds it (ADR-0008), so this records the amount the operator
-          // has to send back rather than pretending a transfer can be reversed.
+          // A cancellation after payment is not a status change, it is money owed back. The buyer paid the
+          // instance's account, so this records the amount the operator has to send back rather than pretending a transfer can be reversed.
           const r = dbm.cancelBooking(db, ref, { reason, actor });
           if (!r.ok) return back(r);
           return redirect(`/admin/bookings?cancelled=${encodeURIComponent(ref)}`);
@@ -1043,10 +1050,11 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
         experts: dbm.listExperts(db),
         notes: dbm.publishedNotes(db).slice(-6).reverse(),
         user,
-        place: placeOf()
+        place: placeOf(),
+        pricing: pricingFor(db)
       }));
     }
-    if (path === '/how-it-works') return send(200, views.howItWorksPage({ user }));
+    if (path === '/how-it-works') return send(200, views.howItWorksPage({ user, pricing: pricingFor(db) }));
     if (path === '/experts') return send(200, views.expertListPage({ experts: dbm.listExperts(db), topics: views.topicList(), user, pricing: pricingFor(db) }));
     if (path === '/library') {
       const topic = url.searchParams.get('topic') ?? '';
@@ -1117,6 +1125,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
         pricing: pricingFor(db),
         user,
         claimed: owned,
+        nobody: url.searchParams.get('nobody') === '1' && q.status !== 'routed' && q.status !== 'answered',
         url: `${origin}/q/${encodeURIComponent(q.ref)}`,
         text: textSize
       }));
@@ -1130,8 +1139,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
       if (q.contact === '' && (form.contact ?? '') && ownerOf(q, account, cookies)) {
         db.prepare('update questions set contact = ?, asker = ? where ref = ?').run(String(form.contact), String(form.asker ?? ''), ref);
       }
-      escalate()(ref, form.contact);
-      return redirect(`/q/${ref}`);
+      const result = escalate()(ref, form.contact);
+      return redirect(result?.nobody ? `/q/${ref}?nobody=1` : `/q/${ref}`);
     }
     const rerouteMatch = /^\/q\/([^/]+)\/reroute$/.exec(path);
     if (rerouteMatch && method === 'POST') {
@@ -1624,6 +1633,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const { bankBin, bankAccount } = app.config;
     console.log(`Gemba listening on http://${app.config.host}:${app.server.address().port}`);
     console.log(`  notes indexed: ${app.index().n}`);
+    const nTerms = app.rules.block_terms.length;
+    console.log(existsSync(app.config.gateRulesPath)
+      ? `  gate rules: ${app.config.gateRulesPath} (${nTerms} block terms)`
+      : `  gate rules: ${app.config.gateRulesPath} not found — no deployment block terms`);
     console.log(`  AI tier: ${app.config.llm.enabled ? `model ${app.config.llm.model}` : 'no API key — extractive fallback only'}`);
     console.log(`  bank: ${bankBin && bankAccount ? `${bankBin}/${bankAccount}` : 'NOT configured — booking pages show no QR'}`);
     console.log(`  admin: /qt/<token> — read it from ${app.config.adminTokenFile} (mode 600), or rotate it at /admin`);

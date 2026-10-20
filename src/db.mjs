@@ -76,8 +76,8 @@ create table if not exists bookings (
   payment_ref text not null default '',
   cancelled_at text,
   -- What the client actually paid that the platform now owes them back. Non-zero only when a booking
-  -- was cancelled after it was paid: the platform instructs payment and never holds it (ADR-0008), so
-  -- this is the amount an operator has to send back, not money the platform is sitting on.
+  -- was cancelled after it was paid: the buyer paid the instance's account, so this is the amount the
+  -- operator has to send back.
   refund_vnd integer not null default 0,
   cancel_reason text not null default '',
   -- Set when the operator marks the refund instruction as sent. The platform never reverses a transfer.

@@ -1,3 +1,7 @@
+```
+src/       every module of the app, one concern each (server.mjs routes, views.mjs pages, db.mjs schema, gate.mjs, llm.mjs, ...)
+scripts/   seed.mjs  import-notes.mjs  eval-retrieval.mjs  admin-create.mjs  sweep.mjs  smoke.sh  ui-check.py  probe-*.mjs
+           read-reference.py  measure-contrast.py  probe-block.py   # design evidence, not opinions
 # Gemba — a factory-production knowledge platform, Vietnam-first
 
 A working prototype of a paid knowledge product for Vietnamese manufacturing: a person asks a
@@ -9,9 +13,11 @@ The refusal is not a fallback. It is the product: it is what separates an answer
 act on from a plausible paragraph a language model invented, and it is what turns an unanswered
 question into revenue.
 
-- **Status:** prototype, running on the LAN. Demo corpus, one demo expert profile, no real money moves.
+- **Status:** prototype, running on the LAN. Demo corpus, 3 demo expert profiles, no real money moves.
 - **Runtime:** Node ≥ 22.13, `node:http` + `node:sqlite`, zero dependencies, no build step.
-- **UI:** English, server-rendered HTML, no build step and no framework.
+- **UI:** English, server-rendered HTML, no build step and no framework. The nine strings that decide whether a
+  Vietnamese supervisor trusts a page (refusal, way to a practitioner, cost, payment, next step, ask box, answer
+  header, sign-in, error) are also in Vietnamese, for a question asked in Vietnamese (`src/i18n.mjs`).
 
 ## The four rungs
 
@@ -65,9 +71,9 @@ when it last signed in, and the practitioner row it belongs to.
 done**, **Move** a session (the price is re-quoted from the practitioner's current rate and the current
 settings — a reschedule keeps the payment), and **Cancel** with a reason.
 
-Cancelling after the client paid is not a status change, it is money owed back. The platform instructs
-payment and never holds it (ADR-0008), so a cancelled paid booking records the amount and appears under
-**Refunds owed** as an instruction to send back — never as money the platform is sitting on. The page
+Cancelling after the client paid is not a status change, it is money owed back. The buyer paid the
+instance's one bank account (see *Money*), so a cancelled paid booking records the amount and appears under
+**Refunds owed** as an instruction for the operator to send back. The page
 also totals what each practitioner has earned: paid out, the platform fee, and what is still in flight.
 
 ### Practitioners, and how one arrives
@@ -84,7 +90,8 @@ comes from people who ran the line, and an invitation is the operator saying "th
    permanent password, so it is the fallback for someone who loses theirs, not the front door. If it
    leaks, *Generate a new desk link* kills the old one.
 
-Pausing a practitioner (`Accept new questions` off) takes them out of routing immediately; editing a
+Pausing a practitioner (`Accept new questions` off) takes them out of routing immediately, including as the
+fallback when nobody else covers the topic; if nobody is accepting, the question waits and its page says so. Editing a
 rate changes what new bookings quote, without a deploy. Every one of those changes is audited.
 
 Values are whole numbers in VND — the product never holds a fraction of a đồng — and a form with one
@@ -105,9 +112,15 @@ fails is **shown to its author with the reason** — never dropped silently.
 **Nobody attests for the author.** An interview ends in a *draft*: the author sees the rendered note, the
 gate's findings and the attestation text, can edit it and re-run the gate, and the note is published only
 when the form posts the attestation checkbox *and* the gate passes. The same gate stops an expert's answer
-to a routed question. The seed passes no attestation either: a shipped note that would need one stays
-unpublished (today all twelve pass without it). What survives is the portable craft: the order of checks, the countermeasure, the
+to a routed question. The seed has no author, so it attests nothing: a shipped note that would need an attestation stays
+unpublished. All 12 shipped notes publish without one, and `test/gate.test.mjs` fails if one stops. What survives is the portable craft: the order of checks, the countermeasure, the
 standard, the diagnostic question.
+
+The employer's own names (the strings the gate must never let through) are a deployment file, not source,
+because the source is public: `<data>/gate.rules.json` (or `GEMBA_GATE_RULES`) adds `block_terms` and any other
+rule list to the built-in rules, which name no employer. `deploy/gate.rules.example.json` shows the shape. An
+absent file means the built-in rules only; a present file with a bad key or value stops the server from
+starting, so a typo cannot silently drop the block list.
 
 Every note records its `origin` (`demo`, `vault`, `interview`, or an expert submission), so a reader
 can always tell whose words are being quoted.
@@ -158,6 +171,7 @@ implemented. The contract is in `SPEC.md` section 3 and enforced by `test/llm.te
 | `GEMBA_TRUST_PROXY` | — | `1` behind the Cloudflare tunnel: rate limits are charged to `cf-connecting-ip` (else `x-forwarded-for`) instead of the socket, which is always `127.0.0.1` there. Leave unset on a direct bind, where those headers are forgeable. Limits: 10 asks/min per address, 60/h per identity; 5 sign-ins/min per address, 20/h per email; 5 sign-ups/min. Bodies over 64 KiB (512 KiB for a practitioner's note) answer 413 |
 | `GEMBA_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
 | `GEMBA_DB` | `<data>/gemba.db` | database path |
+| `GEMBA_GATE_RULES` | `<data>/gate.rules.json` | a deployment's additions to the gate (employer names in `block_terms`, more customer names, patterns). Absent ⇒ the built-in rules, which name no employer; present but malformed ⇒ the server refuses to start |
 | `GEMBA_HOST_PORT` | `8090` | host-side port in `docker-compose.yml`; the container always listens on 8090 internally |
 | `GEMBA_ADMIN_TOKEN` | generated into `<data>/admin.token` | operator console token (`/qt/<token>`); never printed to a log. Rotate it from `/admin`, unless it is set here |
 | `GEMBA_LLM_KEY` | — | API key for the answer model; absent ⇒ labelled extractive mode |
@@ -193,15 +207,15 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 | `POST /b/:ref/transferred` | the buyer says they transferred the money |
 | `POST /c/:token/answer` | expert answers a routed question |
 | `POST /c/:token/note` | expert submits a note (goes through the gate) |
-| `POST /c/:token/interview` | AI-moderated interview that drafts a note, then gates it |
+| `POST /c/:token/interview` | a scripted interview (8 fixed questions) that drafts a note; the author edits, attests and publishes it, and the gate runs first |
 | `POST /c/:token/confirm`, `/complete` | operator: money arrived; session done |
 
 ## Accounts, and what signing in changes
 
 An asker can create an account (name, email, password) and sign in. The session cookie is an
 **opaque random id** with a row in `sessions` — not a signed token — so signing out *revokes* it
-server-side rather than trusting the client to forget. Passwords are hashed with `scrypt` at Node's
-defaults (`N=16384, r=8, p=1`), salts are per-account, verification is constant-time, and the hash
+server-side rather than trusting the client to forget. Passwords are hashed with `scrypt` at
+cost `N=2^17`, `r=8`, `p=1`, salts are per-account, verification is constant-time, and the hash
 never leaves the database. Password policy is length only (10+ characters, up to 200): composition
 rules push people towards `Passw0rd!` and NIST has said to drop them.
 
@@ -215,9 +229,8 @@ What it buys you:
 - **Ownership is checked, not assumed.** `/account` redirects to `/signin` when there is no session,
   and it lists only rows whose `user_id` matches.
 
-What it does not do yet: no password reset, no email verification, no sign-in rate limit, and no
-CSRF token (the forms are `POST`-only, the cookie is `SameSite=Lax`, so a cross-site form post
-cannot carry it — a token is still the honest fix if this is ever sold).
+Sign-ins are rate-limited per address and per email, and every post form carries its session's CSRF token.
+What it does not do yet: no password reset and no email verification.
 
 The old `GEMBA_USER`/`GEMBA_PASS` gate is separate and still available: it is the *door*, kept for
 protecting a public prototype, while accounts are the *identity* inside it. Tests and LAN runs leave
@@ -266,16 +279,19 @@ Prices are **whole VND integers** — no floats anywhere in the money path. A se
 `rate × minutes`, capped to a minimum block of 30 minutes, split into a 20% platform fee and the
 expert's payout (`src/pricing.mjs`).
 
-Payment is **instructed, not held**: the booking page shows the amount and a VietQR code with the
-booking reference in the transfer note, the buyer confirms, the operator matches the bank line and
-marks it paid. The platform never touches customer funds — holding them is an activity that needs a
-payment-intermediary licence (charter capital from VND 50bn under Decree 52/2024), and staying out
-of it is a deliberate decision. See `SPEC.md` § *Vietnam constraints*.
+How money moves today: the booking page shows the **full price** and a VietQR code for the instance's one
+bank account (`GEMBA_BANK_BIN`, `GEMBA_BANK_ACCOUNT`) with the booking reference in the transfer note; the
+buyer transfers; the operator matches the bank line and marks it paid; later the operator pays the
+practitioner's share and any refund from their own bank. The software moves no money, withholds no tax and
+issues no invoice. Whether this flow is collection on behalf of others, and what Vietnamese rules attach to
+it (reported: withholding on a platform with ordering and payment; a payment-intermediary licence at VND 50bn
+charter capital if the platform becomes merchant of record), is **open and needs counsel** — `SPEC.md` §7
+states the three money shapes, a recommendation, and the questions. These are engineering notes, not legal advice.
 
 ## Tests, and what they caught
 
-64 tests (`node --test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
-(126 checks in a headless browser: overflow at 375/1440, contrast, focus, tap targets, labels, card
+324 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+(a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:
 
@@ -291,10 +307,11 @@ than the coverage number because of what they found:
 - A blocked interview draft failed **silently** in the UI — now the reason is a page.
 - `expert.topics[0]` returned the raw JSON string `"["` because the column was never parsed.
 - The state machine's own words (`open`, `answered`, `paid`) leaked to users — now every status is
-  rendered through a label map, and a test asserts no raw token reaches a page.
+  rendered through a label map, and a test asserts no raw token reaches an asker's or practitioner's page
+  (the operator's audit trail shows events as logged).
 - Moving the content to English moved three things at once (UI strings, the refusal marker, the URL
   routes), so the corpus notes were retranslated with the gate's rules restated as a constraint: they
-  pass it clean, in the new language (this was untrue for a while: two vault notes carried a figure and the seed attested for them; the attestation is gone from the seed, the notes were rewritten, and `test/gate.test.mjs` asserts every shipped note publishes with none). The gate's Vietnamese patterns stayed — a Vietnamese note
+  pass it clean, in the new language (this was untrue for a while: two vault notes carried a figure and the seed attested for them; the attestation is gone from the seed and the notes were rewritten). The gate's Vietnamese patterns stayed — a Vietnamese note
   carrying an employer's order number is still someone else's information.
 - Renaming the topics silently mis-attributed every note: the seed mapped topic to author with a
   hardcoded table whose keys were the old Vietnamese slugs, and a `?? 'hung-qa'` fallback turned the
@@ -423,12 +440,12 @@ bookmark.
 
 ## What is deliberately not built
 
-No payment gateway or escrow (see above), no email/Zalo notification (the expert has a tokenised
-queue instead), no expert KYC/vetting, no invoice or withholding module, no contracts or ToS, no
-mobile app, no analytics. Accounts exist for askers (email + password, below) and for the operator
-(`/admin`), practitioners get accounts by invitation rather than by registering, and there is no password
-reset by email (a practitioner who loses one uses a fresh desk link), no email verification and no rate limit on
-sign-in yet. Practitioner accounts arrive by invitation — see the operator section above. `SPEC.md` § *Open questions* names the ones that must be decided before selling
+No payment gateway or escrow, no Zalo notification (email goes through the outbox, below), no expert
+KYC/vetting, no invoice or withholding module, no final contracts or ToS (the Vietnamese terms pages are drafts
+marked as not reviewed by counsel), no mobile app, no analytics. Accounts exist for askers (email + password,
+above) and for the operator (`/admin`); practitioners get accounts by invitation rather than by registering.
+There is no password reset by email (a practitioner who loses one uses a fresh desk link) and no email
+verification. `SPEC.md` § *Open questions* names the ones that must be decided before selling
 anything.
 
 ## Repo layout
@@ -439,8 +456,8 @@ scripts/   seed.mjs  import-notes.mjs  smoke.sh  ui-check.py  ui-shots.py  probe
            read-reference.py  measure-contrast.py  probe-block.py   # design evidence, not opinions
 design-system/gemba/MASTER.md   the generated visual system the interface is built from
 seed/      experts.json  topic-map.json  corpus/  vault-raw/
-test/      unit.test.mjs  app.test.mjs  auth.test.mjs  accounts.test.mjs
-deploy/    install.sh  gemba.service  quick-tunnel.sh  entrypoint.sh  docker-smoke.sh
+test/      one file per area (`*.test.mjs`); docs.test.mjs fails when a number in this README drifts
+deploy/    install.sh  gemba.service  quick-tunnel.sh  entrypoint.sh  docker-smoke.sh  gate.rules.example.json
 Dockerfile  docker-compose.yml  .env.example     the same app as a container, for another machine
 .github/workflows/ci.yml                          tests, then build-and-publish the image
 SPEC.md    the mechanism being copied, the constraints, the decisions, the open questions

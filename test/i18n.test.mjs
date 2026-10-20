@@ -128,7 +128,7 @@ test('terms, privacy and complaints are Vietnamese, marked as a draft for counse
     assert.equal([...html.matchAll(/<h1[\s>]/g)].length, 1);
   }
   assert.ok((await page('/bao-mat')).includes('cookie'));
-  assert.ok((await page('/dieu-khoan')).includes('không giữ tiền'));
+  assert.ok((await page('/dieu-khoan')).includes('tài khoản ngân hàng của đơn vị vận hành'));
   const home = await page('/');
   for (const path of ['/dieu-khoan', '/bao-mat', '/khieu-nai']) assert.ok(home.includes(`href="${path}"`), `the footer links ${path}`);
 });
