@@ -1,4 +1,4 @@
-// src/db.mjs — schema and queries. Zero dependency: node:sqlite (Node >= 22.5).
+// src/db.mjs — schema and queries. Zero dependency: node:sqlite (Node >= 22.13).
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';

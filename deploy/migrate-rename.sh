@@ -12,26 +12,43 @@
 # a successful migration does nothing.
 set -euo pipefail
 
+OLD_ENV_DIR="${GEMBA_LEGACY_ENV_DIR:-/etc/xuong}"
+OLD_DATA_DIR="${GEMBA_LEGACY_DATA_DIR:-/var/lib/xuong}"
+OLD_APP_DIR="${GEMBA_LEGACY_APP_DIR:-/opt/xuong}"
+OLD_UNIT=xuong.service
+NEW_ENV_DIR=/etc/gemba
+NEW_DATA_DIR=/var/lib/gemba
+
 # Cleanup mode, called by install.sh *after* a successful install: at that point the new instance is
 # verified healthy, so what remains of the old one is a second copy of the app and a config file
 # carrying the same secrets under a name nothing uses. Keeping these paths in one file is deliberate —
 # install.sh must not have to spell the old name to be able to clean it up.
+#
+# The data directory is different from the other two, and it is the only one that can hold something
+# nobody can recreate. A migration that found the new database already in place leaves the old one
+# where it was (it cannot tell which file is live), and this cleanup then deleted it: the operator's
+# questions, with "Installed." printed afterwards. So the app and config directories are removed, and
+# the data directory is only removed when it is empty.
 if [ "${1:-}" = "--cleanup" ]; then
-  for legacy in /opt/xuong /etc/xuong /var/lib/xuong; do
+  for legacy in "$OLD_APP_DIR" "$OLD_ENV_DIR"; do
     if [ -e "$legacy" ]; then
       rm -rf "$legacy"
       echo "removed legacy $legacy"
     fi
   done
+  if [ -e "$OLD_DATA_DIR" ] && [ -n "$(ls -A "$OLD_DATA_DIR" 2>/dev/null)" ]; then
+    echo "refusing to remove $OLD_DATA_DIR: it still holds files, and one of them may be the live database." >&2
+    ls -la "$OLD_DATA_DIR" >&2 || true
+    echo "  Compare it with the configured database before deleting anything:" >&2
+    echo "    node /opt/gemba/scripts/probe-db.mjs $OLD_DATA_DIR/*.db $NEW_DATA_DIR/gemba.db" >&2
+    echo "  Nothing was removed from it." >&2
+    exit 1
+  fi
+  if [ -d "$OLD_DATA_DIR" ]; then
+    rmdir "$OLD_DATA_DIR" && echo "removed empty legacy $OLD_DATA_DIR"
+  fi
   exit 0
 fi
-
-OLD_ENV_DIR=/etc/xuong
-OLD_DATA_DIR=/var/lib/xuong
-OLD_APP_DIR=/opt/xuong
-OLD_UNIT=xuong.service
-NEW_ENV_DIR=/etc/gemba
-NEW_DATA_DIR=/var/lib/gemba
 
 legacy=0
 for p in "$OLD_ENV_DIR" "$OLD_DATA_DIR" "$OLD_APP_DIR" "/etc/systemd/system/$OLD_UNIT"; do
