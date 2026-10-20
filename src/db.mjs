@@ -2,6 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 export const SCHEMA = `
 create table if not exists experts (
@@ -167,6 +168,8 @@ export function migrate(db) {
   // everything asked before accounts existed stays valid and keeps its display name.
   addColumn('questions', 'user_id', 'user_id integer references users(id)');
   addColumn('questions', 'ai_missing', "ai_missing text not null default ''");
+  // sha256 of the one-time claim a guest's browser holds; '' once claimed, and for questions asked before it existed.
+  addColumn('questions', 'claim_hash', "claim_hash text not null default ''");
   addColumn('bookings', 'user_id', 'user_id integer references users(id)');
   // Roles arrived after accounts did: everyone who signed up before this was an asker, and that is
   // exactly what the default says. A locked account keeps its history; it just cannot sign in.
@@ -197,13 +200,25 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
-let refSeq = 0;
+// Uppercase Crockford base32 (no I, L, O, U): a ref is printed on pages, typed into a bank transfer memo
+// (which banks upper-case and strip), and read aloud. 16 characters from 10 random bytes is 80 bits, so a
+// stranger cannot walk the space; the old date-stamped ref had about 10 bits of entropy a day.
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 export function makeRef(prefix) {
-  refSeq += 1;
-  const d = new Date();
-  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-  const rand = Math.random().toString(36).slice(2, 5).toUpperCase();
-  return `${prefix}-${stamp}-${rand}${refSeq}`;
+  const bytes = randomBytes(10);
+  let bits = 0;
+  let acc = 0;
+  let out = '';
+  for (const byte of bytes) {
+    acc = (acc << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += CROCKFORD[(acc >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+    acc &= (1 << bits) - 1;
+  }
+  return `${prefix}-${out}`;
 }
 
 const txDepth = new WeakMap();
@@ -545,13 +560,13 @@ export function bookingsForUser(db, userId, limit = 50) {
 
 /**
  * Attach an already-asked question to the account that just signed in. Only an unclaimed question
- * is claimed, and only by the person holding its ref — a ref is a random 3-character suffix on top
- * of the date, but "who owns this row" is not something to decide optimistically.
+ * is claimed. This function does not decide *whether the caller may*: the route proves ownership (the
+ * guest's claim cookie, or a contact that is the account's email) before it calls here.
  */
 export function claimQuestion(db, ref, userId) {
   const q = questionByRef(db, ref);
   if (!q || q.user_id) return null;
-  db.prepare('update questions set user_id = ? where id = ?').run(userId, q.id);
+  db.prepare("update questions set user_id = ?, claim_hash = '' where id = ?").run(userId, q.id);
   return questionByRef(db, ref);
 }
 
@@ -772,9 +787,9 @@ export function notesForExpert(db, expertId) {
 export function insertQuestion(db, q) {
   const ref = q.ref ?? makeRef('X');
   db.prepare(
-    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, ai_missing, status, user_id, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`
-  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.ai_missing ?? '', q.user_id ?? null, nowIso());
+    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, ai_missing, status, user_id, claim_hash, created_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
+  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.ai_missing ?? '', q.user_id ?? null, q.claim_hash ?? '', nowIso());
   return questionByRef(db, ref);
 }
 

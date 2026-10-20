@@ -757,20 +757,12 @@ function refusalPanel({ heading, missing = '', escalation = '' }) {
 
 // --- pages -----------------------------------------------------------------
 
-export function home({ stats, experts, notes, questions, user = null, place = null }) {
+export function home({ stats, experts, notes, user = null, place = null }) {
   const chips = topicList()
     .map(([slug, label]) => `<a class="badge" href="/library?topic=${encodeURIComponent(slug)}">${esc(label)}</a>`)
     .join('');
   const expertCards = experts.slice(0, 3).map((e) => expertCard(e, { compact: true })).join('');
   const noteCards = notes.slice(0, 3).map(noteCard).join('');
-  const recent = questions
-    .slice(0, 6)
-    .map(
-      (q) => `<li><a href="/q/${esc(q.ref)}">${esc(q.text.slice(0, 90))}${q.text.length > 90 ? '…' : ''}</a>
-      <div class="stack-sm"><span class="badge ${q.ai_coverage === 'thin' ? 'warn' : 'ok'}">${q.ai_coverage === 'thin' ? 'the library could not cover it' : 'answered from the library'}</span>
-      <span class="muted small">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status, q.ai_coverage))}</span></div></li>`
-    )
-    .join('');
   return layout({
     title: 'Ask someone who has run the line',
     user,
@@ -927,15 +919,6 @@ ${noteCards
     <p class="lead">Every note here passed the publishability gate, and the library answers from them by name.</p>
     <div class="grid" style="margin-top:var(--space-5)">${noteCards}</div>
     <p style="margin:var(--space-5) 0 0"><a class="btn alt" href="/library">Read all ${stats.notes} notes ${icon('arrow')}</a></p>
-  </div>
-</section>`
-      : ''}
-${recent
-      ? `<section class="tight">
-  <div class="wrap narrow">
-    <p class="eyebrow">Recently asked</p>
-    <h2>Questions people brought</h2>
-    <ul class="plain">${recent}</ul>
   </div>
 </section>`
       : ''}
@@ -1106,7 +1089,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
       }).join('')}</tbody></table></div>`
     : '';
   const keepBanner =
-    user && claimed
+    user && claimed && q.user_id === user.id
       ? `<div class="notice ok" role="status">${icon('check')} This question is now saved to your account — it will be here when you come back.</div>`
       : !user
         ? `<div class="notice">${icon('account')} <strong>Keep this question.</strong> <a href="/signin?keep=${encodeURIComponent(q.ref)}">Sign in</a> or <a href="/signup?keep=${encodeURIComponent(q.ref)}">create an account</a> and it will be waiting, with its answer and any escalation, next time.</div>`
@@ -1122,7 +1105,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
     <p class="row muted tight-gap">
       <span class="badge">${esc(topicLabel(q.topic))}</span>
       ${q.plant_type ? `<span class="badge">${esc(q.plant_type)}</span>` : ''}
-      ${q.asker ? `<span class="badge">asked by ${esc(q.asker)}</span>` : '<span class="badge">asked as a guest</span>'}
+      ${claimed && q.asker ? `<span class="badge">asked by ${esc(q.asker)}</span>` : '<span class="badge">asked as a guest</span>'}
       ${q.due_at && q.status === 'routed' ? `<span class="badge">practitioner answers by ${esc(q.due_at.slice(0, 10))}</span>` : ''}
     </p>
 ${keepBanner}
@@ -1138,7 +1121,7 @@ ${cov
           escalation: `<form method="post" action="/q/${esc(q.ref)}/ask-expert" style="margin-top:var(--space-4)">
   <div class="field">
     <label for="asker">Your name</label>
-    <input id="asker" name="asker" value="${esc(q.asker || (user?.name ?? ''))}">
+    <input id="asker" name="asker" value="${esc((claimed && q.asker) || (user?.name ?? ''))}">
   </div>
   <div class="field">
     <label for="contact">Email or phone, so the answer can reach you</label>

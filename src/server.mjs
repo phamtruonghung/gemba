@@ -3,7 +3,7 @@
 
 import http from 'node:http';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 
 import * as dbm from './db.mjs';
 import { checkNote, decidePublication, loadRules } from './gate.mjs';
@@ -23,12 +23,51 @@ import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, new
 const ROUTE_DUE_HOURS = 48;
 const TEXT_COOKIE = 'gemba_text';
 const PLACE_COOKIE = 'gemba_place';
+const CLAIMS_COOKIE = 'gemba_claims';
+const MAX_CLAIMS = 10;
 const prefCookie = (name, value, secure) =>
   `${name}=${value}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
 /** A same-origin path or '/': one leading slash, never `//` or `/\\` (both are protocol-relative to a browser). */
 export function safeNext(next) {
   const n = String(next ?? '');
   return /^\/(?![/\\])/.test(n) && !/[\r\n\0]/.test(n) ? n : '/';
+}
+
+const sha256 = (s) => createHash('sha256').update(String(s)).digest('hex');
+
+/** The `ref.claim` pairs a guest's browser holds, newest last. */
+function claimsFrom(cookies) {
+  const out = new Map();
+  for (const pair of String(cookies[CLAIMS_COOKIE] ?? '').split('~')) {
+    const i = pair.lastIndexOf('.');
+    if (i > 0) out.set(pair.slice(0, i), pair.slice(i + 1));
+  }
+  return out;
+}
+
+/** True when the cookie carries the claim whose hash is stored on this question. */
+function holdsClaim(q, cookies) {
+  if (!q.claim_hash) return false;
+  const claim = claimsFrom(cookies).get(q.ref);
+  if (!claim) return false;
+  return sameSecret(sha256(claim), q.claim_hash);
+}
+
+/**
+ * Who a question belongs to: its account, an operator, or the browser that asked it as a guest.
+ * Nobody else is shown the asker's name or contact, and nobody else can plant one.
+ */
+function ownerOf(q, account, cookies) {
+  if (account && (q.user_id === account.id || account.role === 'admin')) return true;
+  return holdsClaim(q, cookies);
+}
+
+/** The cookie value after adding one claim, keeping the most recent MAX_CLAIMS. */
+function claimsCookieValue(cookies, ref, claim) {
+  const all = claimsFrom(cookies);
+  all.delete(ref);
+  all.set(ref, claim);
+  return [...all].slice(-MAX_CLAIMS).map(([r, c]) => `${r}.${c}`).join('~');
 }
 
 // Constant-time compare; lengths are allowed to differ (a length leak is not the secret).
@@ -149,7 +188,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     return index;
   };
 
-  async function runAsk({ text, plant_type = '', asker = '', contact = '', topic = '', user_id = null }) {
+  async function runAsk({ text, plant_type = '', asker = '', contact = '', topic = '', user_id = null, claim_hash = '' }) {
     const hits = search(text, index, 5);
     const cov = coverage(text, hits, index);
     const inferredTopic = topic || hits[0]?.note?.topic || 'other';
@@ -166,7 +205,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       ai_coverage: ai.coverage,
       ai_mode: ai.mode,
       ai_missing: ai.missing,
-      user_id
+      user_id,
+      claim_hash
     });
     dbm.logEvent(db, 'ask', q.ref, `coverage=${ai.coverage} mode=${ai.mode} hits=${hits.length}`);
     return { question: q, hits, ai, cov };
@@ -393,13 +433,30 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const ref = decodeURIComponent(path.slice('/api/question/'.length));
       const q = dbm.questionByRef(db, ref);
       if (!q) return sendJson(404, { error: 'not found' });
-      return sendJson(200, { ...q, ai_citations: JSON.parse(q.ai_citations), answers: dbm.answersFor(db, ref) });
+      // An allowlist, not the row: the row holds the asker's contact, their account id and the claim hash.
+      const out = {
+        ref: q.ref, topic: q.topic, text: q.text, status: q.status,
+        ai_answer: q.ai_answer, ai_citations: JSON.parse(q.ai_citations || '[]'), ai_coverage: q.ai_coverage,
+        ai_mode: q.ai_mode, ai_missing: q.ai_missing, created_at: q.created_at, due_at: q.due_at,
+        answers: dbm.answersFor(db, ref).map((a) => ({ expert_name: a.expert_name, body: a.body, created_at: a.created_at }))
+      };
+      if (ownerOf(q, account, cookies)) Object.assign(out, { asker: q.asker, contact: q.contact });
+      return sendJson(200, out);
     }
     if (path === '/api/experts' && method === 'GET') {
       return sendJson(200, dbm.listExperts(db).map((e) => ({ slug: e.slug, name: e.name, topics: e.topics, rate_vnd: e.rate_vnd })));
     }
 
     // --- accounts ----------------------------------------------------------
+    // Signing in "to keep" a question claims it only for the browser that asked it, or for the account
+    // whose email the asker gave. A ref alone, which anyone holding the link has, claims nothing.
+    const claimKept = (ref, who) => {
+      const q = dbm.questionByRef(db, ref);
+      if (!q || q.user_id) return false;
+      const byEmail = q.contact.trim() !== '' && q.contact.trim().toLowerCase() === String(who.email).toLowerCase();
+      if (!holdsClaim(q, cookies) && !byEmail) return false;
+      return Boolean(dbm.claimQuestion(db, ref, who.id));
+    };
     if (path === '/signin' && method === 'GET') {
       if (account) return redirect('/account');
       return send(200, views.signInPage({ keep: url.searchParams.get('keep') ?? '', next: url.searchParams.get('next') ?? '', user }));
@@ -443,9 +500,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       // The guest question this person was looking at is claimed on the way through — the whole
       // point of signing in from that page.
       const keep = String(form.keep ?? '').trim();
-      if (keep) dbm.claimQuestion(db, keep, found.id);
+      const kept = keep && claimKept(keep, found);
       const next = String(form.next ?? '').trim();
-      return withCookie(keep ? `/q/${encodeURIComponent(keep)}` : next && next.startsWith('/') ? next : '/account', id, isSecureRequest(req));
+      return withCookie(kept ? `/q/${encodeURIComponent(keep)}` : next ? safeNext(next) : '/account', id, isSecureRequest(req));
     }
     if (path === '/signup' && method === 'POST') {
       const limited = tooManySignups();
@@ -470,8 +527,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       dbm.createSession(db, { id, userId: created.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
       dbm.logEvent(db, 'signup', '', `user=${created.id}`);
       const keep = String(form.keep ?? '').trim();
-      if (keep) dbm.claimQuestion(db, keep, created.id);
-      return withCookie(keep ? `/q/${encodeURIComponent(keep)}` : '/account', id, isSecureRequest(req));
+      const kept = keep && claimKept(keep, created);
+      return withCookie(kept ? `/q/${encodeURIComponent(keep)}` : '/account', id, isSecureRequest(req));
     }
     if (path === '/signout' && method === 'POST') {
       if (sessionId) dbm.deleteSession(db, sessionId);
@@ -845,7 +902,6 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         stats: dbm.stats(db),
         experts: dbm.listExperts(db),
         notes: dbm.publishedNotes(db).slice(-6).reverse(),
-        questions: dbm.recentQuestions(db, 8),
         user,
         place: placeOf()
       }));
@@ -873,15 +929,24 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       if (text.length > MAX_QUESTION_CHARS) return fail(400, `Keep the question under ${MAX_QUESTION_CHARS} characters.`);
       const limited = askLimit(false);
       if (limited) return limited;
+      // A guest's question is kept for the browser that asked it: a one-time claim, stored hashed, goes
+      // into a cookie. The ref in the URL is only a pointer; it proves nothing about who asked.
+      const claim = account ? '' : randomBytes(18).toString('base64url');
       const out = await runAsk({
         text,
         plant_type: form.plant_type ?? '',
         asker: String(form.asker ?? '').trim() || account?.name || '',
         contact: String(form.contact ?? '').trim() || account?.email || '',
         topic: form.topic ?? '',
-        user_id: account?.id ?? null
+        user_id: account?.id ?? null,
+        claim_hash: claim ? sha256(claim) : ''
       });
-      return redirect(`/q/${out.question.ref}`);
+      if (!claim) return redirect(`/q/${out.question.ref}`);
+      res.writeHead(303, {
+        location: `/q/${out.question.ref}`,
+        'set-cookie': `${CLAIMS_COOKIE}=${claimsCookieValue(cookies, out.question.ref, claim)}; Path=/; Max-Age=${30 * 86400}; HttpOnly; SameSite=Lax${isSecureRequest(req) ? '; Secure' : ''}`
+      });
+      return res.end();
     }
 
     // --- question page + escalation + booking ------------------------------
@@ -890,7 +955,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const q = dbm.questionByRef(db, decodeURIComponent(qMatch[1]));
       if (!q) return fail(404, 'No such question.');
       const cited = citedNotes(q.ai_citations);
-      const owned = Boolean(account && q.user_id === account.id);
+      const owned = ownerOf(q, account, cookies);
       return send(200, views.questionPage({
         q,
         aiCitations: cited,
@@ -910,7 +975,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const ref = decodeURIComponent(escMatch[1]);
       const q = dbm.questionByRef(db, ref);
       if (!q) return fail(404, 'No such question.');
-      if (q.contact === '' && (form.contact ?? '')) {
+      // Anyone may send a question on to a practitioner, but only its owner may attach a contact to it.
+      if (q.contact === '' && (form.contact ?? '') && ownerOf(q, account, cookies)) {
         db.prepare('update questions set contact = ?, asker = ? where ref = ?').run(String(form.contact), String(form.asker ?? ''), ref);
       }
       escalate()(ref, form.contact);

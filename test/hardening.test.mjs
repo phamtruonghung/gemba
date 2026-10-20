@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 
 import { createApp, basicAuthOk, loadConfig } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
-import { upsertExpert, createUser } from '../src/db.mjs';
+import { upsertExpert, createUser, makeRef } from '../src/db.mjs';
 import { hashPassword } from '../src/auth.mjs';
 
 const baseConfig = (extra = {}) => ({
@@ -266,5 +266,141 @@ test('a client that never finishes its headers is hung up on', async () => {
   } finally {
     s.stop();
     s.app.server.closeAllConnections?.();
+  }
+});
+
+// --- #32: refs, redaction, the homepage, claiming ----------------------------
+
+
+const cookieOf = (res) => (res.headers.getSetCookie?.() ?? [res.headers.get('set-cookie') ?? ''])
+  .map((c) => c.split(';')[0]).filter(Boolean).join('; ');
+const post = (base, path, data, cookie = '') =>
+  fetch(base + path, { method: 'POST', redirect: 'manual', headers: { ...FORM, ...(cookie ? { cookie } : {}) }, body: enc(data) });
+const refOf = (res) => res.headers.get('location').split('/').pop();
+const ROOMY = { capacity: 10_000, perMs: 60_000 };
+const roomy = { limits: { askIp: ROOMY, askIdentity: ROOMY, signinIp: ROOMY, signinEmail: ROOMY, signupIp: ROOMY } };
+
+test('a ref is 80 random bits in a bank-safe alphabet, with no date and no shared prefix', () => {
+  const today = new Date().toISOString().slice(0, 10).replaceAll('-', '');
+  const seen = new Set();
+  let longestShared = 0;
+  let prev = '';
+  for (let i = 0; i < 1000; i += 1) {
+    const ref = makeRef('X');
+    assert.match(ref, /^X-[0-9A-HJKMNP-TV-Z]{16}$/);
+    assert.ok(!ref.includes(today));
+    seen.add(ref);
+    let k = 2;
+    while (k < ref.length && ref[k] === prev[k]) k += 1;
+    longestShared = Math.max(longestShared, k - 2);
+    prev = ref;
+  }
+  assert.equal(seen.size, 1000);
+  assert.ok(longestShared <= 3, `consecutive refs shared ${longestShared} characters`);
+  assert.match(makeRef('B'), /^B-[0-9A-HJKMNP-TV-Z]{16}$/);
+});
+
+test('a stranger holding a ref does not get the asker, the contact or the account', async () => {
+  const s = await start(roomy);
+  try {
+    const asked = await post(s.base, '/ask', { q: 'why does the sealing station jam every morning?', asker: 'Thu', contact: 'victim@plant.vn' });
+    assert.equal(asked.status, 303);
+    const ref = refOf(asked);
+    const claimCookie = cookieOf(asked);
+    assert.match(claimCookie, /^gemba_claims=/);
+    assert.match(asked.headers.get('set-cookie'), /HttpOnly/);
+
+    const stranger = await (await fetch(`${s.base}/api/question/${ref}`)).json();
+    assert.equal(stranger.contact, undefined);
+    assert.equal(stranger.asker, undefined);
+    assert.equal(stranger.user_id, undefined);
+    assert.equal(stranger.claim_hash, undefined);
+    assert.ok(stranger.text.includes('sealing station'));
+    assert.ok(Array.isArray(stranger.ai_citations));
+    const page = await (await fetch(`${s.base}/q/${ref}`)).text();
+    assert.ok(!page.includes('Thu') && !page.includes('victim@plant.vn'), 'the page shows a stranger neither the name nor the contact');
+
+    const owner = await (await fetch(`${s.base}/api/question/${ref}`, { headers: { cookie: claimCookie } })).json();
+    assert.equal(owner.contact, 'victim@plant.vn');
+    assert.equal(owner.asker, 'Thu');
+    assert.equal(owner.claim_hash, undefined);
+
+    createUser(s.app.db, { email: 'ops@gemba.test', name: 'Ops', role: 'admin', password_hash: await hashPassword('operator-password-1') });
+    const login = await post(s.base, '/admin/login', { email: 'ops@gemba.test', password: 'operator-password-1' });
+    const asOperator = await (await fetch(`${s.base}/api/question/${ref}`, { headers: { cookie: cookieOf(login) } })).json();
+    assert.equal(asOperator.contact, 'victim@plant.vn');
+  } finally {
+    s.stop();
+  }
+});
+
+test('the homepage no longer lists what people asked', async () => {
+  const s = await start(roomy);
+  try {
+    const sentence = 'zebra-crossing conveyor mislabel complaint in building nine';
+    const asked = await post(s.base, '/ask', { q: sentence, asker: 'Someone' });
+    assert.equal(asked.status, 303);
+    const home = await (await fetch(`${s.base}/`)).text();
+    assert.ok(!home.includes(sentence));
+    assert.ok(!/href="\/q\//.test(home));
+  } finally {
+    s.stop();
+  }
+});
+
+test('signing up with a stranger\'s ref claims nothing; the browser that asked, or the email it gave, does', async () => {
+  const s = await start(roomy);
+  try {
+    const asked = await post(s.base, '/ask', { q: 'how do we stop the label printer skipping?', asker: 'Victim', contact: 'victim@plant.vn' });
+    const ref = refOf(asked);
+    const row = () => s.app.db.prepare('select user_id, claim_hash from questions where ref = ?').get(ref);
+    assert.ok(row().claim_hash, 'a hash of the claim is stored, never the claim');
+    assert.ok(!asked.headers.get('set-cookie').includes(row().claim_hash));
+
+    const thief = await post(s.base, '/signup', { name: 'Thief', email: 'thief@evil.test', password: 'a-long-enough-password', keep: ref });
+    assert.equal(thief.status, 303);
+    assert.equal(thief.headers.get('location'), '/account', 'no cookie, no claim: the redirect is the account page');
+    assert.equal(row().user_id, null);
+    assert.ok(!(await (await fetch(`${s.base}/account`, { headers: { cookie: cookieOf(thief) } })).text()).includes(ref));
+
+    const mine = await post(s.base, '/signup', { name: 'Victim', email: 'other@plant.vn', password: 'a-long-enough-password', keep: ref }, cookieOf(asked));
+    assert.equal(mine.headers.get('location'), `/q/${ref}`);
+    assert.ok(row().user_id);
+    assert.equal(row().claim_hash, '', 'a claimed question has no claim left');
+
+    const second = refOf(await post(s.base, '/ask', { q: 'what is the changeover order for the filler?', asker: 'Mai', contact: 'mai@plant.vn' }));
+    const byEmail = await post(s.base, '/signup', { name: 'Mai', email: 'MAI@plant.vn', password: 'a-long-enough-password', keep: second });
+    assert.equal(byEmail.headers.get('location'), `/q/${second}`);
+    assert.ok(s.app.db.prepare('select user_id from questions where ref = ?').get(second).user_id);
+  } finally {
+    s.stop();
+  }
+});
+
+test('a //evil next after sign-in goes nowhere off-site', async () => {
+  const s = await start(roomy);
+  try {
+    createUser(s.app.db, { email: 'next@plant.vn', name: 'Next', password_hash: await hashPassword('a-long-enough-password') });
+    const res = await post(s.base, '/signin', { email: 'next@plant.vn', password: 'a-long-enough-password', next: '//evil.example' });
+    assert.equal(res.headers.get('location'), '/');
+  } finally {
+    s.stop();
+  }
+});
+
+test('a stranger can send a question to a practitioner but cannot plant a contact on it', async () => {
+  const s = await start(roomy);
+  try {
+    upsertExpert(s.app.db, { slug: 'e1', name: 'E', headline: 'h', topics: ['other', 'tpm'], years: 5, rate_vnd: 500000, token: 'tok-e1' });
+    const ref = refOf(await post(s.base, '/ask', { q: 'unanswerable seasonal labour contracts outside the plant', asker: 'Anon' }));
+    const row = () => s.app.db.prepare('select contact, asker, status from questions where ref = ?').get(ref);
+    assert.equal(row().contact, '');
+    const planted = await post(s.base, `/q/${ref}/ask-expert`, { asker: 'Mallory', contact: 'mallory@evil.test' });
+    assert.equal(planted.status, 303);
+    assert.equal(row().status, 'routed', 'the escalation itself still happens');
+    assert.equal(row().contact, '');
+    assert.equal(row().asker, 'Anon');
+  } finally {
+    s.stop();
   }
 });

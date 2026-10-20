@@ -174,7 +174,8 @@ test('accounts: signing in keeps the guest question that was open', async () => 
   const asked = await post('/ask', { q: 'the machine stops mid-shift, what do I check and in what order', asker: 'Guest' });
   const ref = asked.headers.get('location').split('/').pop();
 
-  const signin = await post('/signin', { email: 'third@example.com', password: 'a sentence of ten', keep: ref });
+  // the browser that asked holds the claim cookie the /ask answer set, and sends it on the way to /signin
+  const signin = await post('/signin', { email: 'third@example.com', password: 'a sentence of ten', keep: ref }, cookieOf(asked));
   assert.equal(signin.status, 303);
   assert.equal(signin.headers.get('location'), `/q/${ref}`);
   const cookie = cookieOf(signin);
