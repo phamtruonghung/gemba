@@ -145,6 +145,11 @@ test('the booking page QR encodes the bank, the account, the amount and the refe
   assert.equal(res.status, 303);
   const location = res.headers.get('location');
   const ref = location.split('/').pop();
+  assert.ok(!(await get(location)).html.includes('vietqr'), 'no transfer instruction until the practitioner confirms');
+  await fetch(`${base}/c/${EXPERT_TOKEN}/booking`, {
+    method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ ref, action: 'confirm', meeting_url: 'https://meet.example.com/qr' })
+  });
   const { html } = await get(location);
   const tag = [...html.matchAll(/<img [^>]*>/g)].map((m) => m[0]).find((t) => t.includes('vietqr'));
   assert.ok(tag, 'the page has a VietQR image');

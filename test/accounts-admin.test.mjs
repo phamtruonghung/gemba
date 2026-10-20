@@ -72,9 +72,16 @@ async function bookSession(minutes = 45) {
   return res.headers.get('location').replace('/b/', '');
 }
 
-/** A booking the client has said they paid: the state the operator reconciles from. */
+/** The practitioner confirms the time with a meeting link, which is what asks the client for money. */
+async function confirmSlot(ref) {
+  const res = await post('/c/tok-hung/booking', { ref, action: 'confirm', meeting_url: 'https://meet.example.com/hung' });
+  assert.equal(res.status, 303, 'the practitioner confirms');
+}
+
+/** A booking the practitioner confirmed and the client has said they paid: what the operator reconciles from. */
 async function bookAndTransfer(minutes = 45) {
   const ref = await bookSession(minutes);
+  await confirmSlot(ref);
   assert.equal((await post(`/b/${ref}/transferred`)).status, 303);
   return ref;
 }

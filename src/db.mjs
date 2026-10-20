@@ -78,6 +78,14 @@ create table if not exists bookings (
   -- this is the amount an operator has to send back, not money the platform is sitting on.
   refund_vnd integer not null default 0,
   cancel_reason text not null default '',
+  -- Set when the operator marks the refund instruction as sent. The platform never reverses a transfer.
+  refunded_at text,
+  -- Set when the operator marks the practitioner's payout as sent.
+  payout_paid_at text,
+  -- Where the session happens. Shown to the client only once payment is received.
+  meeting_url text not null default '',
+  -- The client's "I have transferred": a claim to check against the statement, not a state change.
+  transfer_reported_at text,
   created_at text not null
 );
 create table if not exists interviews (
@@ -171,6 +179,10 @@ export function migrate(db) {
   addColumn('bookings', 'cancelled_at', 'cancelled_at text')
   addColumn('bookings', 'refund_vnd', 'refund_vnd integer not null default 0')
   addColumn('bookings', 'cancel_reason', "cancel_reason text not null default ''");
+  addColumn('bookings', 'refunded_at', 'refunded_at text');
+  addColumn('bookings', 'payout_paid_at', 'payout_paid_at text');
+  addColumn('bookings', 'meeting_url', "meeting_url text not null default ''");
+  addColumn('bookings', 'transfer_reported_at', 'transfer_reported_at text');
   // A backstop for "one slot, one open booking". Old rows hold free-text starts_at and may collide, so
   // a failed build must not stop the app from booting: the check inside createBookingOnce is the guarantee.
   try {
@@ -343,6 +355,9 @@ export function cancelBooking(db, ref, { reason = '', actor = '' } = {}) {
   return tx(db, () => {
     const b = bookingByRef(db, ref);
     if (!b) return { ok: false, error: 'No such booking.' };
+    if (b.status === 'awaiting_payment' && b.transfer_reported_at) {
+      return { ok: false, error: 'The client reported a transfer. Check the statement: mark payment received if it arrived, then cancel to record the refund.' };
+    }
     return transitionBooking(db, ref, 'cancelled', {
       actor,
       note: `reason="${String(reason).slice(0, 80)}" refund_owed=${b.status === 'paid' ? b.price_vnd : 0}`,
@@ -384,9 +399,49 @@ export function rescheduleBooking(db, ref, { startsAt, minutes, money, actor = '
   });
 }
 
+/** The client says they transferred. A claim to check against the bank statement; the status does not move. */
+export function reportTransfer(db, ref) {
+  return tx(db, () => {
+    const b = bookingByRef(db, ref);
+    if (!b) return { ok: false, error: 'No such booking.' };
+    if (b.status !== 'awaiting_payment') {
+      return { ok: false, error: b.status === 'requested'
+        ? 'The practitioner has not confirmed the time yet; there is nothing to transfer.'
+        : `Booking ${ref} is ${b.status}; there is no transfer to report.` };
+    }
+    const info = db.prepare("update bookings set transfer_reported_at = ? where ref = ? and status = 'awaiting_payment' and transfer_reported_at is null").run(nowIso(), ref);
+    if (info.changes === 1) logEvent(db, 'booking_transfer_reported', ref, 'client');
+    return { ok: true, booking: bookingByRef(db, ref) };
+  });
+}
+
+/** The refund is an instruction. This records that the operator sent it, with the bank reference as the note. */
+export function markRefunded(db, ref, { actor = '', note = '' } = {}) {
+  return tx(db, () => {
+    const info = db
+      .prepare("update bookings set refunded_at = ? where ref = ? and status = 'cancelled' and refund_vnd > 0 and refunded_at is null")
+      .run(nowIso(), ref);
+    if (info.changes !== 1) return { ok: false, error: `Booking ${ref} has no refund outstanding.` };
+    logEvent(db, 'booking_refunded', ref, `actor=${actor} ${String(note).slice(0, 100)}`.trim());
+    return { ok: true, booking: bookingByRef(db, ref) };
+  });
+}
+
+/** Records that the operator sent the practitioner's share of a completed session. */
+export function markPayoutPaid(db, ref, { actor = '', note = '' } = {}) {
+  return tx(db, () => {
+    const info = db
+      .prepare("update bookings set payout_paid_at = ? where ref = ? and status = 'completed' and payout_paid_at is null")
+      .run(nowIso(), ref);
+    if (info.changes !== 1) return { ok: false, error: `Booking ${ref} has no payout outstanding.` };
+    logEvent(db, 'booking_payout_paid', ref, `actor=${actor} ${String(note).slice(0, 100)}`.trim());
+    return { ok: true, booking: bookingByRef(db, ref) };
+  });
+}
+
 export function refundsOwed(db) {
   return db
-    .prepare("select b.*, e.name as expert_name from bookings b left join experts e on e.id = b.expert_id where b.status = 'cancelled' and b.refund_vnd > 0 order by b.cancelled_at desc")
+    .prepare("select b.*, e.name as expert_name from bookings b left join experts e on e.id = b.expert_id where b.status = 'cancelled' and b.refund_vnd > 0 and b.refunded_at is null order by b.cancelled_at desc")
     .all();
 }
 
@@ -409,19 +464,32 @@ export function bookingStatusCounts(db) {
   );
 }
 
-/** What each practitioner has earned, for the page where the operator decides about rates. */
+const STATEMENT_COLUMNS = `
+  coalesce(sum(case when b.status = 'completed' and b.payout_paid_at is not null then b.payout_vnd else 0 end), 0) as paid_out_vnd,
+  coalesce(sum(case when b.status = 'completed' and b.payout_paid_at is null then b.payout_vnd else 0 end), 0) as owed_vnd,
+  coalesce(sum(case when b.status in ('paid','awaiting_payment') then b.payout_vnd else 0 end), 0) as in_flight_vnd,
+  coalesce(sum(case when b.status = 'completed' then b.fee_vnd else 0 end), 0) as fee_vnd,
+  count(b.id) as bookings`;
+
+/**
+ * What each practitioner has been paid, is owed, and has in flight. "Paid out" means the operator marked
+ * the payout as sent; a completed session whose payout is not marked is *owed*, not paid.
+ */
 export function revenueByExpert(db) {
   return db
     .prepare(
-      `select e.id, e.name,
-        coalesce(sum(case when b.status = 'completed' then b.payout_vnd else 0 end), 0) as paid_out_vnd,
-        coalesce(sum(case when b.status = 'completed' then b.fee_vnd else 0 end), 0) as fee_vnd,
-        coalesce(sum(case when b.status in ('completed','paid','awaiting_payment') then b.price_vnd else 0 end), 0) as pending_vnd,
-        count(b.id) as bookings
+      `select e.id, e.name, ${STATEMENT_COLUMNS}
        from experts e left join bookings b on b.expert_id = e.id
        group by e.id order by bookings desc, e.name`
     )
     .all();
+}
+
+/** The same three numbers for one practitioner, for their own desk. */
+export function expertStatement(db, expertId) {
+  return db
+    .prepare(`select ${STATEMENT_COLUMNS} from bookings b where b.expert_id = ?`)
+    .get(expertId);
 }
 
 export function createSession(db, { id, userId, expiresAt, userAgent = '' }) {
@@ -826,7 +894,7 @@ const ALLOWED = {
 };
 
 /** Columns a caller may set along with a transition. A column name in SQL never comes from a caller. */
-const TRANSITION_FIELDS = ['cancelled_at', 'cancel_reason', 'refund_vnd', 'payment_ref'];
+const TRANSITION_FIELDS = ['cancelled_at', 'cancel_reason', 'refund_vnd', 'payment_ref', 'meeting_url'];
 
 /**
  * The one place a booking changes state. Never throws for an illegal or stale transition: it returns
