@@ -193,22 +193,26 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const cov = coverage(text, hits, index);
     const inferredTopic = topic || hits[0]?.note?.topic || 'other';
     const ai = await askFromCorpus({ question: text, hits, plantType: plant_type, coverageVerdict: cov, cfg: config.llm });
-    const q = dbm.insertQuestion(db, {
-      asker,
-      contact,
-      plant_type,
-      topic: inferredTopic,
-      text,
-      ai_answer: ai.answer,
-      // The numbered citations with their snippets, not bare ids: the page must show [1]..[k] and a real excerpt.
-      ai_citations: ai.cites,
-      ai_coverage: ai.coverage,
-      ai_mode: ai.mode,
-      ai_missing: ai.missing,
-      user_id,
-      claim_hash
+    // The row and its event are one fact; the model call above is the only await, and it is finished.
+    const q = dbm.tx(db, () => {
+      const row = dbm.insertQuestion(db, {
+        asker,
+        contact,
+        plant_type,
+        topic: inferredTopic,
+        text,
+        ai_answer: ai.answer,
+        // The numbered citations with their snippets, not bare ids: the page must show [1]..[k] and a real excerpt.
+        ai_citations: ai.cites,
+        ai_coverage: ai.coverage,
+        ai_mode: ai.mode,
+        ai_missing: ai.missing,
+        user_id,
+        claim_hash
+      });
+      dbm.logEvent(db, 'ask', row.ref, `coverage=${ai.coverage} mode=${ai.mode} hits=${hits.length}`);
+      return row;
     });
-    dbm.logEvent(db, 'ask', q.ref, `coverage=${ai.coverage} mode=${ai.mode} hits=${hits.length}`);
     return { question: q, hits, ai, cov };
   }
 
@@ -234,8 +238,11 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const pool = dbm.expertsForTopic(db, q.topic).slice(0, MAX_EXPERTS_PER_QUESTION);
       const due = new Date(Date.now() + ROUTE_DUE_HOURS * 3600 * 1000).toISOString();
       const routed = pool.length ? pool : dbm.listExperts(db).slice(0, 1);
-      const updated = dbm.routeQuestion(db, ref, routed.map((e) => e.id), due);
-      dbm.logEvent(db, 'escalate', ref, `-> ${routed.map((e) => e.slug).join(', ')} due ${due}`);
+      const updated = dbm.tx(db, () => {
+        const row = dbm.routeQuestion(db, ref, routed.map((e) => e.id), due);
+        dbm.logEvent(db, 'escalate', ref, `-> ${routed.map((e) => e.slug).join(', ')} due ${due}`);
+        return row;
+      });
       return { question: updated, routed };
     };
   }
@@ -522,10 +529,14 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           field: 'email', keep: String(form.keep ?? ''), user
         }));
       }
-      const created = dbm.createUser(db, { email: email.value, name: name.value, password_hash: await hashPassword(password.value) });
+      const password_hash = await hashPassword(password.value);
       const id = newSessionId();
-      dbm.createSession(db, { id, userId: created.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
-      dbm.logEvent(db, 'signup', '', `user=${created.id}`);
+      const created = dbm.tx(db, () => {
+        const user = dbm.createUser(db, { email: email.value, name: name.value, password_hash });
+        dbm.createSession(db, { id, userId: user.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
+        dbm.logEvent(db, 'signup', '', `user=${user.id}`);
+        return user;
+      });
       const keep = String(form.keep ?? '').trim();
       const kept = keep && claimKept(keep, created);
       return withCookie(kept ? `/q/${encodeURIComponent(keep)}` : '/account', id, isSecureRequest(req));
@@ -908,7 +919,18 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     }
     if (path === '/how-it-works') return send(200, views.howItWorksPage({ user }));
     if (path === '/experts') return send(200, views.expertListPage({ experts: dbm.listExperts(db), topics: views.topicList(), user, pricing: pricingFor(db) }));
-    if (path === '/library') return send(200, views.corpusPage({ notes: (() => { const t = url.searchParams.get('topic'); const all = dbm.publishedNotes(db); return t ? all.filter((n) => n.topic === t) : all; })(), topic: url.searchParams.get('topic') ?? '', topics: views.topicList(), user, place: placeOf() }));
+    if (path === '/library') {
+      const topic = url.searchParams.get('topic') ?? '';
+      const requested = Math.max(1, Math.floor(Number(url.searchParams.get('page'))) || 1);
+      let page = requested;
+      let { notes, total } = dbm.publishedNotesPage(db, { topic, offset: (page - 1) * dbm.LIBRARY_PAGE_SIZE });
+      const pages = Math.max(1, Math.ceil(total / dbm.LIBRARY_PAGE_SIZE));
+      if (page > pages) {
+        page = pages;
+        ({ notes } = dbm.publishedNotesPage(db, { topic, offset: (page - 1) * dbm.LIBRARY_PAGE_SIZE }));
+      }
+      return send(200, views.corpusPage({ notes, total, page, pages, topic, topics: views.topicList(), user, place: placeOf() }));
+    }
     if (path.startsWith('/notes/')) {
       const slug = decodeURIComponent(path.slice('/notes/'.length));
       const note = dbm.noteBySlug(db, slug);
@@ -1284,14 +1306,13 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         const r = dbm.transitionBooking(db, String(form.ref ?? ''), 'completed', { actor: 'operator' });
         return redirect(r.ok ? `/qt/${token}` : `/qt/${token}?err=${encodeURIComponent(r.error)}`);
       }
-      const answered = new Set(db.prepare('select distinct question_id from answers').all().map((r) => r.question_id));
       return send(200, views.adminPage({
         token,
         stats: dbm.stats(db),
         pendingBookings: dbm.bookingsFor(db, {}).filter((b) => b.status !== 'cancelled'),
         blockedNotes: db.prepare(`select * from notes where status = 'blocked' order by id desc`).all(),
         openQuestions: dbm.recentQuestions(db, 30),
-        answerable: db.prepare(`select * from questions where status = 'routed'`).all().filter((q) => !answered.has(q.id)),
+        answerable: dbm.unansweredRouted(db),
         accounts: dbm.countUsers(db),
         user,
         flash: url.searchParams.get('err') ?? ''
@@ -1373,7 +1394,30 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
   });
   server.maxRequestsPerSocket = 100;
 
-  return { server, db, sw, index: () => index, rebuildIndex, runAsk, escalate: escalate(), config, rules };
+  // Stop taking requests, let the ones in flight finish, then fold the WAL into the database file and close it.
+  // Idempotent: a second call returns the first call's promise.
+  let closing = null;
+  function shutdown({ graceMs = 2000 } = {}) {
+    if (closing) return closing;
+    closing = new Promise((resolve) => {
+      const finish = () => {
+        try {
+          db.exec('pragma wal_checkpoint(truncate)');
+          db.close();
+        } catch (err) {
+          console.error('shutdown: database was not closed cleanly:', err.message);
+        }
+        resolve();
+      };
+      if (!server.listening) return finish();
+      server.close(finish);
+      server.closeIdleConnections();
+      setTimeout(() => server.closeAllConnections(), graceMs).unref();
+    });
+    return closing;
+  }
+
+  return { server, db, sw, index: () => index, rebuildIndex, runAsk, escalate: escalate(), config, rules, shutdown };
 }
 
 /** A slug nobody has taken. `uniqueSlug` below is for notes; practitioners need their own. */
@@ -1405,12 +1449,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const app = createApp();
   app.server.listen(app.config.port, app.config.host, () => {
     const { bankBin, bankAccount } = app.config;
-    console.log(`Gemba listening on http://${app.config.host}:${app.config.port}`);
+    console.log(`Gemba listening on http://${app.config.host}:${app.server.address().port}`);
     console.log(`  notes indexed: ${app.index().n}`);
     console.log(`  AI tier: ${app.config.llm.enabled ? `model ${app.config.llm.model}` : 'no API key — extractive fallback only'}`);
     console.log(`  bank: ${bankBin && bankAccount ? `${bankBin}/${bankAccount}` : 'NOT configured — booking pages show no QR'}`);
     console.log(`  admin: /qt/${app.config.adminToken}`);
   });
+  // docker stop and systemd send SIGTERM; without a handler the process dies with the WAL unfolded.
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.once(signal, () => {
+      setTimeout(() => process.exit(1), 2500).unref();
+      app.shutdown().then(() => process.exit(0));
+    });
+  }
 }
 
 export { formatVnd, suggestRateVnd, MIN_MINUTES, checkNote, slugify };

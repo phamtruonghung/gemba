@@ -12,6 +12,9 @@ services:
     image: ghcr.io/phamtruonghung/gemba:latest
     container_name: gemba
     restart: unless-stopped
+    # node is not PID 1 material: init forwards SIGTERM and reaps, and the grace lets it checkpoint the WAL.
+    init: true
+    stop_grace_period: 10s
     ports:
       # host port : container port. The container always listens on 8090; set
       # GEMBA_HOST_PORT=9000 to reach it on a different port on this machine.

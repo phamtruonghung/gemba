@@ -404,3 +404,217 @@ test('a stranger can send a question to a practitioner but cannot plant a contac
     s.stop();
   }
 });
+
+// --- #40: pragmas, indexes, a second writer, the library's pages, shutdown --------
+
+import { spawn } from 'node:child_process';
+import { existsSync, statSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import * as dbm from '../src/db.mjs';
+
+const tmpDb = () => join(mkdtempSync(join(tmpdir(), 'gemba-db-')), 'gemba.db');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const NEW_INDEXES = {
+  answers: 'idx_answers_question', bookings: 'idx_bookings_expert', sessions: 'idx_sessions_user',
+  notes: 'idx_notes_expert', events: 'idx_events_kind', questions: 'idx_questions_user'
+};
+
+test('the database waits for a lock instead of failing at once', () => {
+  const db = dbm.openDb(':memory:');
+  assert.equal(db.prepare('pragma busy_timeout').get().timeout, 5000);
+  assert.equal(db.prepare('pragma synchronous').get().synchronous, 1, 'normal');
+});
+
+test('a second process holding the write lock delays a write; it does not lose it', async () => {
+  const path = tmpDb();
+  const db = dbm.openDb(path);
+  const child = spawn(process.execPath, ['-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const d = new DatabaseSync(process.argv[1]);
+    d.exec('pragma busy_timeout = 5000');
+    d.exec('begin immediate');
+    d.prepare("insert into events (at, kind, ref, detail) values ('x', 'other-process', '', '')").run();
+    console.log('locked');
+    setTimeout(() => { d.exec('commit'); d.close(); }, 300);
+  `, path], { stdio: ['ignore', 'pipe', 'inherit'] });
+  try {
+    await new Promise((resolve, reject) => {
+      child.stdout.on('data', (b) => String(b).includes('locked') && resolve());
+      child.on('error', reject);
+    });
+    const t0 = performance.now();
+    const q = dbm.insertQuestion(db, { text: 'written while another process held the lock', asker: '', contact: '' });
+    const waited = Math.round(performance.now() - t0);
+    assert.ok(q.ref);
+    assert.ok(waited >= 150, `the write waited ${waited} ms for the other process`);
+    console.log(`  two-writer: insert waited ${waited} ms for the other process's lock`);
+  } finally {
+    child.kill();
+    db.close();
+  }
+});
+
+test('50 parallel asks while another process takes the write lock in a loop: none is a 500', async () => {
+  const path = tmpDb();
+  const app = createApp({ dbPath: path, rules: loadRules(), config: baseConfig({ limits: { askIp: ROOMY, askIdentity: ROOMY, signinIp: ROOMY, signinEmail: ROOMY, signupIp: ROOMY } }) });
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const child = spawn(process.execPath, ['-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const d = new DatabaseSync(process.argv[1]);
+    d.exec('pragma busy_timeout = 5000');
+    const end = Date.now() + 3000;
+    const spin = () => {
+      if (Date.now() > end) { console.log('done'); return; }
+      d.exec('begin immediate');
+      d.prepare("insert into events (at, kind, ref, detail) values ('x', 'other-process', '', '')").run();
+      setTimeout(() => { d.exec('commit'); setTimeout(spin, 20); }, 100);
+    };
+    console.log('started'); spin();
+  `, path], { stdio: ['ignore', 'pipe', 'inherit'] });
+  try {
+    await new Promise((resolve) => child.stdout.on('data', (b) => String(b).includes('started') && resolve()));
+    const results = await Promise.all(Array.from({ length: 50 }, (_, i) =>
+      fetch(`${base}/api/ask`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: `why does station ${i} stop?` }) }).then((r) => r.status)));
+    const count = (code) => results.filter((c) => c === code).length;
+    assert.equal(count(500), 0);
+    assert.equal(count(200), 50, `statuses: 200×${count(200)}, 503×${count(503)}`);
+  } finally {
+    child.kill();
+    await app.shutdown();
+  }
+});
+
+test('an old database gets every index on next open, and the planner uses them', () => {
+  const path = tmpDb();
+  // The shape before accounts and money: no user_id, no claim_hash, none of the new indexes.
+  const old = new DatabaseSync(path);
+  old.exec(`
+    create table notes (id integer primary key, expert_id integer, slug text unique not null, title text not null, topic text not null default 'other', body text not null, status text not null default 'draft', gate text not null default '{}', origin text not null default 'expert', created_at text not null default '', updated_at text not null default '');
+    create table questions (id integer primary key, ref text unique not null, asker text not null default '', contact text not null default '', plant_type text not null default '', topic text not null default 'other', text text not null, ai_answer text not null default '', ai_citations text not null default '[]', ai_coverage text not null default 'thin', ai_mode text not null default '', status text not null default 'open', expert_id integer, routed_at text, due_at text, created_at text not null);
+    create table answers (id integer primary key, question_id integer not null, expert_id integer, body text not null, created_at text not null);
+    create table bookings (id integer primary key, ref text unique not null, expert_id integer not null, expert_name text not null default '', asker text not null default '', contact text not null default '', topic text not null default '', agenda text not null default '', starts_at text not null, minutes integer not null default 45, price_vnd integer not null default 0, fee_vnd integer not null default 0, payout_vnd integer not null default 0, status text not null default 'requested', payment_ref text not null default '', created_at text not null default '');
+    create table experts (id integer primary key, slug text unique not null, name text not null, token text unique not null);
+    insert into questions (ref, text, created_at) values ('X-OLD', 'old row', 'then');
+  `);
+  old.close();
+  const db = dbm.openDb(path);
+  const names = (table) => db.prepare(`pragma index_list(${table})`).all().map((i) => i.name);
+  for (const [table, name] of Object.entries(NEW_INDEXES)) assert.ok(names(table).includes(name), `${table} has ${name}`);
+  for (const [table, name] of [['bookings', 'idx_bookings_user'], ['bookings', 'idx_bookings_starts'], ['notes', 'idx_notes_expert'], ['questions', 'idx_questions_expert']]) {
+    assert.ok(names(table).includes(name), `${table} has ${name}`);
+  }
+  const plan = db.prepare('explain query plan select * from answers where question_id = ?').all(1).map((r) => r.detail).join(' ');
+  assert.match(plan, /idx_answers_question/);
+  assert.equal(db.prepare("select ref from questions where ref = 'X-OLD'").get().ref, 'X-OLD', 'old rows survive');
+  assert.doesNotThrow(() => dbm.openDb(path).close(), 'opening twice is harmless');
+  console.log(`  indexes on questions: ${names('questions').join(', ')}`);
+});
+
+test('the practitioner queue is the same set as before: topic match, expert-id match, and not answered', () => {
+  const db = dbm.openDb(':memory:');
+  const exp = (slug, topics) => ({ id: dbm.upsertExpert(db, { slug, name: slug, headline: '', topics, years: 1, rate_vnd: 500000, token: `t-${slug}` }), topics });
+  const a = exp('a', ['tpm']);
+  const b = exp('b', ['quality']);
+  const ask = (text, topic) => dbm.insertQuestion(db, { text, topic });
+  const q1 = ask('by topic', 'tpm');
+  const q2 = ask('by id', 'other');
+  const q3 = ask('answered', 'tpm');
+  const q4 = ask('someone else\'s', 'quality');
+  const q5 = ask('not routed', 'tpm');
+  for (const q of [q1, q3, q4]) dbm.routeQuestion(db, q.ref, [q.ref === q4.ref ? b.id : a.id], 'later');
+  dbm.routeQuestion(db, q2.ref, [a.id], 'later');
+  dbm.addAnswer(db, { questionRef: q3.ref, expertId: a.id, body: 'done' });
+  assert.deepEqual(dbm.openQuestionsFor(db, { id: a.id, topics: ['tpm'] }).map((q) => q.text).sort(), ['by id', 'by topic']);
+  assert.deepEqual(dbm.openQuestionsFor(db, { id: b.id, topics: ['quality'] }).map((q) => q.text), ["someone else's"]);
+  assert.ok(q5);
+});
+
+test('/library shows 50 notes a page, page 2 is notes 51-100, and the links keep the topic', async () => {
+  const s = await start(roomy);
+  try {
+    for (let i = 1; i <= 120; i += 1) {
+      dbm.upsertNote(s.app.db, { expert_id: null, slug: `bulk-${String(i).padStart(3, '0')}`, title: `Bulk note number ${String(i).padStart(3, '0')}`, topic: i % 2 ? 'tpm' : 'quality', body: `Body ${i}`, status: 'published', gate: {}, origin: 'expert' });
+    }
+    const titles = (html) => [...html.matchAll(/Bulk note number (\d{3})/g)].map((m) => Number(m[1]));
+    const uniq = (xs) => [...new Set(xs)];
+    const one = await (await fetch(`${s.base}/library`)).text();
+    assert.deepEqual(uniq(titles(one)), Array.from({ length: 50 }, (_, i) => i + 1));
+    const two = await (await fetch(`${s.base}/library?page=2`)).text();
+    assert.deepEqual(uniq(titles(two)), Array.from({ length: 50 }, (_, i) => i + 51));
+    assert.match(two, /href="\/library\?page=3"/);
+    assert.match(two, /href="\/library\?page=1"/);
+    const topic = await (await fetch(`${s.base}/library?topic=tpm&page=2`)).text();
+    assert.deepEqual(uniq(titles(topic)).map((n) => n % 2), Array(uniq(titles(topic)).length).fill(1), 'only tpm notes');
+    assert.match(topic, /href="\/library\?topic=tpm&amp;page=1"/);
+    assert.equal((await fetch(`${s.base}/library?page=-4`)).status, 200);
+    assert.equal((await fetch(`${s.base}/library?page=999`)).status, 200);
+  } finally {
+    s.stop();
+  }
+});
+
+test('a busy database is a 503 with Retry-After, not a stack trace', async () => {
+  const s = await start();
+  try {
+    const real = s.app.db.prepare.bind(s.app.db);
+    s.app.db.prepare = () => { throw Object.assign(new Error('database is locked'), { errcode: 5 }); };
+    const res = await fetch(`${s.base}/library`);
+    s.app.db.prepare = real;
+    assert.equal(res.status, 503);
+    assert.equal(res.headers.get('retry-after'), '2');
+  } finally {
+    s.stop();
+  }
+});
+
+test('shutdown folds the WAL into the database file and closes it', async () => {
+  const path = tmpDb();
+  const app = createApp({ dbPath: path, rules: loadRules(), config: baseConfig() });
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const asked = await fetch(`${base}/ask`, { method: 'POST', headers: FORM, body: enc({ q: 'why does the line stop?' }), redirect: 'manual' });
+  assert.equal(asked.status, 303);
+  assert.ok(existsSync(`${path}-wal`) && statSync(`${path}-wal`).size > 0, 'a write left a WAL behind');
+  await app.shutdown();
+  await app.shutdown(); // idempotent
+  assert.ok(!existsSync(`${path}-wal`) || statSync(`${path}-wal`).size === 0);
+  assert.equal(new DatabaseSync(path).prepare('select count(*) n from questions').get().n, 1);
+});
+
+test('SIGTERM stops the real process in under 3 s with the WAL checkpointed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gemba-proc-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'gemba-cwd-'));
+  const server = join(process.cwd(), 'src/server.mjs');
+  const child = spawn(process.execPath, [server], {
+    cwd,
+    env: { PATH: process.env.PATH, GEMBA_DATA_DIR: dir, GEMBA_PORT: '0', GEMBA_HOST: '127.0.0.1', GEMBA_ENV_FILE: '/dev/null' },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let out = '';
+  child.stdout.on('data', (b) => { out += b; });
+  child.stderr.on('data', (b) => { out += b; });
+  try {
+    const port = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`never listened:\n${out}`)), 8000);
+      child.stdout.on('data', () => {
+        const m = /listening on http:\/\/[^:]+:(\d+)/.exec(out);
+        if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+      });
+    });
+    const asked = await fetch(`http://127.0.0.1:${port}/ask`, { method: 'POST', headers: FORM, body: enc({ q: 'why does the line stop?' }), redirect: 'manual' });
+    assert.equal(asked.status, 303);
+    const wal = join(dir, 'gemba.db-wal');
+    assert.ok(existsSync(wal) && statSync(wal).size > 0, 'the ask left a WAL');
+    const t0 = performance.now();
+    child.kill('SIGTERM');
+    const code = await new Promise((resolve) => child.on('exit', resolve));
+    const took = Math.round(performance.now() - t0);
+    assert.equal(code, 0);
+    assert.ok(took < 3000, `exited in ${took} ms`);
+    assert.ok(!existsSync(wal) || statSync(wal).size === 0, 'the WAL is empty after shutdown');
+    console.log(`  SIGTERM: exit ${code} in ${took} ms, WAL ${existsSync(wal) ? statSync(wal).size : 0} bytes`);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});

@@ -146,7 +146,12 @@ create index if not exists idx_bookings_status on bookings(status);
 export function openDb(path = 'data/gemba.db') {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
+  // busy_timeout first: switching the journal mode takes a lock of its own, and a second process (the
+  // seeder, a backup, a script) holding the file would otherwise fail every statement with
+  // "database is locked" at once. It waits up to 5 s on a single thread; the 503 mapping catches the rest.
+  db.exec('pragma busy_timeout = 5000;');
   db.exec('pragma journal_mode = wal;');
+  db.exec('pragma synchronous = normal;'); // safe under WAL, and one fsync fewer per commit
   db.exec('pragma foreign_keys = on;');
   db.exec(SCHEMA);
   migrate(db);
@@ -193,6 +198,19 @@ export function migrate(db) {
   } catch (err) {
     console.warn(`bookings: open-slot index not built (${err.message}); the booking check still holds`);
   }
+  // Indexes last. Some of these are on columns migrate() has just added, so on an existing database they
+  // cannot live in SCHEMA, which runs before any column exists.
+  for (const ddl of [
+    'create index if not exists idx_answers_question on answers(question_id)',
+    'create index if not exists idx_bookings_expert on bookings(expert_id, starts_at)',
+    'create index if not exists idx_bookings_user on bookings(user_id)',
+    'create index if not exists idx_bookings_starts on bookings(starts_at)',
+    'create index if not exists idx_sessions_user on sessions(user_id)',
+    'create index if not exists idx_notes_expert on notes(expert_id)',
+    'create index if not exists idx_events_kind on events(kind, id)',
+    'create index if not exists idx_questions_expert on questions(expert_id)',
+    'create index if not exists idx_questions_user on questions(user_id)'
+  ]) db.exec(ddl);
   return db;
 }
 
@@ -774,6 +792,17 @@ export function publishedNotes(db) {
   return db.prepare(`select * from notes where status = 'published' order by id`).all();
 }
 
+export const LIBRARY_PAGE_SIZE = 50;
+
+/** One page of the library, with the topic filter in the query rather than applied to every note. */
+export function publishedNotesPage(db, { topic = '', limit = LIBRARY_PAGE_SIZE, offset = 0 } = {}) {
+  const where = topic ? `status = 'published' and topic = ?` : `status = 'published'`;
+  const args = topic ? [topic] : [];
+  const total = db.prepare(`select count(*) n from notes where ${where}`).get(...args).n;
+  const notes = db.prepare(`select * from notes where ${where} order by id limit ? offset ?`).all(...args, limit, offset);
+  return { notes, total };
+}
+
 export function noteBySlug(db, slug) {
   return db.prepare('select * from notes where slug = ?').get(slug);
 }
@@ -811,9 +840,22 @@ export function routeQuestion(db, ref, expertIds, dueAt) {
  */
 export function openQuestionsFor(db, expert) {
   const topics = Array.isArray(expert.topics) ? expert.topics : JSON.parse(expert.topics || '[]');
-  const rows = db.prepare(`select * from questions where status = 'routed' order by routed_at`).all();
-  const answered = new Set(db.prepare('select distinct question_id from answers').all().map((r) => r.question_id));
-  return rows.filter((q) => (topics.includes(q.topic) || (expert.id != null && q.expert_id === expert.id)) && !answered.has(q.id));
+  return db
+    .prepare(
+      `select q.* from questions q
+       where q.status = 'routed'
+         and (q.topic in (select value from json_each(?)) or q.expert_id = ?)
+         and not exists (select 1 from answers a where a.question_id = q.id)
+       order by q.routed_at`
+    )
+    .all(JSON.stringify(topics), expert.id ?? null);
+}
+
+/** Routed questions nobody has answered yet, whoever they were routed to (the operator's view). */
+export function unansweredRouted(db) {
+  return db
+    .prepare(`select q.* from questions q where q.status = 'routed' and not exists (select 1 from answers a where a.question_id = q.id)`)
+    .all();
 }
 
 export function addAnswer(db, { questionRef, expertId, body }) {

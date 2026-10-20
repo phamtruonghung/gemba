@@ -1241,7 +1241,7 @@ ${b.status === 'requested'
   });
 }
 
-export function corpusPage({ notes, topic, topics, user = null, place = null }) {
+export function corpusPage({ notes, total = notes.length, page = 1, pages = 1, topic, topics, user = null, place = null }) {
   const chips = topics
     .map(
       ([slug, label]) =>
@@ -1249,6 +1249,11 @@ export function corpusPage({ notes, topic, topics, user = null, place = null }) 
     )
     .join('');
   const cards = notes.map(noteCard).join('');
+  // Plain links, no script: the topic is kept, so paging through one topic stays in it.
+  const pageHref = (n) => `/library?${topic ? `topic=${encodeURIComponent(topic)}&amp;` : ''}page=${n}`;
+  const pager = pages > 1
+    ? `<nav class="row center-cta" aria-label="Pages" style="margin-top:var(--space-5)">${page > 1 ? `<a class="btn alt" rel="prev" href="${pageHref(page - 1)}">Previous</a>` : ''}<span class="muted small">Page ${page} of ${pages}</span>${page < pages ? `<a class="btn alt" rel="next" href="${pageHref(page + 1)}">Next</a>` : ''}</nav>`
+    : '';
   return layout({
     title: 'Knowledge library',
     user,
@@ -1258,13 +1263,13 @@ export function corpusPage({ notes, topic, topics, user = null, place = null }) 
   <div class="wrap">
     <p class="eyebrow">The library</p>
     <h1 style="font-size:clamp(30px,4.4vw,52px)">${topic ? esc(topicLabel(topic)) : 'Every published note'}</h1>
-    <p class="lead">${notes.length} note${notes.length === 1 ? '' : 's'}${topic ? ` filed under ${esc(topicLabel(topic))}` : ''}. Only notes that passed the gate are in here: no customer names, no plant figures, no internal documents.</p>
+    <p class="lead">${total} note${total === 1 ? '' : 's'}${topic ? ` filed under ${esc(topicLabel(topic))}` : ''}. Only notes that passed the gate are in here: no customer names, no plant figures, no internal documents.</p>
     ${continueLink(place)}
     <p class="stack-sm" style="margin-top:var(--space-5)">${chips}<a class="badge" href="/library"${topic ? '' : ' aria-current="true"'}>All topics</a> <a class="badge" href="/how-it-works">The rules</a></p>
   </div>
 </section>
 <section class="tight">
-  <div class="wrap">${cards ? `<div class="grid">${cards}</div>` : '<div class="card" style="margin:0"><p class="muted" style="margin:0">Nothing in this topic yet. <a href="/library">See every note</a>.</p></div>'}</div>
+  <div class="wrap">${cards ? `<div class="grid">${cards}</div>` : '<div class="card" style="margin:0"><p class="muted" style="margin:0">Nothing in this topic yet. <a href="/library">See every note</a>.</p></div>'}${pager}</div>
 </section>
 <section class="tight">
   <div class="wrap">
