@@ -236,7 +236,7 @@ test('money: a booking is priced in VND, split, and never marked paid by the sys
   const page = await (await fetch(`${base}${location}`)).text();
   assert.match(page, /800,000 VND/, 'one hour at the expert rate');
   assert.match(page, /640,000 VND/, 'expert payout after the 20% platform fee');
-  assert.match(page, /img\.vietqr\.io/);
+  assert.match(page, /img\.vietqr\.io\/image\/\d+-\d+-compact2\.png\?amount=800000&amp;addInfo=B-/, 'the QR carries bank, account, amount and ref');
   assert.match(page, /B-/, 'the transfer code is the booking ref');
   assert.match(page, /waiting for transfer instructions/, 'status shown as an English label, never the raw token');
 

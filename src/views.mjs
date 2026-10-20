@@ -1209,7 +1209,7 @@ ${instruction
   <h2 style="font-size:24px">How to pay</h2>
   <p>Amount <strong>${formatVnd(instruction.amount_vnd)}</strong> — put exactly this reference in the transfer note: <span class="mono">${esc(instruction.ref)}</span></p>
   <p class="muted small">Beneficiary bank: BIN ${esc(instruction.bank_bin)} · account ${esc(instruction.account)}</p>
-  ${bankConfigured ? `<p><img src="https://img.vietqr.io/image/vietqr-${esc(instruction.ref)}-compact.png" alt="Transfer code for ${esc(instruction.ref)}" width="220" height="220"></p>` : ''}
+  ${bankConfigured ? `<p><img src="${esc(instruction.qr_url)}" alt="Transfer ${esc(formatVnd(instruction.amount_vnd))} to account ${esc(instruction.account)}, reference ${esc(instruction.ref)}" width="220" height="220"></p>` : ''}
   ${b.status === 'requested' ? `<form method="post" action="/b/${esc(b.ref)}/transferred"><button class="btn" type="submit">${icon('check')}I have transferred the money</button></form>` : ''}
   <p class="hint">${esc(bookingStatus(b.status))} · the operator matches the bank line against the transfer note before anything is scheduled.</p>
 </div>`

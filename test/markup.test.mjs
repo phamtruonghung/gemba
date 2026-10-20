@@ -130,3 +130,29 @@ test('a note that names another note links to it', async () => {
   assert.match(html, /<a href="\/notes\/markup-note">/, 'the reference is a link to the note');
   assert.ok(!html.includes('[['), 'and the wiki brackets never reach the reader');
 });
+
+test('the booking page QR encodes the bank, the account, the amount and the reference', async () => {
+  // The bug this guards: the image was built from the booking ref alone (`vietqr-B-…`), so the code
+  // carried no account and no amount. The old assertion only looked for the host name.
+  const res = await fetch(`${base}/book`, {
+    method: 'POST', redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      expert: 'hung-qa', minutes: '45', starts_at: '2030-11-02 09:00', asker: 'QR client',
+      contact: 'qr@example.com', topic: 'tpm', agenda: 'The press stops at the last station and I need an order of checks.'
+    })
+  });
+  assert.equal(res.status, 303);
+  const location = res.headers.get('location');
+  const ref = location.split('/').pop();
+  const { html } = await get(location);
+  const tag = [...html.matchAll(/<img [^>]*>/g)].map((m) => m[0]).find((t) => t.includes('vietqr'));
+  assert.ok(tag, 'the page has a VietQR image');
+  const src = /src="([^"]*)"/.exec(tag)[1].replace(/&amp;/g, '&');
+  const price = app.db.prepare('select price_vnd from bookings where ref = ?').get(ref).price_vnd;
+  assert.ok(price > 0);
+  assert.ok(src.includes('/image/970436-0123456789-'), `bank BIN and account in the path: ${src}`);
+  assert.ok(src.includes(`amount=${price}`), `the amount in the query: ${src}`);
+  assert.ok(src.includes(`addInfo=${ref}`), `the reference in the query: ${src}`);
+  assert.ok(!/vietqr-B-/.test(src), 'not built from the ref alone');
+});
