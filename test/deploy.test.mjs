@@ -11,6 +11,9 @@ import { mkdtemp, readFile, writeFile, mkdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { readFileSync, mkdtempSync } from 'node:fs';
+import { createApp, loadConfig } from '../src/server.mjs';
+import { loadRules } from '../src/gate.mjs';
 
 const run = promisify(execFile);
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
@@ -35,8 +38,8 @@ test('set-env.py stores a password verbatim, including every character sed used 
       'a|b',                      // | was the delimiter
       'p@ss w0rd $HOME',          // space split the sourced line; $ expanded
       'back`id`tick',             // command substitution in the sourced file
-      "quote'single",             // a quote must not unbalance anything
-      'trailing space '
+      "quote'single",             // a quote inside the value must not unbalance anything
+      'in ner # hash'             // a space and a hash inside are data
     ];
     for (const password of passwords) {
       const { stderr } = await run('python3', [SET_ENV, env, 'GEMBA_USER', 'ops@gemba.local', 'GEMBA_PASS', password]);
@@ -141,4 +144,64 @@ test('a backup of a live database opens, checks out, and reports what it holds',
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('set-env.py refuses a value that systemd and the app would read differently, and leaves the file alone', async () => {
+  const dir = await scratch();
+  try {
+    const env = await writeEnv(dir, 'GEMBA_PASS=keep-me\n');
+    for (const bad of ['a\\b', '"quoted"', ' lead', 'trail ', "'single'"]) {
+      await assert.rejects(run('python3', [SET_ENV, env, 'GEMBA_PASS', bad]), (err) => err.code === 2, JSON.stringify(bad));
+      assert.equal(await readFile(env, 'utf8'), 'GEMBA_PASS=keep-me\n', `file changed after refusing ${JSON.stringify(bad)}`);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a password with & | $ and a space written by the installer opens the gate, and the corrupted one does not', async () => {
+  const dir = await scratch();
+  const cwd = process.cwd();
+  const saved = process.env.GEMBA_ENV_FILE;
+  try {
+    const env = await writeEnv(dir, 'GEMBA_USER=\nGEMBA_PASS=\n');
+    await run('python3', [SET_ENV, env, 'GEMBA_USER', 'u', 'GEMBA_PASS', 'Ca&nd|1 $x']);
+    process.env.GEMBA_ENV_FILE = env;
+    process.chdir(dir);
+    const config = { ...loadConfig({ GEMBA_DATA_DIR: dir }) };
+    assert.equal(config.pass, 'Ca&nd|1 $x');
+    const app = createApp({ dbPath: ':memory:', rules: loadRules(), config: { ...config, llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 } } });
+    await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${app.server.address().port}`;
+    const basic = (pw) => ({ authorization: `Basic ${Buffer.from(`u:${pw}`).toString('base64')}` });
+    try {
+      assert.equal((await fetch(`${base}/`, { headers: basic('Ca&nd|1 $x') })).status, 200);
+      assert.equal((await fetch(`${base}/`, { headers: basic('CaGEMBA_PASS=nd|1 $x') })).status, 401, 'what sed used to write');
+    } finally {
+      await app.shutdown();
+    }
+  } finally {
+    process.chdir(cwd);
+    if (saved === undefined) delete process.env.GEMBA_ENV_FILE; else process.env.GEMBA_ENV_FILE = saved;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('the installer has a shebang on line 1, a pinned Node, and a health wait that fails', () => {
+  const script = readFileSync(join(ROOT, 'deploy/install.sh'), 'utf8');
+  assert.ok(script.startsWith('#!'), 'line 1 is the shebang');
+  assert.ok(!script.includes('index.json'), 'no "newest v22 today" lookup');
+  const pin = /^NODE_VERSION=v22\.(\d+)\.\d+$/m.exec(script);
+  assert.ok(pin && Number(pin[1]) >= 13, 'NODE_VERSION is pinned to a v22.13+ release');
+  assert.ok(script.includes('sha256sum -c - <<<"$(grep " $TARBALL\\$" SHASUMS256.txt)"'), 'the checksum names its file and fails on an empty match');
+  assert.ok(!/admin-create\.mjs[^\n]*\|\|\s*true/.test(script), 'a failed operator creation must stop the install');
+  assert.match(script, /journalctl[\s\S]{0,200}exit 1/, 'the health wait ends in exit 1 with the journal');
+  for (const key of ['GEMBA_ADMIN_TOKEN', 'GEMBA_BANK_BIN', 'GEMBA_BANK_ACCOUNT']) {
+    assert.ok(!new RegExp(`^${key}=\\$\\{`, 'm').test(script), `${key} is not interpolated by the heredoc`);
+  }
+});
+
+test('CI tests the floor and the latest 22, and package.json states the floor', () => {
+  assert.match(readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8'), /'22\.13\.0'/);
+  assert.equal(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).engines.node, '>=22.13');
 });

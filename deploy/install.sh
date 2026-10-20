@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 # deploy/install.sh — install Gemba on a Debian/Ubuntu host as a systemd service.
 #
@@ -38,25 +37,31 @@ say "0. rename migration (a legacy installation is moved in place)"
 # the old name. It exits immediately on a host that never used the old name.
 bash "$SRC_DIR/deploy/migrate-rename.sh"
 
-say "1. Node runtime (>= 22.13, for node:sqlite)"
-if [ -x "$NODE_DIR/bin/node" ]; then
-  echo "already installed: $("$NODE_DIR/bin/node" -v)"
+say "1. Node runtime (pinned, >= 22.13 for node:sqlite)"
+# Pinned, not "whatever nodejs.org lists first today": a deploy is the same runtime every time, and a
+# newer one is a decision made here, in a diff. GEMBA_NODE_VERSION overrides it for a host that needs to.
+NODE_VERSION=v22.23.3
+VER="${GEMBA_NODE_VERSION:-$NODE_VERSION}"
+if [ -x "$NODE_DIR/bin/node" ] && [ "$("$NODE_DIR/bin/node" -v)" = "$VER" ]; then
+  echo "already installed: $VER"
 else
   case "$(uname -m)" in
     x86_64|amd64) NODE_ARCH=x64 ;;
     aarch64|arm64) NODE_ARCH=arm64 ;;
     *) echo "unsupported architecture $(uname -m): install Node >= 22.13 yourself at $NODE_DIR" >&2; exit 1 ;;
   esac
-  VER="${GEMBA_NODE_VERSION:-$(curl -fsSL https://nodejs.org/dist/index.json | python3 -c 'import json,sys; print(next(r["version"] for r in json.load(sys.stdin) if r["version"].startswith("v22.")))')}"
   echo "installing Node $VER ($NODE_ARCH) into $NODE_DIR"
   tmp="$(mktemp -d)"
-  curl -fsSL "https://nodejs.org/dist/$VER/node-$VER-linux-$NODE_ARCH.tar.xz" -o "$tmp/node.tar.xz"
+  TARBALL="node-$VER-linux-$NODE_ARCH.tar.xz"
+  curl -fsSL "https://nodejs.org/dist/$VER/$TARBALL" -o "$tmp/$TARBALL"
   # Verify the download against the published checksum. This tarball becomes the runtime that answers
   # the operator's questions; an installer that skips this trusts whatever the network path returned.
+  # The line for this very file is selected explicitly, so an empty match fails instead of checking nothing.
   curl -fsSL "https://nodejs.org/dist/$VER/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
-  ( cd "$tmp" && sha256sum --ignore-missing -c SHASUMS256.txt | grep -F "node-$VER-linux-$NODE_ARCH.tar.xz: OK" )
+  ( cd "$tmp" && sha256sum -c - <<<"$(grep " $TARBALL\$" SHASUMS256.txt)" )
+  rm -rf "$NODE_DIR"
   mkdir -p "$NODE_DIR"
-  tar xJf "$tmp/node.tar.xz" -C "$NODE_DIR" --strip-components=1
+  tar xJf "$tmp/$TARBALL" -C "$NODE_DIR" --strip-components=1
   rm -rf "$tmp"
   "$NODE_DIR/bin/node" -v
 fi
@@ -105,9 +110,9 @@ GEMBA_LLM_BASE_URL=${GEMBA_LLM_BASE_URL:-https://opencode.ai/zen/go/v1}
 GEMBA_LLM_MODEL=${GEMBA_LLM_MODEL:-deepseek-v4.1-flash}
 # The OpenCode gateway routes by session id; one stable id per installation.
 GEMBA_LLM_SESSION=${GEMBA_LLM_SESSION:-$(cat /proc/sys/kernel/random/uuid)}
-GEMBA_BANK_BIN=${GEMBA_BANK_BIN:-}
-GEMBA_BANK_ACCOUNT=${GEMBA_BANK_ACCOUNT:-}
-GEMBA_ADMIN_TOKEN=${GEMBA_ADMIN_TOKEN:-}
+GEMBA_BANK_BIN=
+GEMBA_BANK_ACCOUNT=
+GEMBA_ADMIN_TOKEN=
 EOF
 fi
 chmod 600 "$ENV_DIR/gemba.env"
@@ -139,6 +144,14 @@ if [ -n "${GEMBA_LLM_KEY:-}" ]; then
   python3 "$SRC_DIR/deploy/set-env.py" "$ENV_DIR/gemba.env" GEMBA_LLM_KEY "$GEMBA_LLM_KEY"
   echo "LLM key written to $ENV_DIR/gemba.env (verbatim, mode 600)"
 fi
+# Same for the bank account and the operator token: they come from the environment, so they are data.
+# A newline in GEMBA_ADMIN_TOKEN used to inject a line into the file the service reads.
+for key in GEMBA_BANK_BIN GEMBA_BANK_ACCOUNT GEMBA_ADMIN_TOKEN; do
+  if [ -n "${!key:-}" ]; then
+    python3 "$SRC_DIR/deploy/set-env.py" "$ENV_DIR/gemba.env" "$key" "${!key}"
+    echo "$key written to $ENV_DIR/gemba.env (verbatim, mode 600)"
+  fi
+done
 chmod 600 "$ENV_DIR/gemba.env"
 
 say "4. seed the corpus (idempotent: upserts by slug)"
