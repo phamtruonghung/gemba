@@ -51,7 +51,28 @@ const isRule = (l) => /^(-{3,}|\*{3,}|_{3,})$/.test(l.trim());
 const isTableSep = (l) => /^\|[\s:|-]+\|$/.test((l ?? '').trim());
 const isFence = (l) => /^\s*```/.test(l);
 
-export function renderMarkdown(md, { title = '', links = null } = {}) {
+/**
+ * A heading's anchor id: lowercase, diacritics stripped (so `Bảo trì` and `Bao tri` share one stable
+ * form and the id is plain ASCII in a URL), non-alphanumerics collapsed to hyphens.
+ */
+export function headingId(text) {
+  const id = String(text)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/gi, 'd')
+    .toLowerCase()
+    .replace(/<[^>]*>/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return id || 'section';
+}
+
+/**
+ * `outline`, when given an array, is filled with `{ id, text, level }` for each heading, so a page can
+ * offer "keep my place" without parsing the HTML again.
+ */
+export function renderMarkdown(md, { title = '', links = null, outline = null } = {}) {
+  const usedIds = new Map();
   const src = String(md ?? '')
     .replace(/^\uFEFF/, '')
     // A draft may still carry YAML front matter; a reader should never see the metadata.
@@ -90,7 +111,15 @@ export function renderMarkdown(md, { title = '', links = null } = {}) {
         i++;
         continue;
       }
-      out.push(`<h${headingLevel(heading[1])}>${renderInline(text, links)}</h${headingLevel(heading[1])}>`);
+      // A stable, deduplicated id plus a visible § link, so the URL fragment carries the reader's place and
+      // can be bookmarked or sent to someone without any script.
+      const base = headingId(text);
+      const seen = usedIds.get(base) ?? 0;
+      usedIds.set(base, seen + 1);
+      const id = seen ? `${base}-${seen + 1}` : base;
+      const level = headingLevel(heading[1]);
+      if (outline) outline.push({ id, text: markdownToText(text), level });
+      out.push(`<h${level} id="${id}">${renderInline(text, links)}<a class="sec-anchor" href="#${id}" aria-label="Link to this section: ${esc(markdownToText(text))}">§</a></h${level}>`);
       sawBlock = true;
       i++;
       continue;
@@ -115,10 +144,10 @@ export function renderMarkdown(md, { title = '', links = null } = {}) {
       const rows = [];
       while (i < lines.length && lines[i].trim().startsWith('|')) rows.push(cells(lines[i++]));
       out.push(
-        `<table><thead><tr>${head.map((c) => `<th>${renderInline(c, links)}</th>`).join('')}</tr></thead>` +
+        `<div class="table-scroll" tabindex="0" role="region" aria-label="Table: scroll sideways to read it"><table><thead><tr>${head.map((c) => `<th>${renderInline(c, links)}</th>`).join('')}</tr></thead>` +
           `<tbody>${rows
             .map((r) => `<tr>${r.map((c) => `<td>${renderInline(c, links)}</td>`).join('')}</tr>`)
-            .join('')}</tbody></table>`,
+            .join('')}</tbody></table></div>`,
       );
       sawBlock = true;
       continue;

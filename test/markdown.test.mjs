@@ -37,8 +37,8 @@ See the [gate rules](https://example.com/rules) and the \`INSUFFICIENT_DATA\` ma
 test('headings become real headings, and the note title is not repeated', () => {
   const html = renderMarkdown(NOTE, { title: '5 Why — how to ask' });
   assert.ok(!html.includes('# 5 Why'), 'the title line is dropped, not rendered');
-  assert.match(html, /<h2>Don't count the number of questions<\/h2>/);
-  assert.match(html, /<h2>Three ways it usually drifts<\/h2>/);
+  assert.match(html, /<h2 id="don-t-count-the-number-of-questions">Don't count the number of questions<a class="sec-anchor"/);
+  assert.match(html, /<h2 id="three-ways-it-usually-drifts">Three ways it usually drifts<a class="sec-anchor"/);
   assert.ok(!html.includes('##'), 'no markdown heading syntax survives into the page');
 });
 

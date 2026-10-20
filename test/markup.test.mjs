@@ -107,7 +107,7 @@ test('a note reads as prose, not as its own markdown source', async () => {
   // first" with the hashes and the bullets as hyphens — the syntax of the note, not the note.
   const { html } = await get('/notes/markup-note');
   assert.match(html, /<div class="prose">/, 'the body renders in the reading view');
-  assert.match(html, /<h2>What to check first<\/h2>/, 'a section heading is a heading');
+  assert.match(html, /<h2 id="what-to-check-first">What to check first<a class="sec-anchor"/, 'a section heading is a heading');
   assert.match(html, /<ul>\s*<li>The guard sensor gap\.<\/li>/, 'a bullet is a bullet');
   assert.match(html, /<em>reset<\/em>/, 'and emphasis is emphasis');
 
