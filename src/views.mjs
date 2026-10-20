@@ -56,7 +56,14 @@ const QUESTION_STATUS = { open: 'answered from the library', routed: 'sent to a 
 const BOOKING_STATUS = { requested: 'waiting for transfer instructions', awaiting_payment: 'you reported the transfer — being checked', paid: 'payment received', completed: 'session completed', cancelled: 'cancelled' };
 const NOTE_STATUS = { published: 'published in the library', blocked: 'blocked by the gate', draft: 'draft' };
 
-export const questionStatus = (s) => QUESTION_STATUS[s] ?? s;
+// `open` covers both an answer and a refusal; only the coverage says which, so a refusal never claims an answer.
+export const questionStatus = (s, coverage = 'ok') => (s === 'open' && coverage === 'thin' ? 'refused — the library had nothing for this' : QUESTION_STATUS[s] ?? s);
+
+// What the page may say about a refusal: the model's own reason, with the marker stripped, or a plain fixed sentence.
+export function missingReason(q) {
+  const reason = String(q.ai_missing ?? '').replace(/INSUFFICIENT_DATA/g, '').trim();
+  return reason || 'No note in the library answers this question closely enough to cite.';
+}
 export const bookingStatus = (s) => BOOKING_STATUS[s] ?? s;
 export const noteStatus = (s) => NOTE_STATUS[s] ?? s;
 
@@ -739,7 +746,7 @@ function noteCard(n) {
 // and the way forward. It is an answer, not a failure, and not the brand's own accent.
 function refusalPanel({ heading, missing = '', escalation = '' }) {
   return `<div class="refusal">
-  <p style="margin:0"><span class="tag">${icon('scale')}INSUFFICIENT_DATA</span></p>
+  <p style="margin:0"><span class="tag">${icon('scale')}Refused</span></p>
   <h2 style="font-size:clamp(20px,2.4vw,26px)">${esc(heading)}</h2>
   ${missing ? `<p class="muted">${esc(missing)}</p>` : ''}
   <p class="small muted" style="margin-bottom:0">Nothing here is guessed. A note written by someone who has run the line is what makes an answer; until one covers this question, the honest answer is that we do not know.</p>
@@ -760,7 +767,7 @@ export function home({ stats, experts, notes, questions, user = null, place = nu
     .map(
       (q) => `<li><a href="/q/${esc(q.ref)}">${esc(q.text.slice(0, 90))}${q.text.length > 90 ? '…' : ''}</a>
       <div class="stack-sm"><span class="badge ${q.ai_coverage === 'thin' ? 'warn' : 'ok'}">${q.ai_coverage === 'thin' ? 'the library could not cover it' : 'answered from the library'}</span>
-      <span class="muted small">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status))}</span></div></li>`
+      <span class="muted small">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status, q.ai_coverage))}</span></div></li>`
     )
     .join('');
   return layout({
@@ -795,7 +802,7 @@ export function home({ stats, experts, notes, questions, user = null, place = nu
       <div>
         <p style="margin:0 0 var(--space-3)"><span class="badge tag">Refuses</span></p>
         <h3>An answer, or an honest no</h3>
-        <p class="muted small">Every answer is built from published notes and names them. When the corpus does not cover a question, the answer is <span class="mono">INSUFFICIENT_DATA</span> — never a plausible guess.</p>
+        <p class="muted small">Every answer is built from published notes and names them. When the corpus does not cover a question, the answer is a refusal that says what is missing — never a plausible guess.</p>
       </div>
       <div>
         <p style="margin:0 0 var(--space-3)"><span class="badge tag">Cites</span></p>
@@ -896,7 +903,7 @@ export function home({ stats, experts, notes, questions, user = null, place = nu
     <div class="cols three" style="margin-top:var(--space-5)">
       <div class="card" style="margin:0"><p style="margin:0 0 var(--space-3)"><span class="badge tag">Covered</span></p><p>“A machine stops mid-shift and the line is down. The order you check in matters more than the speed you check at.”</p><p class="small muted" style="margin:0">From a published note on machine stops and escalation.</p></div>
       <div class="card" style="margin:0"><p style="margin:0 0 var(--space-3)"><span class="badge tag">Covered</span></p><p>“OEE has three parts. Used as one number it hides which of them you actually lost.”</p><p class="small muted" style="margin:0">From a published note on measuring equipment effectiveness.</p></div>
-      <div class="card" style="margin:0"><p style="margin:0 0 var(--space-3)"><span class="badge tag">Refused</span></p><p class="mono" style="margin:0">INSUFFICIENT_DATA</p><p class="small muted" style="margin:0">“The passages cover TPM, machine-stop escalation and Hoshin Kanri; none address office recruitment or salary policy.”</p><p class="small muted" style="margin:0">Nothing is guessed — the question is offered to a practitioner instead.</p></div>
+      <div class="card" style="margin:0"><p style="margin:0 0 var(--space-3)"><span class="badge tag">Refused</span></p><p class="small muted" style="margin:0">“The passages cover TPM, machine-stop escalation and Hoshin Kanri; none address office recruitment or salary policy.”</p><p class="small muted" style="margin:0">Nothing is guessed — the question is offered to a practitioner instead.</p></div>
     </div>
   </div>
 </section>
@@ -1004,7 +1011,7 @@ export function accountPage({ user, questions = [], bookings = [], sessions = 0,
       <a href="/q/${esc(q.ref)}">${esc(q.text.slice(0, 92))}${q.text.length > 92 ? '…' : ''}</a>
       <div class="stack-sm">
         <span class="badge ${q.ai_coverage === 'thin' ? 'warn' : 'ok'}">${q.ai_coverage === 'thin' ? 'the library could not cover it' : 'answered from the library'}</span>
-        <span class="small muted">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status))} · ${esc((q.created_at ?? '').slice(0, 10))}</span>
+        <span class="small muted">${esc(topicLabel(q.topic))} · ${esc(questionStatus(q.status, q.ai_coverage))} · ${esc((q.created_at ?? '').slice(0, 10))}</span>
       </div>
       <div class="small muted">Ref ${esc(q.ref)}</div></li>`
     )
@@ -1044,6 +1051,24 @@ ${flash ? `<div class="notice ok" role="status">${icon('check')} ${esc(flash)}</
   });
 }
 
+/**
+ * What a reader is told about how an answer was produced. The mode string is for the log and the
+ * database; it never reaches a page. `unavailable` modes are the extractive fallback after the model
+ * failed, and they are not shown as a cited model answer.
+ */
+export function modeLabel(mode) {
+  const m = String(mode ?? '');
+  if (m === 'llm') return { label: 'answered by the model, from the cited notes', badge: 'cited', ok: true };
+  if (m === 'extractive' || m === '') return { label: 'quoted from the notes (no model is configured)', badge: 'quoted from notes', ok: false };
+  if (/^llm-(http|error|unparsed)/.test(m)) return { label: 'quoted from notes — model unavailable', badge: 'quoted from notes — model unavailable', ok: false };
+  if (m === 'llm-uncited') return { label: 'withheld — the draft cited no note', badge: 'withheld', ok: false };
+  if (m === 'llm-bad-citation') return { label: 'withheld — the draft cited a note it was not given', badge: 'withheld', ok: false };
+  if (m === 'llm-contradiction') return { label: 'withheld — the draft contradicted itself', badge: 'withheld', ok: false };
+  if (m === 'llm-ungrounded') return { label: 'withheld — the draft said more than the notes do', badge: 'withheld', ok: false };
+  if (m === 'llm-unsupported-figure') return { label: 'withheld — the draft gave a figure the notes do not', badge: 'withheld', ok: false };
+  return { label: 'answered from the library', badge: 'quoted from notes', ok: false };
+}
+
 export function questionPage({ q, aiCitations, answers, experts, routedNames = [], bankConfigured, user = null, claimed = false, url = '', text = 'normal' }) {
   // The stored contact (a phone number, an email) is the asker's. A page that can be shared by link
   // must not hand it to whoever holds the link, so it is prefilled only for the owner; anyone else
@@ -1053,7 +1078,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
   const cites = aiCitations
     .map(
       (n) => `<div class="cite">
-  <strong><a href="/notes/${esc(n.slug)}">[${n.id}] ${esc(n.title)}</a></strong>
+  <strong><a href="/notes/${esc(n.slug)}${n.snippet ? `?hl=${encodeURIComponent(n.snippet)}#cited` : ''}">[${n.n}] ${esc(n.title)}</a></strong>
   ${n.snippet ? `<span class="small muted">${esc(n.snippet)}</span>` : ''}
 </div>`
     )
@@ -1080,7 +1105,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
     body: `
 <section class="page-head">
   <div class="wrap narrow">
-    <p class="eyebrow">Question ${esc(q.ref)} ${icon('chevron')} ${esc(questionStatus(q.status))}</p>
+    <p class="eyebrow">Question ${esc(q.ref)} ${icon('chevron')} ${esc(questionStatus(q.status, q.ai_coverage))}</p>
     <h1 style="font-size:clamp(28px,3.6vw,44px)">${esc(q.text)}</h1>
     <p class="row muted tight-gap">
       <span class="badge">${esc(topicLabel(q.topic))}</span>
@@ -1097,7 +1122,7 @@ ${keepBanner}
 ${cov
       ? refusalPanel({
           heading: 'The library cannot cover this one yet',
-          missing: q.ai_answer || 'No note in the library answers this question closely enough to cite.',
+          missing: missingReason(q),
           escalation: `<form method="post" action="/q/${esc(q.ref)}/ask-expert" style="margin-top:var(--space-4)">
   <div class="field">
     <label for="asker">Your name</label>
@@ -1112,10 +1137,10 @@ ${cov
 </form>`
         })
       : `<div class="card" style="margin-top:0">
-  <h2 style="font-size:24px">Answer from the note library <span class="badge ok">${icon('check')}cited</span></h2>
+  <h2 style="font-size:24px">Answer from the note library <span class="badge ${modeLabel(q.ai_mode).ok ? 'ok' : ''}">${icon('check')}${esc(modeLabel(q.ai_mode).badge)}</span></h2>
   <div class="answer">${esc(q.ai_answer || '(none yet)')}</div>
   ${cites ? `<div>${cites}</div>` : ''}
-  <p class="small muted" style="margin:0">How it was produced: ${esc(q.ai_mode || 'unknown')}${q.ai_mode === 'extractive' ? ' (no model API key configured — the system quotes the note verbatim and does not paraphrase)' : ''}</p>
+  <p class="small muted" style="margin:0">How it was produced: ${esc(modeLabel(q.ai_mode).label)}${modeLabel(q.ai_mode).ok ? '' : ' — the system quotes the note verbatim and does not paraphrase'}</p>
 </div>`}
 ${answerBlocks}
     ${cov ? '' : `<div class="actionbar"><a class="btn" href="#book">${icon('people')}Book a 1:1 session</a><a class="btn alt" href="#share">${icon('arrow')}Share</a></div>`}
@@ -1241,9 +1266,27 @@ export function renderNoteBody(note, outline) {
   return renderMarkdown(note.body, { title: note.title, outline });
 }
 
-export function notePage({ note, expert, user = null, links = null, url = '', text = 'normal' }) {
+/**
+ * Wrap the first occurrence of `snippet` in the rendered note in <mark id="cited">. The match is on the
+ * escaped text, so the snippet (which comes from the query string) can never put markup on the page:
+ * it is escaped the same way the renderer escaped the note, and only ever compared with it.
+ */
+export function highlightPassage(html, snippet) {
+  const needle = esc(String(snippet ?? '').trim());
+  if (needle.length < 8) return html;
+  // Only text between tags: never inside an attribute or a tag name.
+  let done = false;
+  return html.replace(/(>)([^<]*)(?=<)/g, (whole, gt, txt) => {
+    const i = done ? -1 : txt.indexOf(needle);
+    if (i === -1) return whole;
+    done = true;
+    return `${gt}${txt.slice(0, i)}<mark id="cited">${needle}</mark>${txt.slice(i + needle.length)}`;
+  });
+}
+
+export function notePage({ note, expert, user = null, links = null, highlight = '', url = '', text = 'normal' }) {
   const outline = [];
-  const bodyHtml = renderMarkdown(note.body, { title: note.title, links, outline });
+  const bodyHtml = highlightPassage(renderMarkdown(note.body, { title: note.title, links, outline }), highlight);
   const sections = outline.filter((h) => h.level === 2);
   const gate = (() => {
     try {
@@ -1316,7 +1359,7 @@ export function howItWorksPage({ user = null } = {}) {
       <ul class="prose">
         <li><strong>Ask.</strong> The question is matched against the published corpus by a small keyword index, weighted so the distinctive terms decide coverage rather than the common ones.</li>
         <li><strong>Answer, with citations.</strong> When the corpus covers the question the answer is written from those notes only, and every point names the note it came from.</li>
-        <li><strong>Refuse.</strong> When it does not cover the question the answer is <span class="mono">INSUFFICIENT_DATA</span>, with the reason: what the closest passages cover and what was missing.</li>
+        <li><strong>Refuse.</strong> When it does not cover the question the answer is a refusal, with the reason: what the closest passages cover and what was missing.</li>
         <li><strong>Escalate.</strong> A refused question can go to a practitioner for a written answer, or be booked as a paid 1:1 session.</li>
       </ul>
     </div>
@@ -1354,6 +1397,7 @@ export function howItWorksPage({ user = null } = {}) {
               <tr><td class="mono">document</td><td>a purchase order number in the opening line</td></tr>
               <tr><td class="mono">person_name</td><td>a colleague's name in the credits</td></tr>
               <tr><td class="mono">figure</td><td>a unit price and a supplier code</td></tr>
+              <tr><td class="mono">instruction_text</td><td>a line addressed to the answering model: “ignore previous instructions”</td></tr>
             </tbody>
           </table>
           <p class="hint">Two real leaks in the source notes were caught this way before anything was published: nine citations of the employer's own knowledge-tree paths, and a part-number phrase.</p>
@@ -1461,7 +1505,7 @@ export function expertListPage({ experts, topics, user = null }) {
 export function expertWorkspacePage({ expert, expertNotes, queue, bookings }) {
   const noteRows = expertNotes
     .map(
-      (n) => `<li><a href="/notes/${esc(n.slug)}">${esc(n.title)}</a>
+      (n) => `<li><a href="${n.status === 'published' ? `/notes/${esc(n.slug)}` : `/c/${esc(expert.token)}/draft?slug=${encodeURIComponent(n.slug)}`}">${esc(n.title)}</a>
       <div class="stack-sm"><span class="badge${n.status === 'published' ? ' ok' : ' bad'}">${esc(noteStatus(n.status))}</span>
       <span class="muted small">${esc(n.origin === 'interview' ? 'from the interview' : n.origin === 'vault' ? 'from my notebook' : 'written by hand')}</span></div></li>`
     )
@@ -1475,7 +1519,8 @@ export function expertWorkspacePage({ expert, expertNotes, queue, bookings }) {
       <label for="ans-${esc(q.ref)}">Your answer</label>
       <p class="hint" id="ans-${esc(q.ref)}-hint">Short, with something they can do today. Do not include figures from your own plant.</p>
       <textarea id="ans-${esc(q.ref)}" name="body" aria-describedby="ans-${esc(q.ref)}-hint"></textarea>
-      <p style="margin:0"><button class="btn" type="submit">Send answer</button></p>
+      <label for="att-${esc(q.ref)}"><input type="checkbox" id="att-${esc(q.ref)}" name="attested" value="1"> I confirm: ${esc(ATTESTATION_TEXT)}</label>
+      <p style="margin:0"><button class="btn" type="submit">Send answer through the gate</button></p>
     </form></div>`
     )
     .join('');
@@ -1536,8 +1581,8 @@ export function interviewPage({ expert, interview, step, question, answers, done
   <div class="wrap narrow">
     <div class="card" style="margin:0">
       <p class="eyebrow">Interview</p>
-      <h1 style="font-size:clamp(26px,3.4vw,38px)">${icon('check')} Note created — it went through the gate</h1>
-      <p class="muted">It was assembled from your answers, titled after the problem, and published in the library.</p>
+      <h1 style="font-size:clamp(26px,3.4vw,38px)">${icon('check')} Note published — you attested it</h1>
+      <p class="muted">It was assembled from your answers, you read it, the gate passed it and you confirmed it is your own craft knowledge. It is now in the library.</p>
       <p class="row" style="margin:0"><a class="btn" href="/notes/${esc(doneNoteSlug)}">Read the note</a> <a class="btn ghost" href="/c/${esc(expert.token)}">← Back to the desk</a></p>
     </div>
   </div>
@@ -1553,7 +1598,7 @@ export function interviewPage({ expert, interview, step, question, answers, done
       <input type="hidden" name="id" value="${interview.id}">
       <div class="field"><label for="answer">Your answer</label>
         <textarea id="answer" name="answer" style="min-height:160px" placeholder="Answer in your own words. The more specific the better."></textarea></div>
-      <p style="margin:0"><button class="btn" type="submit">${step + 1 === SCRIPT.length ? 'Done — create the note' : 'Next question'}</button></p>
+      <p style="margin:0"><button class="btn" type="submit">${step + 1 === SCRIPT.length ? 'Done — show me the draft' : 'Next question'}</button></p>
     </form>
   </div>`
     : '';
@@ -1570,7 +1615,7 @@ export function interviewPage({ expert, interview, step, question, answers, done
   <div class="wrap narrow">
     <p class="eyebrow">Interview</p>
     <h1 style="font-size:clamp(26px,3.4vw,38px)">Talking a note into existence</h1>
-    <p class="lead">${SCRIPT.length} questions, one paragraph each. When you are done the system assembles the note and runs it through the gate — you do not have to write it from scratch.</p>
+    <p class="lead">${SCRIPT.length} questions, one paragraph each. When you are done the system assembles a draft and shows it to you with the gate's findings — you edit it, confirm it, and only then is it published.</p>
   </div>
 </section>
 <section class="tight">
@@ -2118,7 +2163,7 @@ export function adminPage({ token, stats, pendingBookings, blockedNotes, openQue
   const qRows = openQuestions
     .map(
       (q) => `<li><a href="/q/${esc(q.ref)}">${esc(q.text.slice(0, 80))}</a>
-      <div class="stack-sm"><span class="badge">${esc(questionStatus(q.status))}</span>
+      <div class="stack-sm"><span class="badge">${esc(questionStatus(q.status, q.ai_coverage))}</span>
       <span class="muted small">${esc(topicLabel(q.topic))}${q.due_at ? ` · due ${esc(q.due_at.slice(0, 10))}` : ''}</span></div></li>`
     )
     .join('');
@@ -2172,27 +2217,87 @@ export function adminPage({ token, stats, pendingBookings, blockedNotes, openQue
   });
 }
 
-export function blockedNotePage({ expert, decision, title }) {
+export function blockedNotePage({ expert, decision, title, answer = null }) {
   const reasons = decision.report.findings
     .filter((f) => f.severity !== 'note')
     .map((f) => `<li><span class="badge bad">${esc(f.rule)}</span> ${esc(f.hint)}</li>`)
     .join('');
   return layout({
-    title: 'The note did not reach the library',
+    title: answer ? 'The answer was not sent' : 'The note did not reach the library',
     nav: false,
     body: `
 <section class="tight" style="padding:var(--space-8) 0">
   <div class="wrap narrow">
-    <p class="eyebrow">The gate stopped this note</p>
-    <h1 style="font-size:clamp(26px,3.4vw,38px)">The note did not reach the library</h1>
+    <p class="eyebrow">The gate stopped this ${answer ? 'answer' : 'note'}</p>
+    <h1 style="font-size:clamp(26px,3.4vw,38px)">${answer ? 'The answer was not sent to the asker' : 'The note did not reach the library'}</h1>
     <p class="lead">Reason: <strong>${esc(decision.reason === 'attestation_required' ? 'it carries a figure with a unit and was not attested as general knowledge' : 'it contains information that is not the author’s to publish')}</strong></p>
     <div class="refusal">
       <p style="margin:0"><span class="tag">${icon('shield')}BLOCKED</span></p>
       ${title ? `<p class="small muted" style="margin-top:var(--space-3)">Note: ${esc(title)}</p>` : ''}
       <ul class="prose" style="margin:var(--space-3) 0 0">${reasons || '<li class="muted">No detail.</li>'}</ul>
     </div>
-    <p class="muted">Fix it and send it again: remove personal names, part codes and prices; or remove the figure — or tick the attestation if that figure is general knowledge rather than your plant's data.</p>
+    <p class="muted">Fix it and send it again: remove personal names, contact details, part codes and prices; or remove the figure — or tick the attestation if that figure is general knowledge rather than your plant's data.</p>
+    ${answer && expert ? `<form method="post" action="/c/${esc(expert.token)}/answer" class="card" data-pending="Recording…">
+      <input type="hidden" name="ref" value="${esc(answer.ref)}">
+      <label for="answer-body">Your answer — edit it and send it again</label>
+      <textarea id="answer-body" name="body" style="min-height:160px">${esc(answer.body)}</textarea>
+      <label for="answer-att"><input type="checkbox" id="answer-att" name="attested" value="1"> I confirm: ${esc(ATTESTATION_TEXT)}</label>
+      <p style="margin:0"><button class="btn" type="submit">Send answer through the gate</button></p>
+    </form>` : ''}
     ${expert ? `<p><a class="btn alt" href="/c/${esc(expert.token)}">← Back to the desk</a></p>` : ''}
+  </div>
+</section>`
+  });
+}
+
+/**
+ * A draft note before it is published: the rendered note, the gate's findings, the attestation text
+ * with an unticked checkbox, and the draft itself in a textarea. A plain form POST, no script. Nothing on
+ * this page publishes anything; only the "Publish" button with the box ticked and a passing gate does.
+ */
+export function draftReviewPage({ expert, note, title, body, report, message = '', messageKind = 'info' }) {
+  const findings = (report?.findings ?? []).filter((f) => f.severity !== 'note');
+  const advice = (report?.findings ?? []).filter((f) => f.severity === 'note');
+  const badge = (f) => (f.severity === 'block' ? 'bad' : 'warn');
+  const list = findings
+    .map((f) => `<li><span class="badge ${badge(f)}">${esc(f.severity === 'block' ? 'blocks publication' : f.severity === 'attest' ? 'needs your attestation' : 'private metadata')} · ${esc(f.rule)}</span> ${esc(f.hint)}</li>`)
+    .join('');
+  const verdict = !report ? '' : !report.ok ? 'blocked' : report.needs_attestation ? 'needs your attestation' : 'clean';
+  return layout({
+    title: 'Review the draft',
+    nav: false,
+    body: `
+<section class="page-head">
+  <div class="wrap narrow">
+    <p class="eyebrow">Draft — not published yet</p>
+    <h1 style="font-size:clamp(26px,3.4vw,38px)">Read it, fix it, then publish it</h1>
+    <p class="lead">Nothing is in the library until you confirm. Gate verdict: <strong>${esc(verdict || 'not checked')}</strong>.</p>
+  </div>
+</section>
+<section class="tight">
+  <div class="wrap narrow">
+    ${message ? `<div class="${messageKind === 'bad' ? 'refusal' : 'card'}" role="status"><p style="margin:0"><strong>${esc(message)}</strong></p></div>` : ''}
+    <div class="card">
+      <h2 style="font-size:24px">What the gate found</h2>
+      <ul class="prose" style="margin:0">${list || '<li class="muted">Nothing blocks this draft and nothing needs attestation.</li>'}</ul>
+      ${advice.length ? `<p class="muted small">Advice: ${advice.map((f) => esc(f.hint)).join(' ')}</p>` : ''}
+    </div>
+    <div class="card">
+      <h2 style="font-size:24px">How the note will read</h2>
+      <div class="prose">${renderMarkdown(body, { title })}</div>
+    </div>
+    <form method="post" action="/c/${esc(expert.token)}/draft" class="card" data-pending="Checking…">
+      <input type="hidden" name="slug" value="${esc(note.slug)}">
+      <h2 style="font-size:24px">Edit the draft</h2>
+      <div class="field"><label for="draft-title">Title</label><input id="draft-title" name="title" required value="${esc(title)}"></div>
+      <div class="field"><label for="draft-body">Body</label>
+        <p class="hint" id="draft-body-hint">Craft knowledge — <strong>not</strong> your plant's figures, names, contact details or codes. Edit, then press “Check again”: the gate runs on exactly what is in this box.</p>
+        <textarea id="draft-body" name="body" aria-describedby="draft-body-hint" style="min-height:320px">${esc(body)}</textarea></div>
+      <p><button class="btn alt" type="submit" name="action" value="check">Check again</button></p>
+      <label for="draft-attested"><input type="checkbox" id="draft-attested" name="attested" value="1"> I confirm: ${esc(ATTESTATION_TEXT)}</label>
+      <p style="margin:0"><button class="btn" type="submit" name="action" value="publish">${icon('shield')}Publish this note</button></p>
+    </form>
+    <p><a href="/c/${esc(expert.token)}">← Back to the desk (the draft is kept)</a></p>
   </div>
 </section>`
   });

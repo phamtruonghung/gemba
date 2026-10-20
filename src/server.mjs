@@ -124,13 +124,30 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       topic: inferredTopic,
       text,
       ai_answer: ai.answer,
-      ai_citations: ai.citations,
+      // The numbered citations with their snippets, not bare ids: the page must show [1]..[k] and a real excerpt.
+      ai_citations: ai.cites,
       ai_coverage: ai.coverage,
       ai_mode: ai.mode,
+      ai_missing: ai.missing,
       user_id
     });
     dbm.logEvent(db, 'ask', q.ref, `coverage=${ai.coverage} mode=${ai.mode} hits=${hits.length}`);
     return { question: q, hits, ai, cov };
+  }
+
+  // Stored citations are { n, id, snippet }. Rows written before the snippet existed hold bare note ids;
+  // they are numbered by position and given the opening of the note as their excerpt.
+  function citedNotes(raw) {
+    const published = dbm.publishedNotes(db);
+    return JSON.parse(raw || '[]')
+      .map((c, i) => {
+        const entry = typeof c === 'object' && c !== null ? c : { id: c, n: i + 1, snippet: '' };
+        const note = published.find((x) => x.id === entry.id);
+        if (!note) return null;
+        const snippet = entry.snippet || note.body.replace(/[#>*_`\-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+        return { n: entry.n ?? i + 1, id: note.id, slug: note.slug, title: note.title, snippet };
+      })
+      .filter(Boolean);
   }
 
   function escalate(emailOf) {
@@ -282,12 +299,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         ref: out.question.ref,
         topic: out.question.topic,
         answer: out.question.ai_answer,
-        citations: JSON.parse(out.question.ai_citations).map((id) => {
-          const n = dbm.publishedNotes(db).find((x) => x.id === id);
-          return n ? { id, slug: n.slug, title: n.title } : { id };
-        }),
+        citations: citedNotes(out.question.ai_citations).map((c) => ({ n: c.n, id: c.id, slug: c.slug, title: c.title, snippet: c.snippet })),
         coverage: out.question.ai_coverage,
         mode: out.question.ai_mode,
+        missing: out.question.ai_missing,
         hits: out.hits.map((h) => ({ slug: h.note.slug, title: h.note.title, score: h.score })),
         why: out.cov.why
       });
@@ -758,7 +773,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         links.set(n.slug, n.title);
         links.set(n.slug.replace(/^(vault|demo)-/, ''), n.title);
       }
-      return send(200, views.notePage({ note, expert, user, links, url: `${origin}/notes/${encodeURIComponent(note.slug)}`, text: textSize }));
+      return send(200, views.notePage({ note, expert, user, links, highlight: (url.searchParams.get('hl') ?? '').slice(0, 300), url: `${origin}/notes/${encodeURIComponent(note.slug)}`, text: textSize }));
     }
     if (path === '/ask' && method === 'POST') {
       const text = String(form.q ?? '').trim();
@@ -779,8 +794,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (qMatch) {
       const q = dbm.questionByRef(db, decodeURIComponent(qMatch[1]));
       if (!q) return fail(404, 'No such question.');
-      const ids = JSON.parse(q.ai_citations);
-      const cited = ids.map((id) => dbm.publishedNotes(db).find((n) => n.id === id)).filter(Boolean);
+      const cited = citedNotes(q.ai_citations);
       const owned = Boolean(account && q.user_id === account.id);
       return send(200, views.questionPage({
         q,
@@ -928,7 +942,14 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       if (sub === '/answer' && method === 'POST') {
         const ref = String(form.ref ?? '');
         const text = String(form.body ?? '').trim();
-        if (ref && text) dbm.addAnswer(db, { questionRef: ref, expertId: expert.id, body: text });
+        if (!ref || !text) return redirect(`/c/${expert.token}`);
+        // An expert's answer is shown to the asker, so it passes the same gate as a note: a block-class
+        // finding (a phone number, a name, a part code) stops it, a figure needs this answer's attestation.
+        const attested = form.attested === '1' || form.attested === 'on';
+        const decision = decidePublication({ title: '', body: text }, { attested, rules });
+        dbm.logEvent(db, 'answer_submit', ref, `${decision.reason} findings=${decision.report.findings.filter((f) => f.severity !== 'note').length}`);
+        if (!decision.publish) return send(422, views.blockedNotePage({ expert, decision, title: '', answer: { ref, body: text } }));
+        dbm.addAnswer(db, { questionRef: ref, expertId: expert.id, body: text });
         return redirect(`/c/${expert.token}`);
       }
       if (sub === '/note' && method === 'POST') {
@@ -955,6 +976,46 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         }
         return redirect(`/notes/${slug}`);
       }
+      if (sub === '/draft') {
+        // The review step for a note that has not been published: an interview draft, or a note the gate
+        // held back. Only the author sees it; it is not in the library until the gate passes AND the author
+        // ticks the attestation on this very form.
+        const slug = String((method === 'POST' ? form.slug : url.searchParams.get('slug')) ?? '');
+        const note = slug ? dbm.noteBySlug(db, slug) : null;
+        if (!note || note.expert_id !== expert.id || note.status === 'published') return fail(404, 'That draft is not available.');
+        if (method === 'GET') {
+          return send(200, views.draftReviewPage({ expert, note, title: note.title, body: note.body, report: JSON.parse(note.gate || '{}') }));
+        }
+        if (method === 'POST') {
+          const title = String(form.title ?? note.title).trim() || note.title;
+          const body = String(form.body ?? note.body);
+          const attested = form.attested === '1' || form.attested === 'on';
+          const wantsPublish = form.action === 'publish';
+          const decision = decidePublication({ title, body }, { attested, rules });
+          const publish = wantsPublish && attested && decision.publish;
+          dbm.upsertNote(db, {
+            expert_id: expert.id,
+            slug: note.slug,
+            title,
+            topic: note.topic,
+            body,
+            status: publish ? 'published' : decision.reason === 'blocked' ? 'blocked' : 'draft',
+            gate: decision.report,
+            origin: note.origin
+          });
+          dbm.logEvent(db, 'draft_review', note.slug, `${wantsPublish ? 'publish' : 'check'} attested=${attested} ${decision.reason}`);
+          if (publish) {
+            rebuildIndex();
+            return send(200, views.interviewPage({ expert, interview: null, step: SCRIPT.length, question: null, answers: [], doneNoteSlug: note.slug }));
+          }
+          const [message, kind, code] =
+            decision.reason === 'blocked' ? ['The gate blocks this draft. Remove what is listed below — names, contact details, codes, prices — and check it again. It cannot be published until it is clean.', 'bad', 422]
+            : !wantsPublish ? [decision.reason === 'attestation_required' ? 'Checked. This draft carries a figure with a unit: attest that it is general craft knowledge, or remove the figure.' : 'Checked. Nothing blocks this draft. To publish, tick the attestation and press “Publish this note”.', 'info', 200]
+            : !attested ? ['Not published. Tick the attestation box to confirm this is your own craft knowledge, then publish. The draft is saved.', 'bad', 422]
+            : ['Not published.', 'bad', 422];
+          return send(code, views.draftReviewPage({ expert, note, title, body, report: decision.report, message, messageKind: kind }));
+        }
+      }
       if (sub === '/interview') {
         if (method === 'POST') {
           const id = Number(form.id);
@@ -968,7 +1029,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
             const problem = String(answers[1] ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
             const title = `Field notes: ${problem || advanced.topic}`;
             const draft = draftNoteFromInterview({ expert, topic: advanced.topic, answers, title });
-            const decision = decidePublication({ title: draft.title, body: draft.body }, { attested: true, rules });
+            // The interview only ever produces a DRAFT. The expert reads it, edits it and attests it on
+            // the review page; nothing here decides to publish for them.
+            const report = checkNote({ title: draft.title, body: draft.body }, rules);
             const slug = uniqueSlug(db, slugify(`${advanced.topic}-${String(answers[0] ?? '').slice(0, 30)}`));
             const noteId = dbm.upsertNote(db, {
               expert_id: expert.id,
@@ -976,19 +1039,13 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
               title: draft.title,
               topic: advanced.topic,
               body: draft.body,
-              status: decision.publish ? 'published' : 'blocked',
-              gate: decision.report,
+              status: report.ok ? 'draft' : 'blocked',
+              gate: report,
               origin: 'interview'
             });
             dbm.finishInterview(db, id, noteId);
-            rebuildIndex();
-            dbm.logEvent(db, 'interview_done', slug, decision.reason);
-            if (!decision.publish) {
-              // An interview whose draft fails the gate says so, with the reasons: the expert
-              // just spent eight answers, and a silent return to the form reads as a bug.
-              return send(422, views.blockedNotePage({ expert, decision, title: draft.title }));
-            }
-            return send(200, views.interviewPage({ expert, interview: advanced, step: advanced.step, question: null, answers, doneNoteSlug: slug }));
+            dbm.logEvent(db, 'interview_done', slug, `draft verdict=${report.verdict}`);
+            return redirect(`/c/${expert.token}/draft?slug=${encodeURIComponent(slug)}`);
           }
           return redirect(`/c/${expert.token}/interview?id=${id}`);
         }

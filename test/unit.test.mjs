@@ -51,7 +51,7 @@ test('gate: an English name with a title is blocked, like a Vietnamese one', () 
 });
 
 test('gate: an order number, a drawing or a price is blocked, in either language', () => {
-  for (const leak of ['Theo PO 45123 giao tuần này.', 'Xem bản vẽ AB1234-C ở trạm 2.', 'Đơn giá linh kiện này rất thấp.', 'Unit price per piece is higher than planned.', 'Invoice no 8891 is attached.']) {
+  for (const leak of ['Theo PO 45123 giao tuần này.', 'Xem bản vẽ AB1234-C ở trạm 2.', 'Đơn giá linh kiện này là 45.000 đồng.', 'Unit price per piece is 4.5 dollars.', 'Invoice no 8891 is attached.']) {
     const report = checkNote({ title: 'Note', body: `${CRAFT}\n${leak}` });
     assert.equal(report.ok, false, `should block: ${leak}`);
     assert.ok(report.findings.some((f) => f.rule === 'document'));
@@ -188,7 +188,8 @@ test('llm: the prompt forbids outside knowledge and demands citations', () => {
   const { system, user } = buildPrompt({ question: 'what do I do when the machine stops?', hits: [{ note: { id: 7, title: 'The machine stops mid-shift', topic: 'shift-management', body: CRAFT } }] });
   assert.match(system, /Answer only from the PASSAGES/);
   assert.match(system, new RegExp(NO_DATA_MARKER));
-  assert.match(user, /\[1\] \(id 7\)/);
+  assert.match(user, /\[1\] The machine stops mid-shift/);
+  assert.doesNotMatch(user, /id 7/, 'the internal note id is not part of the numbering');
 });
 
 test('llm: the prompt carries at most three passages, each capped in length', () => {
@@ -214,6 +215,7 @@ test('llm: an API error is reported, never dressed up as a model answer', async 
     hits,
     coverageVerdict: { verdict: 'ok' },
     cfg: { enabled: true, base: 'https://example.invalid/v1', model: 'x', key: 'k', timeoutMs: 1000 },
+    sleep: async () => {},
     fetchImpl: async () => ({ ok: false, status: 429 })
   });
   assert.equal(out.mode, 'llm-http-429');

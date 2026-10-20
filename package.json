@@ -12,6 +12,7 @@
     "start": "node src/server.mjs",
     "seed": "node scripts/seed.mjs",
     "test": "node --test test/*.test.mjs",
+    "eval": "node scripts/eval-retrieval.mjs",
     "import-notes": "node scripts/import-notes.mjs"
   }
 }

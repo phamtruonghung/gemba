@@ -96,9 +96,17 @@ An expert's daily notes are the **employer's** information. The single most comm
 dies is by capturing them and republishing them.
 
 So nothing enters the corpus without passing a publishability gate (`src/gate.mjs`) that blocks:
-named people, document references (PO/LSX/part numbers) and plant figures (output, rates, prices,
-OEE numbers, downtime durations). A note that fails is **shown to its author with the reason** — never
-dropped silently. What survives is the portable craft: the order of checks, the countermeasure, the
+named people (full Vietnamese surname set, lowercase after a kinship word, ALL CAPS), contact details
+(mobile/Zalo/landline/email), customer and supplier names, plant identifiers (line, shift, lot, station,
+serial) and document references that carry a value (PO/LSX/part/drawing numbers, prices), and that asks for
+the author's attestation on plant figures (output, rates, OEE numbers, downtime durations). A note that
+fails is **shown to its author with the reason** — never dropped silently.
+
+**Nobody attests for the author.** An interview ends in a *draft*: the author sees the rendered note, the
+gate's findings and the attestation text, can edit it and re-run the gate, and the note is published only
+when the form posts the attestation checkbox *and* the gate passes. The same gate stops an expert's answer
+to a routed question. The seed passes no attestation either: a shipped note that would need one stays
+unpublished (today all twelve pass without it). What survives is the portable craft: the order of checks, the countermeasure, the
 standard, the diagnostic question.
 
 Every note records its `origin` (`demo`, `vault`, `interview`, or an expert submission), so a reader
@@ -133,8 +141,12 @@ BASE=http://127.0.0.1:8090 scripts/smoke.sh    # walks the live instance end to 
 ```
 
 Without an API key the AI rung runs in a labelled extractive mode (it quotes the retrieved note and
-says that is what it is doing). With a key it answers normally. Either way the citation contract and
-the refusal marker are enforced by tests.
+says that is what it is doing). With a key the model answers from the retrieved notes, and the answer is
+checked before it is shown: every citation must be a passage actually sent, every figure must be in a cited
+passage, every sentence must be mostly made of words its passage uses; otherwise it is withheld as a refusal.
+Citations are renumbered `[1]..[k]` to match the source list. A 429 or 5xx is retried once (`Retry-After`,
+capped at 5 s); after that the page shows the quoted notes labelled "model unavailable". Streaming is not
+implemented. The contract is in `SPEC.md` section 3 and enforced by `test/llm.test.mjs`.
 
 ## Configuration
 
@@ -151,7 +163,7 @@ the refusal marker are enforced by tests.
 | `GEMBA_LLM_BASE_URL` | OpenCode (`/zen/go/v1`) | OpenAI-compatible chat-completions base URL |
 | `GEMBA_LLM_MODEL` | `deepseek-v4.1-flash` | model id, derived from the gateway when unset (`deepseek/...` for OpenRouter) |
 | `GEMBA_LLM_SESSION` | minted at install | the OpenCode gateway routes by this header; without it the call is refused (`400` from the API, or `403` with Cloudflare error `1010` through the edge) |
-| `GEMBA_LLM_TIMEOUT_MS` | `90000` | per-request timeout |
+| `GEMBA_LLM_TIMEOUT_MS` | `45000` | per-request timeout |
 | `GEMBA_BANK_BIN` / `GEMBA_BANK_ACCOUNT` | — | VietQR recipient; unset ⇒ the booking page shows the amount with no QR |
 
 Secrets belong in the environment or in the systemd `EnvironmentFile`, never in the repo.
@@ -279,7 +291,7 @@ than the coverage number because of what they found:
   rendered through a label map, and a test asserts no raw token reaches a page.
 - Moving the content to English moved three things at once (UI strings, the refusal marker, the URL
   routes), so the corpus notes were retranslated with the gate's rules restated as a constraint: they
-  still pass it clean, in the new language. The gate's Vietnamese patterns stayed — a Vietnamese note
+  pass it clean, in the new language (this was untrue for a while: two vault notes carried a figure and the seed attested for them; the attestation is gone from the seed, the notes were rewritten, and `test/gate.test.mjs` asserts every shipped note publishes with none). The gate's Vietnamese patterns stayed — a Vietnamese note
   carrying an employer's order number is still someone else's information.
 - Renaming the topics silently mis-attributed every note: the seed mapped topic to author with a
   hardcoded table whose keys were the old Vietnamese slugs, and a `?? 'hung-qa'` fallback turned the

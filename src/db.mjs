@@ -43,6 +43,7 @@ create table if not exists questions (
   ai_citations text not null default '[]',
   ai_coverage text not null default 'thin',
   ai_mode text not null default '',
+  ai_missing text not null default '',
   status text not null default 'open',
   expert_id integer references experts(id),
   routed_at text,
@@ -157,6 +158,7 @@ export function migrate(db) {
   // Accounts: a question or a booking can belong to a signed-in person. Nullable on purpose —
   // everything asked before accounts existed stays valid and keeps its display name.
   addColumn('questions', 'user_id', 'user_id integer references users(id)');
+  addColumn('questions', 'ai_missing', "ai_missing text not null default ''");
   addColumn('bookings', 'user_id', 'user_id integer references users(id)');
   // Roles arrived after accounts did: everyone who signed up before this was an asker, and that is
   // exactly what the default says. A locked account keeps its history; it just cannot sign in.
@@ -632,9 +634,9 @@ export function notesForExpert(db, expertId) {
 export function insertQuestion(db, q) {
   const ref = q.ref ?? makeRef('X');
   db.prepare(
-    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, status, user_id, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`
-  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.user_id ?? null, nowIso());
+    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, ai_missing, status, user_id, created_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`
+  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.ai_missing ?? '', q.user_id ?? null, nowIso());
   return questionByRef(db, ref);
 }
 
@@ -649,12 +651,16 @@ export function routeQuestion(db, ref, expertIds, dueAt) {
   return questionByRef(db, ref);
 }
 
-/** Questions routed to an expert (any topic they accept) that are not yet answered. */
+/**
+ * Questions routed to an expert that are not yet answered: any topic they accept, plus any question
+ * routed to them by id. The second clause matters for a question retrieval found nothing for (topic
+ * 'other'): escalation falls back to one practitioner, and without it that question reaches no desk.
+ */
 export function openQuestionsFor(db, expert) {
   const topics = Array.isArray(expert.topics) ? expert.topics : JSON.parse(expert.topics || '[]');
   const rows = db.prepare(`select * from questions where status = 'routed' order by routed_at`).all();
   const answered = new Set(db.prepare('select distinct question_id from answers').all().map((r) => r.question_id));
-  return rows.filter((q) => topics.includes(q.topic) && !answered.has(q.id));
+  return rows.filter((q) => (topics.includes(q.topic) || (expert.id != null && q.expert_id === expert.id)) && !answered.has(q.id));
 }
 
 export function addAnswer(db, { questionRef, expertId, body }) {

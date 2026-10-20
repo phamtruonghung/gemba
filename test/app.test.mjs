@@ -173,7 +173,7 @@ test('gate at the door: a note with an order number is refused, a clean note pub
   assert.match(published, /Checking the last-station sensor, in order/);
 });
 
-test('the AI-moderated interview turns eight answers into a published note', async () => {
+test('the AI-moderated interview turns eight answers into a draft the expert attests and publishes', async () => {
   const start = await fetch(`${base}/c/${EXPERT_TOKEN}/interview`);
   const html = await start.text();
   assert.equal(start.status, 200);
@@ -196,15 +196,28 @@ test('the AI-moderated interview turns eight answers into a published note', asy
   let last;
   for (let i = 0; i < answers.length; i += 1) {
     last = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer: answers[i] });
-    if (i < answers.length - 1) assert.equal(last.status, 303);
+    assert.equal(last.status, 303);
   }
-  const done = await last.text();
-  assert.equal(last.status, 200);
-  assert.match(done, /Note created/);
+  // The interview ends at a draft to review, not at a published note.
+  const reviewUrl = last.headers.get('location');
+  assert.match(reviewUrl, /\/draft\?slug=/);
+  assert.doesNotMatch(await (await fetch(`${base}/library`)).text(), /Field notes: The most repeated problem/, 'a draft is not in the corpus');
+  const review = await (await fetch(`${base}${reviewUrl}`)).text();
+  assert.match(review, /Field notes: The most repeated problem/);
+  assert.match(review, /I confirm: I confirm this is my own craft knowledge/);
+
+  const slug = new URL(reviewUrl, base).searchParams.get('slug');
+  const done = await post(`/c/${EXPERT_TOKEN}/draft`, { slug, title: 'Field notes: The most repeated problem', body: decodeHtml(/<textarea id="draft-body"[^>]*>([\s\S]*?)<\/textarea>/.exec(review)[1]), attested: '1', action: 'publish' });
+  assert.equal(done.status, 200);
+  assert.match(await done.text(), /Note published/);
 
   const corpus = await (await fetch(`${base}/library`)).text();
   assert.match(corpus, /Field notes: The most repeated problem/, 'the interview note is in the corpus, titled after the problem');
 });
+
+function decodeHtml(s) {
+  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+}
 
 test('money: a booking is priced in VND, split, and never marked paid by the system', async () => {
   const res = await post('/book', {
@@ -260,7 +273,9 @@ test('the home page states the ladder and the demo status plainly', async () => 
   assert.match(html, /Prototype/);
   const how = await (await fetch(`${base}/how-it-works`)).text();
   assert.match(how, /The gate/);
-  assert.match(how, /INSUFFICIENT_DATA/);
+  // The refusal is explained in words; the machine marker stays out of the page.
+  assert.match(how, /refusal/);
+  assert.doesNotMatch(how, /INSUFFICIENT_DATA/);
 });
 
 test('no raw state token reaches a page', async () => {
