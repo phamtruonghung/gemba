@@ -651,12 +651,16 @@ export function routeQuestion(db, ref, expertIds, dueAt) {
   return questionByRef(db, ref);
 }
 
-/** Questions routed to an expert (any topic they accept) that are not yet answered. */
+/**
+ * Questions routed to an expert that are not yet answered: any topic they accept, plus any question
+ * routed to them by id. The second clause matters for a question retrieval found nothing for (topic
+ * 'other'): escalation falls back to one practitioner, and without it that question reaches no desk.
+ */
 export function openQuestionsFor(db, expert) {
   const topics = Array.isArray(expert.topics) ? expert.topics : JSON.parse(expert.topics || '[]');
   const rows = db.prepare(`select * from questions where status = 'routed' order by routed_at`).all();
   const answered = new Set(db.prepare('select distinct question_id from answers').all().map((r) => r.question_id));
-  return rows.filter((q) => topics.includes(q.topic) && !answered.has(q.id));
+  return rows.filter((q) => (topics.includes(q.topic) || (expert.id != null && q.expert_id === expert.id)) && !answered.has(q.id));
 }
 
 export function addAnswer(db, { questionRef, expertId, body }) {

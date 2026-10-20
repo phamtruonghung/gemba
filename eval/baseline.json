@@ -1,22 +1,22 @@
 {
   "n": 51,
-  "tp": 1,
+  "tp": 21,
   "fp": 0,
   "tn": 29,
-  "fn": 21,
+  "fn": 1,
   "coverage_precision": 1,
-  "coverage_recall": 0.0455,
+  "coverage_recall": 0.9545,
   "refusal_accuracy": 1,
-  "accuracy": 0.5882,
-  "top1_accuracy": 0.6364,
-  "mrr_at_5": 0.7273,
+  "accuracy": 0.9804,
+  "top1_accuracy": 1,
+  "mrr_at_5": 1,
   "answered_wrong_note": 0,
-  "correct_strict": 30,
-  "correct_strict_rate": 0.5882,
+  "correct_strict": 50,
+  "correct_strict_rate": 0.9804,
   "per_set": {
     "on": {
       "n": 21,
-      "accuracy": 0.0476
+      "accuracy": 0.9524
     },
     "near": {
       "n": 12,
@@ -28,7 +28,7 @@
     },
     "adv": {
       "n": 6,
-      "accuracy": 0.8333
+      "accuracy": 1
     }
   }
 }

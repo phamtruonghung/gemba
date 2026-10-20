@@ -8,26 +8,52 @@
 //   node scripts/eval-retrieval.mjs                  compare against eval/baseline.json (exit 1 on regression)
 //   node scripts/eval-retrieval.mjs --json           machine-readable results
 //   node scripts/eval-retrieval.mjs --write-baseline write eval/baseline.json
+//   node scripts/eval-retrieval.mjs --tune key=value,key=value  override a TUNING switch for this run only (a sweep, an ablation);
+//                                                       a tuned run is printed only, never compared to or written as baseline
+//   node scripts/eval-retrieval.mjs --questions <path>  score another labelled file (default eval/questions.jsonl);
+//                                                       a non-default file is printed only, never compared to or written as baseline
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, publishedNotes } from '../src/db.mjs';
 import { loadRules } from '../src/gate.mjs';
 import { seedDatabase } from '../src/seed-corpus.mjs';
-import { buildIndex, search, coverage } from '../src/retrieval.mjs';
+import { buildIndex, search, coverage, TUNING } from '../src/retrieval.mjs';
 import { askFromCorpus } from '../src/llm.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const QUESTIONS = join(ROOT, 'eval', 'questions.jsonl');
 const BASELINE = join(ROOT, 'eval', 'baseline.json');
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
+const qIdx = argv.indexOf('--questions');
+if (qIdx !== -1 && !argv[qIdx + 1]) {
+  console.error('--questions needs a path');
+  process.exit(2);
+}
+const tIdx = argv.indexOf('--tune');
+if (tIdx !== -1) {
+  for (const kv of (argv[tIdx + 1] ?? '').split(',').filter(Boolean)) {
+    const [k, v] = kv.split('=');
+    if (!(k in TUNING)) {
+      console.error(`--tune: unknown switch "${k}" (known: ${Object.keys(TUNING).join(', ')})`);
+      process.exit(2);
+    }
+    TUNING[k] = v === 'true' ? true : v === 'false' ? false : Number.isNaN(Number(v)) ? v : Number(v);
+  }
+}
+const custom = (qIdx !== -1 && resolve(argv[qIdx + 1]) !== resolve(QUESTIONS)) || tIdx !== -1;
+if (custom && args.has('--write-baseline')) {
+  console.error('--write-baseline is only allowed with the default questions file');
+  process.exit(2);
+}
 
 const db = openDb(':memory:');
 seedDatabase(db, { rules: loadRules() });
 const index = buildIndex(publishedNotes(db));
 
-const questions = readFileSync(QUESTIONS, 'utf8')
+const questions = readFileSync(qIdx !== -1 ? resolve(argv[qIdx + 1]) : QUESTIONS, 'utf8')
   .split('\n')
   .filter((l) => l.trim())
   .map((l) => JSON.parse(l));
@@ -126,6 +152,8 @@ if (args.has('--json')) {
 if (args.has('--write-baseline')) {
   writeFileSync(BASELINE, JSON.stringify(summary, null, 2) + '\n');
   console.error(`baseline written: ${BASELINE}`);
+} else if (custom && !args.has('--json')) {
+  console.log('\n(custom question file or --tune: not compared against eval/baseline.json)');
 } else if (!args.has('--json')) {
   let base = null;
   try {

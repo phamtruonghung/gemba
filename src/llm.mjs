@@ -76,14 +76,48 @@ const UNTRUSTED_OPEN = '<<<UNTRUSTED_PASSAGES';
 const UNTRUSTED_CLOSE = 'UNTRUSTED_PASSAGES>>>';
 
 /**
+ * Cut `text` to at most `max` characters at a sentence end, else a line end, else a word end; never
+ * inside a word. An ellipsis marks the cut.
+ */
+export function cutAtBoundary(text, max = MAX_PASSAGE_CHARS) {
+  const s = String(text);
+  if (s.length <= max) return s;
+  const head = s.slice(0, max - 1);
+  const sentence = Math.max(...['. ', '.\n', '! ', '? ', '\n'].map((m) => head.lastIndexOf(m)));
+  if (sentence >= max * 0.5) return `${head.slice(0, sentence + 1).trimEnd()} …`;
+  const word = head.search(/\s\S*$/);
+  return `${(word > 0 ? head.slice(0, word) : head).trimEnd()} …`;
+}
+
+/**
+ * The text the model sees for one hit. A note that fits is sent whole. A longer one is sent as the
+ * chunk(s) that matched the question, best first, each a whole `##` section (or a window of one), up to
+ * the cap. Sending the first N characters instead dropped the answering section whenever it sat past
+ * the cut, and cut mid-word.
+ */
+export function passageText(hit) {
+  const body = String(hit.note.body ?? '');
+  if (body.length <= MAX_PASSAGE_CHARS) return body;
+  const chunks = (hit.chunks?.length ? hit.chunks : hit.chunk ? [hit.chunk] : []).map((c) => c.text);
+  if (!chunks.length) return cutAtBoundary(body);
+  let out = '';
+  for (const text of chunks) {
+    const joined = out ? `${out}\n\n[…]\n\n${text}` : text;
+    if (joined.length <= MAX_PASSAGE_CHARS) out = joined;
+    else {
+      if (!out) out = cutAtBoundary(text);
+      break;
+    }
+  }
+  return out;
+}
+
+/**
  * The passages the model is shown: the single source of truth for both the prompt's numbering and
  * for resolving a citation. Passage n is `sent[n - 1]`; nothing else can be cited.
  */
 export function passagesSent(hits) {
-  return hits.slice(0, MAX_PASSAGES).map((h, i) => {
-    const body = h.note.body.length > MAX_PASSAGE_CHARS ? `${h.note.body.slice(0, MAX_PASSAGE_CHARS)}…` : h.note.body;
-    return { n: i + 1, id: h.note.id, title: h.note.title, topic: h.note.topic, body };
-  });
+  return hits.slice(0, MAX_PASSAGES).map((h, i) => ({ n: i + 1, id: h.note.id, title: h.note.title, topic: h.note.topic, body: passageText(h) }));
 }
 
 // A passage must not be able to close the untrusted block from inside it.
@@ -257,6 +291,11 @@ export const MODES = [
  */
 export async function askFromCorpus({ question, hits, plantType = '', coverageVerdict, cfg = llmConfig(), fetchImpl = fetch, sleep = defaultSleep }) {
   const thinVerdict = coverageVerdict?.verdict === 'thin';
+  // Retrieval refuses outright only on hard signals: nothing matched, too short, a weak top score, nothing
+  // distinctive shared. A thin verdict from the share or margin rule is a soft vote; with a key configured
+  // the model's own coverage vote is the primary one, and every check below still applies to its answer.
+  // A verdict without the flag (an older caller) is treated as hard.
+  const hardThin = thinVerdict && coverageVerdict?.hard !== false;
 
   const finish = ({ answer, byId, thin, mode, model = '', missing = '' }) => {
     // byId: note id -> snippet, for the ids that appear in `answer` as [id]
@@ -286,7 +325,7 @@ export async function askFromCorpus({ question, hits, plantType = '', coverageVe
     });
   };
 
-  if (!cfg.enabled || !hits.length) return fallback();
+  if (!cfg.enabled || !hits.length || hardThin) return fallback();
 
   const { system, user, sent } = buildPrompt({ question, hits, plantType });
   const body = {
@@ -350,8 +389,6 @@ export async function askFromCorpus({ question, hits, plantType = '', coverageVe
   if (figure) return refuse('llm-unsupported-figure', `The draft answer gave the figure "${figure}", which is in none of the passages it cites, so it was withheld.`);
   const loose = ungroundedSentence(parsed.answer, byNumber);
   if (loose) return refuse('llm-ungrounded', `The draft answer said "${loose.slice(0, 120)}", which the passage it cites does not support, so it was withheld.`);
-
-  if (thinVerdict) return refuse('llm', coverageVerdict?.why ?? 'The note library does not cover this question.');
 
   const { text: renumbered, map } = renumber(parsed.answer, inText);
   const cites = [...map.entries()].map(([old, n]) => ({ n, id: byNumber.get(old).id, snippet: snippetFor(byNumber.get(old), parsed.answer, old) }));

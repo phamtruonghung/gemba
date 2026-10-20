@@ -7,7 +7,7 @@
 //   node scripts/probe-retrieval.mjs "the machine stops mid-shift — what should I check, and in what order?"
 import { openDb, publishedNotes } from '../src/db.mjs';
 import { loadConfig } from '../src/server.mjs';
-import { buildIndex, search, coverage, tokenize } from '../src/retrieval.mjs';
+import { buildIndex, search, coverage, queryUnits } from '../src/retrieval.mjs';
 
 const q = process.argv.slice(2).join(' ') || 'the machine stops mid-shift — what should I check, and in what order?';
 const dbPath = loadConfig().dbPath;
@@ -21,7 +21,7 @@ for (const n of notes) console.log(`  ${n.slug}  ${n.body.length} chars  ${n.tit
 const index = buildIndex(notes);
 console.log(`index: docs=${index.n} terms=${index.df.size} avgdl=${Math.round(index.avgdl)}`);
 console.log(`question: ${q}`);
-console.log(`tokens: ${tokenize(q).join(' ')}`);
+console.log(`tokens: ${queryUnits(q).map((u) => u.join('|')).join(' ')}`);
 
 const hits = search(q, index, 5);
 console.log(`hits: ${hits.length}`);

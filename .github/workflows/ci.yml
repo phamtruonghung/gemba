@@ -25,6 +25,8 @@ jobs:
       - run: node --version
       - name: Unit and end-to-end tests (node:test, no dependencies)
         run: node --test test/*.test.mjs
+      - name: Retrieval eval (offline, fails the build below eval/baseline.json)
+        run: npm run eval
 
   ui:
     # The design system is only as good as the check that runs on it. This job measures the pages
