@@ -279,6 +279,37 @@ def admin_pass(browser):
     ctx.close()
 
 
+def phone_cta(browser):
+    """At 360x640 a tap on the hero's Ask button has to put the question box on screen.
+
+    Not scrollY: Playwright scrolls a button into view before it clicks it, so scrollY is non-zero even
+    when the anchor is dead. The box being inside the viewport afterwards is what a person sees.
+    """
+    ctx = browser.new_context(
+        viewport={"width": 360, "height": 640},
+        http_credentials=(
+            {"username": os.environ["UI_USER"], "password": os.environ["UI_PASS"]}
+            if os.environ.get("UI_USER") and os.environ.get("UI_PASS")
+            else None
+        ),
+    )
+    page = ctx.new_page()
+    page.goto(BASE + "/", wait_until="load")
+    for label, selector in (("the hero button", "main a.btn[href='#ask']"), ("the nav link", "nav.site a[href='/#ask']")):
+        page.goto(BASE + "/", wait_until="load")
+        target = page.locator(selector).first
+        if not target.count():
+            check(f"tapping {label} puts the question box on screen @360x640", False, f"no {selector}")
+            continue
+        top_before = page.evaluate("() => document.querySelector('#q').getBoundingClientRect().top")
+        target.click()
+        page.wait_for_timeout(300)
+        top = page.evaluate("() => document.querySelector('#q').getBoundingClientRect().top")
+        inside = 0 <= top < page.evaluate("() => innerHeight")
+        check(f"tapping {label} puts the question box on screen @360x640", inside, f"#q top {top_before:.0f}px -> {top:.0f}px")
+    ctx.close()
+
+
 def run_checks():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
@@ -322,6 +353,24 @@ def run_checks():
                         }"""
                     )
                     check(f"tap targets ≥44px — {tag}", not small, "; ".join(small[:3]))
+
+                    # An in-page link must land on something. Two "Ask" buttons pointed at #ask for a long
+                    # time while nothing carried that id: the tap set the hash and the page did not move.
+                    # `/#x` links only count on the home page, where the target lives.
+                    dead = page.evaluate(
+                        """(isHome) => {
+                          const bad = [];
+                          for (const a of document.querySelectorAll('a[href^="#"], a[href^="/#"]')) {
+                            const href = a.getAttribute('href');
+                            const id = href.replace(/^\\/?#/, '');
+                            if (href.startsWith('/#') && !isHome) continue;
+                            if (id && !document.getElementById(id)) bad.push(href);
+                          }
+                          return bad;
+                        }""",
+                        path == "/",
+                    )
+                    check(f"every in-page link resolves — {tag}", not dead, "; ".join(dead[:3]))
 
                     contrast_rows = page.evaluate(CONTRAST_JS)
                     worst = None
@@ -475,6 +524,7 @@ def run_checks():
                 check(f"the ask form announces that it is working — {scheme}", pending["ok"], pending["why"])
 
                 ctx.close()
+        phone_cta(browser)
         admin_pass(browser)
         browser.close()
 

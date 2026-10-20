@@ -191,7 +191,8 @@ const CSS = `
 html{-webkit-text-size-adjust:100%;scroll-padding-bottom:96px}
 /* Reading size is a preference (POST /prefs/text -> cookie -> data-text on <html>). It scales the text a
    person reads (body, notes, answers); the chrome keeps its size so the nav and buttons stay where they are. */
-:root{--read-scale:1}
+:root{--read-scale:1;--header-h:72px}
+#ask{scroll-margin-top:calc(var(--header-h) + 8px)}
 html[data-text="large"]{--read-scale:1.2}
 html[data-text="xl"]{--read-scale:1.45}
 body{margin:0;background:var(--color-background);color:var(--color-foreground);font:calc(16px*var(--read-scale))/1.6 var(--font-sans);-webkit-font-smoothing:antialiased;overflow-wrap:break-word}
@@ -462,6 +463,7 @@ footer.site .inner{max-width:1200px;margin:0 auto;padding:var(--space-8) var(--s
   @keyframes enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 }
 @media (max-width:640px){
+  :root{--header-h:0px}
   /* the nav is its own scrolling row under the brand, and the header does not follow the page down:
      a two-row sticky header is a third of a phone screen */
   header.site{position:static}
@@ -505,8 +507,9 @@ window.addEventListener('appinstalled', function () {
   if (b) b.hidden = true;
 });`;
 
+// [href, label, icon, active-match]: "Ask" lands on the form, but the home page is still its current page
 const NAV = [
-  ['/', 'Ask', 'ask'],
+  ['/#ask', 'Ask', 'ask', '/'],
   ['/library', 'Library', 'library'],
   ['/experts', 'Experts', 'people'],
   ['/how-it-works', 'How it works', 'rules']
@@ -534,8 +537,8 @@ export function withTextSize(html, size) {
  */
 export function layout({ title, body, nav = true, footer = '', user = null, active = '', pwa = nav }) {
   const links = NAV.map(
-    ([href, label, ico]) =>
-      `<a href="${href}"${href === active ? ' aria-current="page"' : ''}>${icon(ico)}${esc(label)}</a>`
+    ([href, label, ico, match = href]) =>
+      `<a href="${href}"${match === active ? ' aria-current="page"' : ''}>${icon(ico)}${esc(label)}</a>`
   ).join('');
   const account = user
     ? `<span class="who">${icon('account')}${esc(user.name)}</span>
@@ -656,7 +659,7 @@ function eyebrowRow(items) {
 }
 
 function askForm({ q = '', action = '/ask', user = null } = {}) {
-  return `<form method="post" action="${action}" class="card" data-pending="Thinking…">
+  return `<form method="post" action="${action}" class="card" id="ask" data-pending="Thinking…">
   <h2 style="font-size:clamp(21px,2.3vw,27px)">Your question about production</h2>
   <label for="q">Your question</label>
   <p class="hint" id="q-hint">One question, as you would ask a colleague. The more specific it is, the better the answer.</p>
