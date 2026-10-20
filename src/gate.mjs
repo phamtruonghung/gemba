@@ -130,6 +130,29 @@ export const DEFAULT_RULES = {
     '\\d[\\d.,]*\\s?(pcs|units|pairs|sets|kg|tons?|metres?|meters?|percent)',
     '\\d[\\d.,]*\\s?(minutes?|hours?|seconds?)\\s*(down|stopped|idle|running|changeover)'
   ],
+  // Instruction-shaped text: a sentence addressed to a language model rather than to a reader. A note
+  // is shown to the answering model as evidence, so text that tries to give it orders is a defect in
+  // the note, not craft knowledge. Block-class: it never publishes. Patterns are phrases, not single
+  // words, and "output" needs an object that is something to leak ("output the salary table"), so
+  // ordinary craft sentences ("check the output of the press") stay clean. Vietnamese is given with
+  // and without tone marks, as people type both.
+  injection_patterns: [
+    '(?:ignore|disregard|forget|override)\\s+(?:all\\s+|any\\s+|the\\s+|your\\s+|these\\s+|those\\s+)?(?:previous|prior|above|earlier|preceding|system)\\s+(?:instructions?|rules?|prompts?|messages?|context)',
+    '(?:ignore|disregard)\\s+(?:everything|all)\\s+(?:above|before)',
+    'you\\s+are\\s+now\\s+(?:a|an|the|in|my|free|no\\s+longer)',
+    '(?:new|updated)\\s+instructions?\\s*:',
+    '(?:system|developer)\\s+prompt',
+    '(?:reveal|print|repeat|show|leak)\\s+(?:your|the)\\s+(?:instructions?|prompt|rules)',
+    '(?:output|print|reveal|return|dump|list)\\s+(?:the|all|every|your)\\s+(?:\\p{L}+\\s+){0,2}(?:table|salary|salaries|password|passwords|secrets?|keys?|prompt|instructions?|database|credentials?|contents?)',
+    '(?:pretend|act)\\s+(?:to\\s+be|as\\s+if\\s+you\\s+(?:are|were))',
+    '(?:bỏ\\s+qua|phớt\\s+lờ|quên)\\s+(?:hết\\s+|tất\\s+cả\\s+|mọi\\s+|các\\s+)?(?:chỉ\\s+dẫn|hướng\\s+dẫn|chỉ\\s+thị|lệnh|quy\\s+tắc)(?:\\s+(?:trước|ở\\s+trên|phía\\s+trên))?',
+    '(?:bo\\s+qua|phot\\s+lo|quen)\\s+(?:het\\s+|tat\\s+ca\\s+|moi\\s+|cac\\s+)?(?:chi\\s+dan|huong\\s+dan|chi\\s+thi|lenh|quy\\s+tac)',
+    '(?:từ\\s+(?:giờ|bây\\s+giờ)|bây\\s+giờ)\\s+(?:bạn|em|mày)\\s+(?:là|sẽ\\s+là)',
+    '(?:tu\\s+(?:gio|bay\\s+gio)|bay\\s+gio)\\s+(?:ban|em|may)\\s+(?:la|se\\s+la)',
+    '(?:lời\\s+nhắc|chỉ\\s+thị|prompt)\\s+hệ\\s+thống',
+    '(?:in\\s+ra|xuất\\s+ra|hiển\\s+thị|tiết\\s+lộ|cho\\s+tôi\\s+xem)\\s+(?:toàn\\s+bộ\\s+|tất\\s+cả\\s+)?(?:bảng\\s+lương|mật\\s+khẩu|chỉ\\s+dẫn|hướng\\s+dẫn|prompt|dữ\\s+liệu|cơ\\s+sở\\s+dữ\\s+liệu)',
+    '(?:in\\s+ra|xuat\\s+ra|hien\\s+thi|tiet\\s+lo)\\s+(?:toan\\s+bo\\s+|tat\\s+ca\\s+)?(?:bang\\s+luong|mat\\s+khau|chi\\s+dan|huong\\s+dan|co\\s+so\\s+du\\s+lieu)'
+  ],
   min_chars: 300,
   max_chars: 12000
 };
@@ -137,7 +160,7 @@ export const DEFAULT_RULES = {
 const LIST_KEYS = [
   'block_terms', 'family_names', 'ambiguous_family_names', 'kinship_words', 'middle_names',
   'document_patterns', 'contact_patterns', 'customer_names', 'customer_context_patterns',
-  'customer_context_patterns_cased', 'plant_identifier_words', 'lint_patterns', 'figure_patterns'
+  'customer_context_patterns_cased', 'plant_identifier_words', 'lint_patterns', 'figure_patterns', 'injection_patterns'
 ];
 
 export function loadRules(extra) {
@@ -305,6 +328,10 @@ export function checkNote(note, rules = DEFAULT_RULES) {
   }
   for (const p of rules.contact_patterns ?? []) {
     for (const m of text.matchAll(documentRe(p))) findings.push({ rule: 'contact', severity: 'block', match: m[0], hint: snippet(text, m) });
+  }
+
+  for (const p of rules.injection_patterns ?? []) {
+    for (const m of text.matchAll(documentRe(p))) findings.push({ rule: 'instruction_text', severity: 'block', match: m[0], hint: snippet(text, m) });
   }
 
   for (const p of rules.figure_patterns) {

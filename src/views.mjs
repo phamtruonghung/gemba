@@ -1051,6 +1051,24 @@ ${flash ? `<div class="notice ok" role="status">${icon('check')} ${esc(flash)}</
   });
 }
 
+/**
+ * What a reader is told about how an answer was produced. The mode string is for the log and the
+ * database; it never reaches a page. `unavailable` modes are the extractive fallback after the model
+ * failed, and they are not shown as a cited model answer.
+ */
+export function modeLabel(mode) {
+  const m = String(mode ?? '');
+  if (m === 'llm') return { label: 'answered by the model, from the cited notes', badge: 'cited', ok: true };
+  if (m === 'extractive' || m === '') return { label: 'quoted from the notes (no model is configured)', badge: 'quoted from notes', ok: false };
+  if (/^llm-(http|error|unparsed)/.test(m)) return { label: 'quoted from notes — model unavailable', badge: 'quoted from notes — model unavailable', ok: false };
+  if (m === 'llm-uncited') return { label: 'withheld — the draft cited no note', badge: 'withheld', ok: false };
+  if (m === 'llm-bad-citation') return { label: 'withheld — the draft cited a note it was not given', badge: 'withheld', ok: false };
+  if (m === 'llm-contradiction') return { label: 'withheld — the draft contradicted itself', badge: 'withheld', ok: false };
+  if (m === 'llm-ungrounded') return { label: 'withheld — the draft said more than the notes do', badge: 'withheld', ok: false };
+  if (m === 'llm-unsupported-figure') return { label: 'withheld — the draft gave a figure the notes do not', badge: 'withheld', ok: false };
+  return { label: 'answered from the library', badge: 'quoted from notes', ok: false };
+}
+
 export function questionPage({ q, aiCitations, answers, experts, routedNames = [], bankConfigured, user = null, claimed = false, url = '', text = 'normal' }) {
   // The stored contact (a phone number, an email) is the asker's. A page that can be shared by link
   // must not hand it to whoever holds the link, so it is prefilled only for the owner; anyone else
@@ -1060,7 +1078,7 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
   const cites = aiCitations
     .map(
       (n) => `<div class="cite">
-  <strong><a href="/notes/${esc(n.slug)}">[${n.id}] ${esc(n.title)}</a></strong>
+  <strong><a href="/notes/${esc(n.slug)}${n.snippet ? `?hl=${encodeURIComponent(n.snippet)}#cited` : ''}">[${n.n}] ${esc(n.title)}</a></strong>
   ${n.snippet ? `<span class="small muted">${esc(n.snippet)}</span>` : ''}
 </div>`
     )
@@ -1119,10 +1137,10 @@ ${cov
 </form>`
         })
       : `<div class="card" style="margin-top:0">
-  <h2 style="font-size:24px">Answer from the note library <span class="badge ok">${icon('check')}cited</span></h2>
+  <h2 style="font-size:24px">Answer from the note library <span class="badge ${modeLabel(q.ai_mode).ok ? 'ok' : ''}">${icon('check')}${esc(modeLabel(q.ai_mode).badge)}</span></h2>
   <div class="answer">${esc(q.ai_answer || '(none yet)')}</div>
   ${cites ? `<div>${cites}</div>` : ''}
-  <p class="small muted" style="margin:0">How it was produced: ${esc(q.ai_mode || 'unknown')}${q.ai_mode === 'extractive' ? ' (no model API key configured — the system quotes the note verbatim and does not paraphrase)' : ''}</p>
+  <p class="small muted" style="margin:0">How it was produced: ${esc(modeLabel(q.ai_mode).label)}${modeLabel(q.ai_mode).ok ? '' : ' — the system quotes the note verbatim and does not paraphrase'}</p>
 </div>`}
 ${answerBlocks}
     ${cov ? '' : `<div class="actionbar"><a class="btn" href="#book">${icon('people')}Book a 1:1 session</a><a class="btn alt" href="#share">${icon('arrow')}Share</a></div>`}
@@ -1248,9 +1266,27 @@ export function renderNoteBody(note, outline) {
   return renderMarkdown(note.body, { title: note.title, outline });
 }
 
-export function notePage({ note, expert, user = null, links = null, url = '', text = 'normal' }) {
+/**
+ * Wrap the first occurrence of `snippet` in the rendered note in <mark id="cited">. The match is on the
+ * escaped text, so the snippet (which comes from the query string) can never put markup on the page:
+ * it is escaped the same way the renderer escaped the note, and only ever compared with it.
+ */
+export function highlightPassage(html, snippet) {
+  const needle = esc(String(snippet ?? '').trim());
+  if (needle.length < 8) return html;
+  // Only text between tags: never inside an attribute or a tag name.
+  let done = false;
+  return html.replace(/(>)([^<]*)(?=<)/g, (whole, gt, txt) => {
+    const i = done ? -1 : txt.indexOf(needle);
+    if (i === -1) return whole;
+    done = true;
+    return `${gt}${txt.slice(0, i)}<mark id="cited">${needle}</mark>${txt.slice(i + needle.length)}`;
+  });
+}
+
+export function notePage({ note, expert, user = null, links = null, highlight = '', url = '', text = 'normal' }) {
   const outline = [];
-  const bodyHtml = renderMarkdown(note.body, { title: note.title, links, outline });
+  const bodyHtml = highlightPassage(renderMarkdown(note.body, { title: note.title, links, outline }), highlight);
   const sections = outline.filter((h) => h.level === 2);
   const gate = (() => {
     try {
@@ -1361,6 +1397,7 @@ export function howItWorksPage({ user = null } = {}) {
               <tr><td class="mono">document</td><td>a purchase order number in the opening line</td></tr>
               <tr><td class="mono">person_name</td><td>a colleague's name in the credits</td></tr>
               <tr><td class="mono">figure</td><td>a unit price and a supplier code</td></tr>
+              <tr><td class="mono">instruction_text</td><td>a line addressed to the answering model: “ignore previous instructions”</td></tr>
             </tbody>
           </table>
           <p class="hint">Two real leaks in the source notes were caught this way before anything was published: nine citations of the employer's own knowledge-tree paths, and a part-number phrase.</p>

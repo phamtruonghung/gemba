@@ -124,7 +124,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       topic: inferredTopic,
       text,
       ai_answer: ai.answer,
-      ai_citations: ai.citations,
+      // The numbered citations with their snippets, not bare ids: the page must show [1]..[k] and a real excerpt.
+      ai_citations: ai.cites,
       ai_coverage: ai.coverage,
       ai_mode: ai.mode,
       ai_missing: ai.missing,
@@ -132,6 +133,21 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     });
     dbm.logEvent(db, 'ask', q.ref, `coverage=${ai.coverage} mode=${ai.mode} hits=${hits.length}`);
     return { question: q, hits, ai, cov };
+  }
+
+  // Stored citations are { n, id, snippet }. Rows written before the snippet existed hold bare note ids;
+  // they are numbered by position and given the opening of the note as their excerpt.
+  function citedNotes(raw) {
+    const published = dbm.publishedNotes(db);
+    return JSON.parse(raw || '[]')
+      .map((c, i) => {
+        const entry = typeof c === 'object' && c !== null ? c : { id: c, n: i + 1, snippet: '' };
+        const note = published.find((x) => x.id === entry.id);
+        if (!note) return null;
+        const snippet = entry.snippet || note.body.replace(/[#>*_`\-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+        return { n: entry.n ?? i + 1, id: note.id, slug: note.slug, title: note.title, snippet };
+      })
+      .filter(Boolean);
   }
 
   function escalate(emailOf) {
@@ -283,10 +299,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         ref: out.question.ref,
         topic: out.question.topic,
         answer: out.question.ai_answer,
-        citations: JSON.parse(out.question.ai_citations).map((id) => {
-          const n = dbm.publishedNotes(db).find((x) => x.id === id);
-          return n ? { id, slug: n.slug, title: n.title } : { id };
-        }),
+        citations: citedNotes(out.question.ai_citations).map((c) => ({ n: c.n, id: c.id, slug: c.slug, title: c.title, snippet: c.snippet })),
         coverage: out.question.ai_coverage,
         mode: out.question.ai_mode,
         missing: out.question.ai_missing,
@@ -760,7 +773,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         links.set(n.slug, n.title);
         links.set(n.slug.replace(/^(vault|demo)-/, ''), n.title);
       }
-      return send(200, views.notePage({ note, expert, user, links, url: `${origin}/notes/${encodeURIComponent(note.slug)}`, text: textSize }));
+      return send(200, views.notePage({ note, expert, user, links, highlight: (url.searchParams.get('hl') ?? '').slice(0, 300), url: `${origin}/notes/${encodeURIComponent(note.slug)}`, text: textSize }));
     }
     if (path === '/ask' && method === 'POST') {
       const text = String(form.q ?? '').trim();
@@ -781,8 +794,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (qMatch) {
       const q = dbm.questionByRef(db, decodeURIComponent(qMatch[1]));
       if (!q) return fail(404, 'No such question.');
-      const ids = JSON.parse(q.ai_citations);
-      const cited = ids.map((id) => dbm.publishedNotes(db).find((n) => n.id === id)).filter(Boolean);
+      const cited = citedNotes(q.ai_citations);
       const owned = Boolean(account && q.user_id === account.id);
       return send(200, views.questionPage({
         q,

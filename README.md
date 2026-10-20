@@ -141,8 +141,12 @@ BASE=http://127.0.0.1:8090 scripts/smoke.sh    # walks the live instance end to 
 ```
 
 Without an API key the AI rung runs in a labelled extractive mode (it quotes the retrieved note and
-says that is what it is doing). With a key it answers normally. Either way the citation contract and
-the refusal marker are enforced by tests.
+says that is what it is doing). With a key the model answers from the retrieved notes, and the answer is
+checked before it is shown: every citation must be a passage actually sent, every figure must be in a cited
+passage, every sentence must be mostly made of words its passage uses; otherwise it is withheld as a refusal.
+Citations are renumbered `[1]..[k]` to match the source list. A 429 or 5xx is retried once (`Retry-After`,
+capped at 5 s); after that the page shows the quoted notes labelled "model unavailable". Streaming is not
+implemented. The contract is in `SPEC.md` section 3 and enforced by `test/llm.test.mjs`.
 
 ## Configuration
 
@@ -159,7 +163,7 @@ the refusal marker are enforced by tests.
 | `GEMBA_LLM_BASE_URL` | OpenCode (`/zen/go/v1`) | OpenAI-compatible chat-completions base URL |
 | `GEMBA_LLM_MODEL` | `deepseek-v4.1-flash` | model id, derived from the gateway when unset (`deepseek/...` for OpenRouter) |
 | `GEMBA_LLM_SESSION` | minted at install | the OpenCode gateway routes by this header; without it the call is refused (`400` from the API, or `403` with Cloudflare error `1010` through the edge) |
-| `GEMBA_LLM_TIMEOUT_MS` | `90000` | per-request timeout |
+| `GEMBA_LLM_TIMEOUT_MS` | `45000` | per-request timeout |
 | `GEMBA_BANK_BIN` / `GEMBA_BANK_ACCOUNT` | — | VietQR recipient; unset ⇒ the booking page shows the amount with no QR |
 
 Secrets belong in the environment or in the systemd `EnvironmentFile`, never in the repo.
