@@ -119,3 +119,14 @@ export function checkInviteAcceptance(form) {
     errors
   };
 }
+
+/** The meeting link goes into an href on the client's booking page, so only https is accepted. */
+export function checkMeetingUrl(input) {
+  const raw = String(input ?? '').trim();
+  if (!raw) return { ok: false, error: 'Add the meeting link (https://…) so the client has somewhere to join.' };
+  if (raw.length > 300) return { ok: false, error: 'The meeting link is too long (300 characters at most).' };
+  let url;
+  try { url = new URL(raw); } catch { return { ok: false, error: 'The meeting link is not a web address.' }; }
+  if (url.protocol !== 'https:') return { ok: false, error: 'The meeting link must start with https://.' };
+  return { ok: true, url: url.href };
+}

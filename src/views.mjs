@@ -22,9 +22,10 @@
 //   4. No proof strip and no logo carousel. There are no customers yet, and the README promises
 //      not to fake evidence.
 
-import { formatVnd, MIN_MINUTES } from './pricing.mjs';
+import { formatVnd, MIN_MINUTES, MAX_MINUTES, PLATFORM_TAKE_PCT, quote } from './pricing.mjs';
 import { ATTESTATION_TEXT } from './gate.mjs';
 import { SCRIPT } from './interview.mjs';
+import { formatLocal } from './when.mjs';
 import { renderMarkdown, markdownToText } from './markdown.mjs';
 import { SETTING_SPECS, SETTING_KEYS } from './settings.mjs';
 
@@ -53,7 +54,7 @@ export const topicList = () => Object.entries(TOPICS);
 // The state machine stores English tokens; this is the one place a person reads them. A raw
 // `awaiting_payment` on a page reads as a bug, so every status goes through a label here.
 const QUESTION_STATUS = { open: 'answered from the library', routed: 'sent to a practitioner', answered: 'answered by a practitioner', closed: 'closed' };
-const BOOKING_STATUS = { requested: 'waiting for transfer instructions', awaiting_payment: 'you reported the transfer — being checked', paid: 'payment received', completed: 'session completed', cancelled: 'cancelled' };
+const BOOKING_STATUS = { requested: 'waiting for the practitioner to confirm the time', awaiting_payment: 'time confirmed — waiting for your transfer', paid: 'payment received', completed: 'session completed', cancelled: 'cancelled' };
 const NOTE_STATUS = { published: 'published in the library', blocked: 'blocked by the gate', draft: 'draft' };
 
 // `open` covers both an answer and a refusal; only the coverage says which, so a refusal never claims an answer.
@@ -1018,7 +1019,7 @@ export function accountPage({ user, questions = [], bookings = [], sessions = 0,
     .join('');
   const bRows = bookings
     .map(
-      (b) => `<li>${esc((b.starts_at ?? '').slice(0, 16))} · ${esc(b.expert_name ?? 'a practitioner')} · ${b.minutes} minutes · <strong>${formatVnd(b.price_vnd)}</strong>
+      (b) => `<li>${esc(formatLocal(b.starts_at))} · ${esc(b.expert_name ?? 'a practitioner')} · ${b.minutes} minutes · <strong>${formatVnd(b.price_vnd)}</strong>
       <div class="stack-sm"><span class="badge">${esc(bookingStatus(b.status))}</span> <a href="/b/${esc(b.ref)}">Booking ${esc(b.ref)}</a></div></li>`
     )
     .join('');
@@ -1069,7 +1070,7 @@ export function modeLabel(mode) {
   return { label: 'answered from the library', badge: 'quoted from notes', ok: false };
 }
 
-export function questionPage({ q, aiCitations, answers, experts, routedNames = [], bankConfigured, user = null, claimed = false, url = '', text = 'normal' }) {
+export function questionPage({ q, aiCitations, answers, experts, routedNames = [], bankConfigured, user = null, claimed = false, url = '', text = 'normal', pricing = {} }) {
   // The stored contact (a phone number, an email) is the asker's. A page that can be shared by link
   // must not hand it to whoever holds the link, so it is prefilled only for the owner; anyone else
   // gets their own signed-in email, or an empty field.
@@ -1093,6 +1094,17 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
   const expertOptions = experts
     .map((e) => `<option value="${esc(e.slug)}">${esc(e.name)} — ${formatVnd(e.rate_vnd)}/hour</option>`)
     .join('');
+  // The practitioner and the length are two selects, so one label cannot carry the total with
+  // JavaScript off: a table says what every pair costs before anything is committed.
+  const priceCols = sessionOptions(Math.max(0, ...experts.map((e) => e.rate_vnd)), pricing).map((o) => o.minutes);
+  const priceTable = experts.length > 1 && priceCols.length
+    ? `<div class="table-wrap"><table><caption class="small muted" style="text-align:left">What each session costs, in total</caption>
+      <thead><tr><th>Practitioner</th>${priceCols.map((m) => `<th>${m} minutes</th>`).join('')}</tr></thead>
+      <tbody>${experts.map((e) => {
+        const byMinutes = Object.fromEntries(sessionOptions(e.rate_vnd, pricing).map((o) => [o.minutes, o.price]));
+        return `<tr><th scope="row">${esc(e.name)}</th>${priceCols.map((m) => `<td class="mono">${byMinutes[m] ? formatVnd(byMinutes[m]) : '—'}</td>`).join('')}</tr>`;
+      }).join('')}</tbody></table></div>`
+    : '';
   const keepBanner =
     user && claimed
       ? `<div class="notice ok" role="status">${icon('check')} This question is now saved to your account — it will be here when you come back.</div>`
@@ -1154,10 +1166,11 @@ ${answerBlocks}
     <div class="form-row two">
       <div class="field"><label for="expert">Practitioner</label><select id="expert" name="expert">${expertOptions}</select></div>
       <div class="field"><label for="minutes">Duration</label><select id="minutes" name="minutes">
-        <option value="30">30 minutes</option><option value="45" selected>45 minutes</option><option value="60">60 minutes</option><option value="90">90 minutes</option></select></div>
+        ${experts.length === 1 ? durationOptions(sessionOptions(experts[0].rate_vnd, pricing)) : [30, 45, 60, 90].filter((m) => m >= (pricing.minMinutes ?? MIN_MINUTES)).map((m) => `<option value="${m}"${m === 45 ? ' selected' : ''}>${m} minutes</option>`).join('')}</select></div>
     </div>
+    ${priceTable}
     <div class="form-row two">
-      <div class="field"><label for="starts_at">Preferred time</label><input id="starts_at" name="starts_at" placeholder="2026-10-15 20:00" required></div>
+      <div class="field"><label for="starts_at">Proposed time (Vietnam time, UTC+7)</label><input id="starts_at" name="starts_at" type="datetime-local" step="1800" required aria-describedby="starts_at-hint"><p class="hint" id="starts_at-hint">The practitioner confirms it before you pay.</p></div>
       <div class="field"><label for="contact2">Contact for the meeting link</label><input id="contact2" name="contact" value="${esc(contactValue)}" required></div>
     </div>
     <div class="field"><label for="agenda">What you want to solve in the session</label><textarea id="agenda" name="agenda">${esc(q.text.slice(0, 300))}</textarea></div>
@@ -1171,11 +1184,23 @@ ${answerBlocks}
   });
 }
 
+/** The session lengths a client can pick, each with its total — or without one if it cannot be quoted. */
+const DURATIONS = [30, 45, 60, 90];
+function sessionOptions(rateVnd, pricing = {}) {
+  const min = pricing.minMinutes ?? MIN_MINUTES;
+  return DURATIONS.filter((m) => m >= min && m <= MAX_MINUTES).flatMap((m) => {
+    try { return [{ minutes: m, price: quote(rateVnd, m, pricing.takePct ?? PLATFORM_TAKE_PCT, min).price_vnd }]; } catch { return []; }
+  });
+}
+const durationOptions = (opts, selected = 45) => opts
+  .map((o) => `<option value="${o.minutes}"${o.minutes === selected ? ' selected' : ''}>${o.minutes} minutes — ${formatVnd(o.price)}</option>`)
+  .join('');
+
 export function bookingPage({ b, instruction, bankConfigured, user = null }) {
   const steps = [
-    ['requested', 'Booking created — waiting for transfer instructions'],
-    ['awaiting_payment', 'You reported the transfer — the platform is checking'],
-    ['paid', 'Payment received — slot confirmed, meeting link sent'],
+    ['requested', 'Waiting for the practitioner to confirm the time'],
+    ['awaiting_payment', 'Time confirmed — transfer the amount below'],
+    ['paid', 'Payment received — meeting link below'],
     ['completed', 'Session completed']
   ];
   const idx = steps.findIndex(([s]) => s === b.status);
@@ -1197,6 +1222,7 @@ export function bookingPage({ b, instruction, bankConfigured, user = null }) {
       <table>
         <tbody>
           <tr><th>Session</th><td>${b.minutes} minutes at ${formatVnd(b.rate_vnd ?? (b.minutes ? Math.round((b.price_vnd / b.minutes) * 60) : 0))} an hour</td></tr>
+          <tr><th>When</th><td>${esc(formatLocal(b.starts_at))} (Vietnam time, UTC+7)</td></tr>
           <tr><th>Total</th><td><strong>${formatVnd(b.price_vnd)}</strong></td></tr>
           <tr><th>Platform fee (20%)</th><td>${formatVnd(b.fee_vnd)}</td></tr>
           <tr><th>Paid to the practitioner</th><td>${formatVnd(b.payout_vnd)}</td></tr>
@@ -1204,16 +1230,24 @@ export function bookingPage({ b, instruction, bankConfigured, user = null }) {
       </table>
       <p class="hint">Whole VND only, and the platform instructs the payment — it never holds the money.</p>
     </div>
-${instruction
-      ? `<div class="card">
+${b.status === 'requested'
+      ? `<div class="notice" role="status">${icon('check')} Waiting for ${esc(b.expert_name)} to confirm ${esc(formatLocal(b.starts_at))} (Vietnam time). Transfer instructions appear here once they confirm.</div>`
+      : b.status === 'awaiting_payment'
+        ? (instruction
+          ? `<div class="card">
   <h2 style="font-size:24px">How to pay</h2>
-  <p>Amount <strong>${formatVnd(instruction.amount_vnd)}</strong> — put exactly this reference in the transfer note: <span class="mono">${esc(instruction.ref)}</span></p>
+  <p>The time is confirmed. Amount <strong>${formatVnd(instruction.amount_vnd)}</strong> — put exactly this reference in the transfer note: <span class="mono">${esc(instruction.ref)}</span></p>
   <p class="muted small">Beneficiary bank: BIN ${esc(instruction.bank_bin)} · account ${esc(instruction.account)}</p>
-  ${bankConfigured ? `<p><img src="https://img.vietqr.io/image/vietqr-${esc(instruction.ref)}-compact.png" alt="Transfer code for ${esc(instruction.ref)}" width="220" height="220"></p>` : ''}
-  ${b.status === 'requested' ? `<form method="post" action="/b/${esc(b.ref)}/transferred"><button class="btn" type="submit">${icon('check')}I have transferred the money</button></form>` : ''}
-  <p class="hint">${esc(bookingStatus(b.status))} · the operator matches the bank line against the transfer note before anything is scheduled.</p>
+  ${bankConfigured ? `<p><img src="${esc(instruction.qr_url)}" alt="Transfer ${esc(formatVnd(instruction.amount_vnd))} to account ${esc(instruction.account)}, reference ${esc(instruction.ref)}" width="220" height="220"></p>` : ''}
+  ${b.transfer_reported_at
+    ? `<p class="notice ok" role="status">${icon('check')} You reported the transfer at ${esc(formatLocal(b.transfer_reported_at))} — the operator is checking it against the bank statement.</p>`
+    : `<form method="post" action="/b/${esc(b.ref)}/transferred"><button class="btn" type="submit">${icon('check')}I have transferred the money</button></form>`}
+  <p class="hint">${esc(bookingStatus(b.status))} · the operator matches the bank line against the transfer note before the session is confirmed as paid.</p>
 </div>`
-      : `<div class="notice warn">${icon('warn')} No receiving account is configured (<span class="mono">GEMBA_BANK_BIN</span>, <span class="mono">GEMBA_BANK_ACCOUNT</span>). The platform does not draw a fake QR code and does not claim money it has not received.</div>`}
+          : `<div class="notice warn">${icon('warn')} No receiving account is configured (<span class="mono">GEMBA_BANK_BIN</span>, <span class="mono">GEMBA_BANK_ACCOUNT</span>). The platform does not draw a fake QR code and does not claim money it has not received.</div>`)
+        : ['paid', 'completed'].includes(b.status) && b.meeting_url
+          ? `<div class="card"><h2 style="font-size:24px">Meeting link</h2><p><a href="${esc(b.meeting_url)}" rel="noopener noreferrer">${esc(b.meeting_url)}</a></p><p class="muted small" style="margin:0">${esc(formatLocal(b.starts_at))} (Vietnam time, UTC+7)</p></div>`
+          : ''}
     <div class="card">
       <h3>Process</h3>
       <ol class="steps">${steps.map(([s, label], i) => `<li class="${i === idx ? 'here' : ''}"><span>${esc(label)}${i === idx ? ' — you are here' : ''}</span></li>`).join('')}</ol>
@@ -1436,7 +1470,7 @@ export function howItWorksPage({ user = null } = {}) {
   });
 }
 
-export function expertListPage({ experts, topics, user = null }) {
+export function expertListPage({ experts, topics, user = null, pricing = {} }) {
   const cards = experts
     .map(
       (e) => `<article class="card" id="${esc(e.slug)}" style="margin:0">
@@ -1451,8 +1485,8 @@ export function expertListPage({ experts, topics, user = null }) {
       <input type="hidden" name="expert" value="${esc(e.slug)}">
       <div class="form-row two">
         <div class="field"><label for="m-${esc(e.slug)}">Duration</label><select id="m-${esc(e.slug)}" name="minutes">
-          <option value="30">30 minutes</option><option value="45" selected>45 minutes</option><option value="60">60 minutes</option><option value="90">90 minutes</option></select></div>
-        <div class="field"><label for="s-${esc(e.slug)}">Preferred time</label><input id="s-${esc(e.slug)}" name="starts_at" placeholder="2026-10-15 20:00" required></div>
+          ${durationOptions(sessionOptions(e.rate_vnd, pricing))}</select></div>
+        <div class="field"><label for="s-${esc(e.slug)}">Proposed time (Vietnam time, UTC+7)</label><input id="s-${esc(e.slug)}" name="starts_at" type="datetime-local" step="1800" required aria-describedby="sh-${esc(e.slug)}"><p class="hint" id="sh-${esc(e.slug)}">The practitioner confirms it before you pay.</p></div>
       </div>
       <div class="form-row two">
         <div class="field"><label for="n-${esc(e.slug)}">Your name</label><input id="n-${esc(e.slug)}" name="asker" value="${esc(user?.name ?? '')}" required></div>
@@ -1502,7 +1536,7 @@ export function expertListPage({ experts, topics, user = null }) {
   });
 }
 
-export function expertWorkspacePage({ expert, expertNotes, queue, bookings }) {
+export function expertWorkspacePage({ expert, expertNotes, queue, bookings, statement = null, flash = '' }) {
   const noteRows = expertNotes
     .map(
       (n) => `<li><a href="${n.status === 'published' ? `/notes/${esc(n.slug)}` : `/c/${esc(expert.token)}/draft?slug=${encodeURIComponent(n.slug)}`}">${esc(n.title)}</a>
@@ -1525,8 +1559,20 @@ export function expertWorkspacePage({ expert, expertNotes, queue, bookings }) {
     )
     .join('');
   const bRows = bookings
-    .map((b) => `<li>${esc(b.starts_at)} · ${b.minutes}p · ${formatVnd(b.payout_vnd)} to you · ${esc(b.ref)} <span class="badge">${esc(bookingStatus(b.status))}</span></li>`)
+    .map((b) => `<li>${esc(formatLocal(b.starts_at))} (Vietnam time) · ${b.minutes}p · ${formatVnd(b.payout_vnd)} to you · ${esc(b.ref)} <span class="badge">${esc(bookingStatus(b.status))}</span>
+    ${b.status === 'requested' ? `<form method="post" action="/c/${esc(expert.token)}/booking" class="stack-sm">
+      <input type="hidden" name="ref" value="${esc(b.ref)}">
+      <label for="mu-${esc(b.ref)}">Meeting link (shown to the client once they have paid)</label>
+      <input id="mu-${esc(b.ref)}" name="meeting_url" type="url" required maxlength="300" placeholder="https://meet.google.com/…">
+      <p class="row tight-gap"><button class="btn sm" type="submit" name="action" value="confirm">Confirm this time</button>
+      <button class="btn ghost sm" type="submit" name="action" value="decline">Decline</button></p>
+    </form>` : ''}</li>`)
     .join('');
+  const statementCard = statement
+    ? `<div class="card"><h2 style="font-size:24px">Your statement</h2>
+      <p style="margin:0"><strong>${formatVnd(statement.paid_out_vnd)}</strong> paid to you · <strong>${formatVnd(statement.owed_vnd)}</strong> owed to you · <strong>${formatVnd(statement.in_flight_vnd)}</strong> in flight</p>
+      <p class="hint">Paid means the operator marked the transfer as sent. Owed is a completed session not yet paid out. In flight is confirmed or paid sessions not yet held.</p></div>`
+    : '';
   return layout({
     title: `Desk — ${expert.name}`,
     nav: false,
@@ -1563,6 +1609,8 @@ export function expertWorkspacePage({ expert, expertNotes, queue, bookings }) {
         </form>
       </div>
     </div>
+    ${flash ? `<div class="notice warn" role="alert">${icon('warn')} ${esc(flash)}</div>` : ''}
+    ${statementCard}
     <div class="card">
       <h2 style="font-size:24px">Sessions booked with me</h2>
       <ul class="plain">${bRows || '<li class="muted">No sessions yet.</li>'}</ul>
@@ -1879,7 +1927,7 @@ export function adminExpertPage({ admin, expert, stats = {}, invite = null, topi
   <div class="grid four">
     <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">Published notes</p><p style="margin:0;font-size:30px;font-weight:700">${esc(String(s.notes ?? 0))}</p></div>
     <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">Questions routed</p><p style="margin:0;font-size:30px;font-weight:700">${esc(String(s.questions ?? 0))}</p><p class="small muted" style="margin:0">${esc(String(s.answers ?? 0))} answered</p></div>
-    <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">Sessions</p><p style="margin:0;font-size:30px;font-weight:700">${esc(String(s.bookings ?? 0))}</p><p class="small muted" style="margin:0">${formatVnd(s.payout_vnd ?? 0)} paid out on completed</p></div>
+    <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">Sessions</p><p style="margin:0;font-size:30px;font-weight:700">${esc(String(s.bookings ?? 0))}</p><p class="small muted" style="margin:0">${formatVnd(s.payout_vnd ?? 0)} earned on completed sessions</p></div>
     <div class="card" style="margin:0"><p class="eyebrow" style="margin:0">State</p>
       <p style="margin:0;font-size:17px;font-weight:600">${expert.accept_questions && expert.status === 'active' ? 'Accepting questions' : 'Not accepting questions'}</p>
       <p class="small muted" style="margin:0">${expert.user_id ? 'Has an account' : invite ? 'Invited, not accepted yet' : 'No account yet'}</p></div>
@@ -1993,6 +2041,7 @@ export function adminAccountsPage({ admin, users = [], q = '', errors = {}, draf
 }
 
 export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue = [], refunds = [], status = '', flash = '' }) {
+  const stamp = (iso) => esc(formatLocal(iso));
   const label = { requested: 'requested', awaiting_payment: 'awaiting payment', paid: 'paid', completed: 'done', cancelled: 'cancelled' };
   const rows = bookings
     .map((b) => {
@@ -2001,19 +2050,29 @@ export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue =
   <td class="mono">${esc(b.ref)}</td>
   <td>${esc(b.expert_name ?? '—')}</td>
   <td>${esc(b.asker)}<div class="small muted mono">${esc(b.contact)}</div></td>
-  <td>${esc(String(b.starts_at).slice(0, 16).replace('T', ' '))}<div class="small muted">${esc(String(b.minutes))} min</div></td>
+  <td>${esc(formatLocal(b.starts_at))}<div class="small muted">${esc(String(b.minutes))} min</div></td>
   <td class="mono">${formatVnd(b.price_vnd)}<div class="small muted">fee ${formatVnd(b.fee_vnd)} · payout ${formatVnd(b.payout_vnd)}</div></td>
   <td><span class="badge${b.status === 'completed' ? ' ok' : b.status === 'cancelled' ? ' warn' : ''}">${esc(label[b.status] ?? b.status)}</span>
-    ${b.status === 'cancelled' && b.refund_vnd > 0 ? `<div class="small" style="color:var(--color-ok-text)">refund ${formatVnd(b.refund_vnd)} owed</div>` : ''}
+    ${b.status === 'cancelled' && b.refund_vnd > 0 ? (b.refunded_at
+      ? `<div class="small muted">refunded ${stamp(b.refunded_at)}</div>`
+      : `<div class="small" style="color:var(--color-ok-text)">refund ${formatVnd(b.refund_vnd)} owed</div>`) : ''}
+    ${b.status === 'completed' && b.payout_paid_at ? `<div class="small muted">paid out ${stamp(b.payout_paid_at)}</div>` : ''}
+    ${b.transfer_reported_at && b.status === 'awaiting_payment' ? `<div class="small">client reported a transfer ${stamp(b.transfer_reported_at)}</div>` : ''}
+    ${b.payment_ref ? `<div class="small muted">bank ref ${esc(b.payment_ref)}</div>` : ''}
     ${b.cancel_reason ? `<div class="small muted">${esc(b.cancel_reason)}</div>` : ''}</td>
   <td>
     ${open ? `<div class="row tight-gap" style="flex-wrap:wrap">
       ${b.status === 'paid'
         ? `<form method="post" action="/admin/bookings/${esc(b.ref)}/completed"><button class="btn alt sm" type="submit">Session done</button></form>`
-        : `<form method="post" action="/admin/bookings/${esc(b.ref)}/paid"><button class="btn alt sm" type="submit">Payment received</button></form>`}
+        : b.status === 'awaiting_payment'
+          ? `<form method="post" action="/admin/bookings/${esc(b.ref)}/paid" class="row tight-gap" style="align-items:center">
+        <label class="sr-only" for="pr-${esc(b.ref)}">Bank reference for ${esc(b.ref)}</label>
+        <input id="pr-${esc(b.ref)}" name="payment_ref" maxlength="100" placeholder="bank line ref" style="width:130px">
+        <button class="btn alt sm" type="submit">Payment received</button></form>`
+          : `<span class="muted small">waiting for the practitioner to confirm</span>`}
       <form method="post" action="/admin/bookings/${esc(b.ref)}/reschedule" class="row tight-gap" style="align-items:center">
         <label class="sr-only" for="rs-${esc(b.ref)}">New time for ${esc(b.ref)}</label>
-        <input id="rs-${esc(b.ref)}" name="starts_at" value="${esc(String(b.starts_at).slice(0, 16))}" style="width:170px">
+        <input id="rs-${esc(b.ref)}" name="starts_at" value="${esc(formatLocal(b.starts_at))}" style="width:170px">
         <label class="sr-only" for="rm-${esc(b.ref)}">Minutes for ${esc(b.ref)}</label>
         <input id="rm-${esc(b.ref)}" name="minutes" value="${esc(String(b.minutes))}" style="width:70px">
         <button class="btn ghost sm" type="submit">Move</button>
@@ -2023,7 +2082,10 @@ export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue =
         <input id="cr-${esc(b.ref)}" name="reason" placeholder="why" style="width:130px">
         <button class="btn ghost sm" type="submit">Cancel</button>
       </form>
-    </div>` : '<span class="muted small">nothing to do</span>'}
+    </div>` : b.status === 'completed' && !b.payout_paid_at ? `<form method="post" action="/admin/bookings/${esc(b.ref)}/payout" class="row tight-gap" style="align-items:center">
+      <label class="sr-only" for="po-${esc(b.ref)}">Bank reference for the payout of ${esc(b.ref)}</label>
+      <input id="po-${esc(b.ref)}" name="reference" maxlength="100" placeholder="bank ref (optional)" style="width:150px">
+      <button class="btn alt sm" type="submit">Payout sent (${formatVnd(b.payout_vnd)})</button></form>` : '<span class="muted small">nothing to do</span>'}
   </td>
 </tr>`;
     })
@@ -2042,15 +2104,20 @@ export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue =
   <td>${esc(r.name)}</td>
   <td>${r.bookings}</td>
   <td class="mono">${formatVnd(r.paid_out_vnd)}</td>
+  <td class="mono">${formatVnd(r.owed_vnd)}</td>
+  <td class="mono">${formatVnd(r.in_flight_vnd)}</td>
   <td class="mono">${formatVnd(r.fee_vnd)}</td>
-  <td class="mono">${formatVnd(r.pending_vnd)}</td>
 </tr>`)
     .join('');
 
   const refundRows = refunds
     .map((b) => `<tr><td class="mono">${esc(b.ref)}</td><td>${esc(b.expert_name ?? '—')}</td>
       <td>${esc(b.contact)}</td><td class="mono">${formatVnd(b.refund_vnd)}</td>
-      <td class="small muted">${esc(b.cancel_reason)}</td></tr>`)
+      <td class="small muted">${esc(b.cancel_reason)}</td>
+      <td><form method="post" action="/admin/bookings/${esc(b.ref)}/refunded" class="row tight-gap" style="align-items:center">
+        <label class="sr-only" for="rf-${esc(b.ref)}">Bank reference for the refund of ${esc(b.ref)}</label>
+        <input id="rf-${esc(b.ref)}" name="reference" maxlength="100" placeholder="bank ref (optional)" style="width:150px">
+        <button class="btn alt sm" type="submit">Refund sent</button></form></td></tr>`)
     .join('');
 
   return adminShell({
@@ -2065,13 +2132,13 @@ export function adminBookingsPage({ admin, bookings = [], counts = {}, revenue =
 ${refunds.length ? `<section class="tight"><div class="wrap">
   <h2>Refunds owed</h2>
   <p class="muted">Sessions cancelled after the client paid. The platform instructs payment and never holds it, so these are instructions to send back — not money waiting here.</p>
-  <div class="table-wrap"><table><thead><tr><th>Ref</th><th>Practitioner</th><th>Client</th><th>Amount</th><th>Reason</th></tr></thead><tbody>${refundRows}</tbody></table></div>
+  <div class="table-wrap"><table><thead><tr><th>Ref</th><th>Practitioner</th><th>Client</th><th>Amount</th><th>Reason</th><th></th></tr></thead><tbody>${refundRows}</tbody></table></div>
 </div></section>` : ''}
 <section class="tight"><div class="wrap">
   <h2>What practitioners have earned</h2>
-  <p class="muted">Completed sessions only, plus what is still moving through the pipeline.</p>
-  <div class="table-wrap"><table><thead><tr><th>Practitioner</th><th>Sessions</th><th>Paid out</th><th>Platform fee</th><th>In flight</th></tr></thead>
-  <tbody>${revenueRows || '<tr><td colspan="5" class="muted">No sessions yet.</td></tr>'}</tbody></table></div>
+  <p class="muted">Paid out means you marked the payout as sent. Owed is a completed session not yet paid out; in flight is a confirmed or paid session that is not complete.</p>
+  <div class="table-wrap"><table><thead><tr><th>Practitioner</th><th>Sessions</th><th>Paid out</th><th>Owed</th><th>In flight</th><th>Platform fee</th></tr></thead>
+  <tbody>${revenueRows || '<tr><td colspan="6" class="muted">No sessions yet.</td></tr>'}</tbody></table></div>
 </div></section>`,
   });
 }
@@ -2153,10 +2220,10 @@ export function inviteDeadPage({ state, email = '' }) {
   });
 }
 
-export function adminPage({ token, stats, pendingBookings, blockedNotes, openQuestions, answerable, accounts = 0, user = null }) {
+export function adminPage({ token, stats, pendingBookings, blockedNotes, openQuestions, answerable, accounts = 0, user = null, flash = '' }) {
   const bRows = pendingBookings
     .map(
-      (b) => `<tr><td class="mono">${esc(b.ref)}</td><td>${esc(b.expert_name ?? '')}</td><td>${esc(b.contact)}</td><td>${esc(b.starts_at)}</td><td>${formatVnd(b.price_vnd)}</td><td>${esc(bookingStatus(b.status))}</td>
+      (b) => `<tr><td class="mono">${esc(b.ref)}</td><td>${esc(b.expert_name ?? '')}</td><td>${esc(b.contact)}</td><td>${esc(formatLocal(b.starts_at))}</td><td>${formatVnd(b.price_vnd)}</td><td>${esc(bookingStatus(b.status))}</td>
     <td>${b.status === 'awaiting_payment' ? `<form method="post" action="/qt/${esc(token)}/confirm"><input type="hidden" name="ref" value="${esc(b.ref)}"><button class="btn sm">Payment received</button></form>` : b.status === 'paid' ? `<form method="post" action="/qt/${esc(token)}/complete"><input type="hidden" name="ref" value="${esc(b.ref)}"><button class="btn sm">Session done</button></form>` : ''}</td></tr>`
     )
     .join('');
@@ -2196,6 +2263,7 @@ export function adminPage({ token, stats, pendingBookings, blockedNotes, openQue
   <div class="wrap">
     <div class="card">
       <h2 style="font-size:24px">Bookings to reconcile</h2>
+      ${flash ? `<div class="notice warn" role="alert">${icon('warn')} ${esc(flash)}</div>` : ''}
       <div class="table-wrap"><table><thead><tr><th>Code</th><th>Practitioner</th><th>Contact</th><th>Time</th><th>Price</th><th>Status</th><th></th></tr></thead>
       <tbody>${bRows || '<tr><td colspan="7" class="muted">No bookings.</td></tr>'}</tbody></table></div>
       <p class="hint">Money counts as received only when you reconcile the bank statement here. The system never marks a booking paid by itself.</p>

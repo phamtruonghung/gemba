@@ -10,9 +10,10 @@ import { checkNote, decidePublication, loadRules } from './gate.mjs';
 import { buildIndex, search, coverage } from './retrieval.mjs';
 import { askFromCorpus, llmConfig } from './llm.mjs';
 import { quote, formatVnd, MIN_MINUTES, transferInstruction, suggestRateVnd } from './pricing.mjs';
+import { parseLocal } from './when.mjs';
 import { questionAt, draftNoteFromInterview, slugify, SCRIPT } from './interview.mjs';
 import { loadSettings, checkSettings, saveSettings, SETTING_KEYS } from './settings.mjs';
-import { checkExpert, checkInvite, checkInviteAcceptance } from './experts.mjs';
+import { checkExpert, checkInvite, checkInviteAcceptance, checkMeetingUrl } from './experts.mjs';
 import * as views from './views.mjs';
 import { cachePolicy, buildServiceWorker, MANIFEST, PUBLIC_DIR } from './pwa.mjs';
 import { serveStatic } from './static.mjs';
@@ -93,6 +94,13 @@ export function loadConfig(env = process.env) {
     llm: llmConfig(merged)
   };
 }
+
+/** What the price tables on the public pages are quoted with: the operator's own settings. */
+const pricingFor = (db) => {
+  const s = loadSettings(db);
+  return { takePct: s.platform_take_rate, minMinutes: s.min_minutes };
+};
+const NOT_CONFIRMED = 'The practitioner has not confirmed the time yet; no payment was requested.';
 
 export function createApp({ dbPath, config = loadConfig(), rules = loadRules() } = {}) {
   // The configured path wins. GEMBA_DB / GEMBA_DATA_DIR are what the README, the systemd unit, the
@@ -460,8 +468,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
             for (const key of SETTING_KEYS) if (form[key] !== undefined) shown[key] = String(form[key]);
             return send(400, views.adminSettingsPage({ admin: account, settings: shown, errors: check.errors, flash: '' }));
           }
-          const changed = saveSettings(db, check.values, { actor });
-          dbm.logEvent(db, 'setting', Object.keys(check.values).join(','), `actor=${actor} changed=${changed.join(' ') || 'nothing'}`);
+          dbm.tx(db, () => {
+            const changed = saveSettings(db, check.values, { actor });
+            dbm.logEvent(db, 'setting', Object.keys(check.values).join(','), `actor=${actor} changed=${changed.join(' ') || 'nothing'}`);
+          });
           return redirect('/admin/settings?saved=1');
         }
         return send(200, views.adminSettingsPage({
@@ -632,10 +642,12 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           // console, and locking the last operator locks everybody out of it. Both are refused.
           if (self) return fail(400, 'You cannot lock the account you are signed in as.');
           if (lastAdmin) return fail(400, 'That is the last operator who can sign in. Invite another operator first.');
-          dbm.setUserStatus(db, target.id, 'locked');
           // A lock that leaves live sessions running is a claim about the future, not about now.
-          const ended = dbm.deleteSessionsForUser(db, target.id);
-          dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} locked=${target.email} sessions_ended=${ended}`);
+          dbm.tx(db, () => {
+            dbm.setUserStatus(db, target.id, 'locked');
+            const ended = dbm.deleteSessionsForUser(db, target.id);
+            dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} locked=${target.email} sessions_ended=${ended}`);
+          });
           return redirect('/admin/accounts?locked=1');
         }
         if (action === 'unlock') {
@@ -673,65 +685,65 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           flash: url.searchParams.get('paid') ? `Booking ${url.searchParams.get('paid')} marked as paid.`
             : url.searchParams.get('completed') ? `Booking ${url.searchParams.get('completed')} marked as done.`
             : url.searchParams.get('moved') ? `Booking ${url.searchParams.get('moved')} moved and re-quoted.`
+            : url.searchParams.get('refunded') ? `Booking ${url.searchParams.get('refunded')}: refund marked as sent.`
+            : url.searchParams.get('payout') ? `Booking ${url.searchParams.get('payout')}: payout marked as sent.`
             : url.searchParams.get('cancelled') ? `Booking ${url.searchParams.get('cancelled')} cancelled.`
             : url.searchParams.get('err') ? url.searchParams.get('err') : ''
         }));
       }
-      const bkMatch = /^\/admin\/bookings\/([^/]+)\/(paid|completed|cancel|reschedule)$/.exec(path);
+      const bkMatch = /^\/admin\/bookings\/([^/]+)\/(paid|completed|cancel|reschedule|refunded|payout)$/.exec(path);
       if (bkMatch && method === 'POST') {
         const ref = decodeURIComponent(bkMatch[1]);
         const b = dbm.bookingByRef(db, ref);
         if (!b) return fail(404, 'No such booking.');
         const action = bkMatch[2];
 
+        const back = (r) => redirect(`/admin/bookings?err=${encodeURIComponent(r.error)}`);
+
         if (action === 'paid' || action === 'completed') {
-          // `setBookingStatus` guards the transitions (requested -> awaiting_payment -> paid ->
-          // completed), so a client who transferred without ever opening their booking page is moved
-          // through the middle state rather than skipping it — the same two steps the token console
-          // takes. Skipping it here would throw where an operator least expects a crash.
-          const allowedFrom = action === 'paid' ? ['requested', 'awaiting_payment'] : ['paid'];
-          if (!allowedFrom.includes(b.status)) {
-            return redirect(`/admin/bookings?err=${encodeURIComponent(`Booking ${ref} is ${b.status}; it cannot be marked ${action} from there.`)}`);
-          }
-          if (b.status === 'requested') dbm.setBookingStatus(db, ref, 'awaiting_payment');
-          dbm.setBookingStatus(db, ref, action === 'paid' ? 'paid' : 'completed');
-          dbm.logEvent(db, 'booking', ref, `actor=${actor} ${action} ${b.price_vnd}`);
+          // Every state change goes through `transitionBooking`, which refuses an illegal step with a
+          // sentence. Payment is not auto-stepped from `requested`: that would mark money received for
+          // a session nobody has confirmed.
+          if (action === 'paid' && b.status === 'requested') return back({ error: NOT_CONFIRMED });
+          const r = dbm.transitionBooking(db, ref, action === 'paid' ? 'paid' : 'completed', {
+            actor, note: `${b.price_vnd}`,
+            fields: action === 'paid' && String(form.payment_ref ?? '').trim() ? { payment_ref: String(form.payment_ref).trim().slice(0, 100) } : {}
+          });
+          if (!r.ok) return back(r);
+          return redirect(`/admin/bookings?${action}=${encodeURIComponent(ref)}`);
+        }
+
+        if (action === 'refunded' || action === 'payout') {
+          const note = String(form.reference ?? '').trim();
+          const r = action === 'refunded' ? dbm.markRefunded(db, ref, { actor, note }) : dbm.markPayoutPaid(db, ref, { actor, note });
+          if (!r.ok) return back(r);
           return redirect(`/admin/bookings?${action}=${encodeURIComponent(ref)}`);
         }
 
         if (action === 'reschedule') {
-          const startsAt = String(form.starts_at ?? '').trim();
-          const when = new Date(startsAt);
-          if (!startsAt || Number.isNaN(when.getTime())) {
-            return redirect(`/admin/bookings?err=${encodeURIComponent('That start time is not a date the system can read.')}`);
-          }
+          const when = parseLocal(form.starts_at);
+          if (!when.ok) return redirect(`/admin/bookings?err=${encodeURIComponent(when.error)}`);
           const settings = loadSettings(db);
           const expert = dbm.expertById(db, b.expert_id);
           const minutes = Number(form.minutes ?? b.minutes);
           let money;
           try {
-            money = quote(expert?.rate_vnd ?? b.price_vnd, minutes, settings.platform_take_rate / 100, settings.min_minutes);
+            money = quote(expert?.rate_vnd ?? b.price_vnd, minutes, settings.platform_take_rate, settings.min_minutes);
           } catch (err) {
             return redirect(`/admin/bookings?err=${encodeURIComponent(String(err.message))}`);
           }
-          dbm.rescheduleBooking(db, ref, {
-            startsAt: when.toISOString(), minutes: money.minutes,
-            priceVnd: money.price_vnd, feeVnd: money.fee_vnd, payoutVnd: money.payout_vnd
-          });
-          dbm.logEvent(db, 'booking', ref, `actor=${actor} rescheduled to ${when.toISOString().slice(0, 16)} ${money.minutes}p price ${b.price_vnd}->${money.price_vnd}`);
+          const r = dbm.rescheduleBooking(db, ref, { startsAt: when.iso, minutes: money.minutes, money, actor });
+          if (!r.ok) return back(r);
           return redirect(`/admin/bookings?moved=${encodeURIComponent(ref)}`);
         }
 
         if (action === 'cancel') {
-          if (b.status === 'cancelled') return redirect('/admin/bookings?err=' + encodeURIComponent('That booking is already cancelled.'));
           const reason = String(form.reason ?? '').trim();
           // A cancellation after payment is not a status change, it is money owed back. The platform
           // instructs payment and never holds it (ADR-0008), so this records the amount the operator
           // has to send back rather than pretending a transfer can be reversed.
-          const alreadyPaid = ['paid', 'completed'].includes(b.status);
-          const refundVnd = alreadyPaid ? b.price_vnd : 0;
-          dbm.cancelBooking(db, ref, { reason, refundVnd });
-          dbm.logEvent(db, 'booking', ref, `actor=${actor} cancel reason="${reason.slice(0, 80)}" refund_owed=${refundVnd}`);
+          const r = dbm.cancelBooking(db, ref, { reason, actor });
+          if (!r.ok) return back(r);
           return redirect(`/admin/bookings?cancelled=${encodeURIComponent(ref)}`);
         }
         return fail(404, 'No such booking action.');
@@ -759,7 +771,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       }));
     }
     if (path === '/how-it-works') return send(200, views.howItWorksPage({ user }));
-    if (path === '/experts') return send(200, views.expertListPage({ experts: dbm.listExperts(db), topics: views.topicList(), user }));
+    if (path === '/experts') return send(200, views.expertListPage({ experts: dbm.listExperts(db), topics: views.topicList(), user, pricing: pricingFor(db) }));
     if (path === '/library') return send(200, views.corpusPage({ notes: (() => { const t = url.searchParams.get('topic'); const all = dbm.publishedNotes(db); return t ? all.filter((n) => n.topic === t) : all; })(), topic: url.searchParams.get('topic') ?? '', topics: views.topicList(), user, place: placeOf() }));
     if (path.startsWith('/notes/')) {
       const slug = decodeURIComponent(path.slice('/notes/'.length));
@@ -803,6 +815,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         experts: dbm.listExperts(db),
         routedNames: dbm.expertsForTopic(db, q.topic).map((e) => e.name),
         bankConfigured: Boolean(config.bankBin && config.bankAccount),
+        pricing: pricingFor(db),
         user,
         claimed: owned,
         url: `${origin}/q/${encodeURIComponent(q.ref)}`,
@@ -832,26 +845,30 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const moneySettings = loadSettings(db);
       let money;
       try {
-        money = quote(expert.rate_vnd, minutes, moneySettings.platform_take_rate / 100, moneySettings.min_minutes);
+        money = quote(expert.rate_vnd, minutes, moneySettings.platform_take_rate, moneySettings.min_minutes);
       } catch (err) {
         return fail(400, String(err.message));
       }
+      const when = parseLocal(form.starts_at);
+      if (!when.ok) return fail(400, when.error);
       const q = ref ? dbm.questionByRef(db, ref) : null;
-      const b = dbm.insertBooking(db, {
+      const made = dbm.createBookingOnce(db, {
         expert_id: expert.id,
+        expert_name: expert.name,
         user_id: account?.id ?? null,
         asker: String(form.asker ?? '').trim() || account?.name || 'guest',
         contact: String(form.contact ?? '').trim() || account?.email || '',
         topic: String(form.topic ?? q?.topic ?? 'other'),
         agenda: String(form.agenda ?? q?.text ?? '').slice(0, 1000),
-        starts_at: String(form.starts_at ?? '').trim(),
+        starts_at: when.iso,
         minutes: money.minutes,
         price_vnd: money.price_vnd,
         fee_vnd: money.fee_vnd,
         payout_vnd: money.payout_vnd
       });
-      dbm.logEvent(db, 'booking', b.ref, `${expert.slug} ${minutes}p ${money.price_vnd}`);
-      return redirect(`/b/${b.ref}`);
+      if (!made.ok) return fail(409, made.error);
+      dbm.logEvent(db, made.duplicate ? 'booking_duplicate' : 'booking', made.booking.ref, `${expert.slug} ${minutes}p ${money.price_vnd}`);
+      return redirect(`/b/${made.booking.ref}`);
     }
 
     const bMatch = /^\/b\/([^/]+)$/.exec(path);
@@ -868,7 +885,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       const ref = decodeURIComponent(paidMatch[1]);
       const b = dbm.bookingByRef(db, ref);
       if (!b) return fail(404, 'No such booking.');
-      if (b.status === 'requested') dbm.setBookingStatus(db, ref, 'awaiting_payment');
+      dbm.reportTransfer(db, ref);
       return redirect(`/b/${ref}`);
     }
 
@@ -891,20 +908,41 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         const check = checkInviteAcceptance(form);
         if (!check.ok) return send(400, views.invitePage({ invite, expert, errors: check.errors, draft: form }));
 
-        const created = dbm.createUser(db, {
-          email: invite.email,
-          name: check.values.name,
-          password_hash: await hashPassword(check.values.password),
-          // The role comes from the invitation row, never from the form: a field on the page cannot
-          // promote the account it is creating into an operator.
-          role: invite.role === 'admin' ? 'admin' : 'expert'
-        });
-        if (invite.expert_id) dbm.linkExpertUser(db, invite.expert_id, created.id);
-        dbm.acceptInvite(db, invite.id);
-        dbm.logEvent(db, 'invite_accepted', `expert:${invite.expert_id ?? '-'}`, `actor=${invite.email} role=${created.role}`);
+        // Hash before the transaction: node:sqlite is synchronous on one shared connection, so an
+        // await inside `tx` would let other requests run their statements inside it. Two requests can
+        // both pass the checks above while this one hashes, so the claim below is what decides.
+        const password_hash = await hashPassword(check.values.password);
+        const ALREADY_USED = Symbol('invite already redeemed');
+        const EMAIL_TAKEN = Symbol('email already has an account');
+        let created;
         const id = newSessionId();
-        dbm.createSession(db, { id, userId: created.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
-        dbm.touchUser(db, created.id);
+        try {
+          dbm.tx(db, () => {
+            if (!dbm.acceptInvite(db, invite.id)) throw ALREADY_USED;
+            if (dbm.userByEmail(db, invite.email)) throw EMAIL_TAKEN; // the rollback un-claims the invite
+            created = dbm.createUser(db, {
+              email: invite.email,
+              name: check.values.name,
+              password_hash,
+              // The role comes from the invitation row, never from the form: a field on the page cannot
+              // promote the account it is creating into an operator.
+              role: invite.role === 'admin' ? 'admin' : 'expert'
+            });
+            if (invite.expert_id) dbm.linkExpertUser(db, invite.expert_id, created.id);
+            dbm.logEvent(db, 'invite_accepted', `expert:${invite.expert_id ?? '-'}`, `actor=${invite.email} role=${created.role}`);
+            dbm.createSession(db, { id, userId: created.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
+            dbm.touchUser(db, created.id);
+          });
+        } catch (err) {
+          if (err === ALREADY_USED) return send(410, views.inviteDeadPage({ state: 'accepted', email: invite.email }));
+          if (err === EMAIL_TAKEN) {
+            return send(409, views.invitePage({
+              invite, expert, draft: form,
+              errors: { password: 'An account already exists for this address. Sign in instead, or ask the operator for a new invitation.' }
+            }));
+          }
+          throw err;
+        }
         return withCookie(created.role === 'admin' ? '/admin' : '/desk', id, isSecureRequest(req));
       }
       return send(200, views.invitePage({ invite, expert, errors: {}, draft: {} }));
@@ -919,7 +957,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         expert,
         expertNotes: dbm.notesForExpert(db, expert.id),
         queue: dbm.openQuestionsFor(db, expert),
-        bookings: dbm.bookingsFor(db, { expertId: expert.id })
+        bookings: dbm.bookingsFor(db, { expertId: expert.id }),
+        statement: dbm.expertStatement(db, expert.id),
+        flash: url.searchParams.get('err') ?? ''
       }));
     }
 
@@ -936,8 +976,28 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           expert,
           expertNotes: dbm.notesForExpert(db, expert.id),
           queue: dbm.openQuestionsFor(db, expert),
-          bookings: dbm.bookingsFor(db, { expertId: expert.id })
+          bookings: dbm.bookingsFor(db, { expertId: expert.id }),
+          statement: dbm.expertStatement(db, expert.id),
+          flash: url.searchParams.get('err') ?? ''
         }));
+      }
+      if (sub === '/booking' && method === 'POST') {
+        // The practitioner confirms the time, with a meeting link, before the client is asked for money.
+        const b = dbm.bookingByRef(db, String(form.ref ?? ''));
+        if (!b || b.expert_id !== expert.id) return fail(404, 'No such booking.');
+        const who = `expert:${expert.slug}`;
+        if (form.action === 'decline') {
+          const r = dbm.transitionBooking(db, b.ref, 'cancelled', {
+            actor: who,
+            fields: { cancelled_at: new Date().toISOString(), cancel_reason: 'declined by the practitioner', refund_vnd: 0 }
+          });
+          return redirect(r.ok ? `/c/${token}` : `/c/${token}?err=${encodeURIComponent(r.error)}`);
+        }
+        if (form.action !== 'confirm') return fail(400, 'Choose confirm or decline.');
+        const link = checkMeetingUrl(form.meeting_url);
+        if (!link.ok) return fail(400, link.error);
+        const r = dbm.transitionBooking(db, b.ref, 'awaiting_payment', { actor: who, fields: { meeting_url: link.url } });
+        return redirect(r.ok ? `/c/${token}` : `/c/${token}?err=${encodeURIComponent(r.error)}`);
       }
       if (sub === '/answer' && method === 'POST') {
         const ref = String(form.ref ?? '');
@@ -959,18 +1019,20 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         const attested = form.attested === '1' || form.attested === 'on';
         const decision = decidePublication({ title, body: text }, { attested, rules });
         const slug = uniqueSlug(db, slugify(title));
-        dbm.upsertNote(db, {
-          expert_id: expert.id,
-          slug,
-          title,
-          topic,
-          body: text,
-          status: decision.publish ? 'published' : 'blocked',
-          gate: decision.report,
-          origin: 'expert'
+        dbm.tx(db, () => {
+          dbm.upsertNote(db, {
+            expert_id: expert.id,
+            slug,
+            title,
+            topic,
+            body: text,
+            status: decision.publish ? 'published' : 'blocked',
+            gate: decision.report,
+            origin: 'expert'
+          });
+          dbm.logEvent(db, 'note_submit', slug, `${decision.reason} findings=${decision.report.findings.length}`);
         });
         rebuildIndex();
-        dbm.logEvent(db, 'note_submit', slug, `${decision.reason} findings=${decision.report.findings.length}`);
         if (!decision.publish) {
           return send(422, views.blockedNotePage({ expert, decision, title }));
         }
@@ -1066,18 +1128,12 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       if (sub === '/confirm' && method === 'POST') {
         const ref = String(form.ref ?? '');
         const b = dbm.bookingByRef(db, ref);
-        if (b && b.status === 'awaiting_payment') dbm.setBookingStatus(db, ref, 'paid');
-        else if (b && b.status === 'requested') {
-          dbm.setBookingStatus(db, ref, 'awaiting_payment');
-          dbm.setBookingStatus(db, ref, 'paid');
-        }
-        return redirect(`/qt/${token}`);
+        const r = b?.status === 'requested' ? { ok: false, error: NOT_CONFIRMED } : dbm.transitionBooking(db, ref, 'paid', { actor: 'operator' });
+        return redirect(r.ok ? `/qt/${token}` : `/qt/${token}?err=${encodeURIComponent(r.error)}`);
       }
       if (sub === '/complete' && method === 'POST') {
-        const ref = String(form.ref ?? '');
-        const b = dbm.bookingByRef(db, ref);
-        if (b && b.status === 'paid') dbm.setBookingStatus(db, ref, 'completed');
-        return redirect(`/qt/${token}`);
+        const r = dbm.transitionBooking(db, String(form.ref ?? ''), 'completed', { actor: 'operator' });
+        return redirect(r.ok ? `/qt/${token}` : `/qt/${token}?err=${encodeURIComponent(r.error)}`);
       }
       const answered = new Set(db.prepare('select distinct question_id from answers').all().map((r) => r.question_id));
       return send(200, views.adminPage({
@@ -1088,7 +1144,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         openQuestions: dbm.recentQuestions(db, 30),
         answerable: db.prepare(`select * from questions where status = 'routed'`).all().filter((q) => !answered.has(q.id)),
         accounts: dbm.countUsers(db),
-        user
+        user,
+        flash: url.searchParams.get('err') ?? ''
       }));
     }
 

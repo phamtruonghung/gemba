@@ -223,7 +223,7 @@ test('money: a booking is priced in VND, split, and never marked paid by the sys
   const res = await post('/book', {
     expert: 'hung-qa',
     minutes: '60',
-    starts_at: '2026-10-20 20:00',
+    starts_at: '2030-10-20 20:00',
     asker: 'Test client',
     contact: 'thu@example.com',
     topic: 'tpm',
@@ -236,21 +236,35 @@ test('money: a booking is priced in VND, split, and never marked paid by the sys
   const page = await (await fetch(`${base}${location}`)).text();
   assert.match(page, /800,000 VND/, 'one hour at the expert rate');
   assert.match(page, /640,000 VND/, 'expert payout after the 20% platform fee');
-  assert.match(page, /img\.vietqr\.io/);
-  assert.match(page, /B-/, 'the transfer code is the booking ref');
-  assert.match(page, /waiting for transfer instructions/, 'status shown as an English label, never the raw token');
+  assert.match(page, /waiting for .* to confirm/i, 'the client is told the practitioner has to confirm the time first');
+  assert.ok(!/vietqr/.test(page), 'and is not asked for money before that');
+  assert.match(page, /waiting for the practitioner to confirm the time/, 'status shown as an English label, never the raw token');
+
+  // The platform operator cannot mark a booking paid that nobody confirmed.
+  const early = await post(`/qt/${ADMIN}/confirm`, { ref });
+  assert.match(early.headers.get('location'), /err=/);
+  assert.ok(!/payment received/.test(await (await fetch(`${base}/b/${ref}`)).text()));
+
+  const confirmed = await post(`/c/${EXPERT_TOKEN}/booking`, { ref, action: 'confirm', meeting_url: 'https://meet.example.com/hung-session' });
+  assert.equal(confirmed.status, 303);
+  const pay = await (await fetch(`${base}${location}`)).text();
+  assert.match(pay, /img\.vietqr\.io\/image\/\d+-\d+-compact2\.png\?amount=800000&amp;addInfo=B-/, 'the QR carries bank, account, amount and ref');
+  assert.ok(!/meet\.example\.com/.test(pay), 'the meeting link is not shown before payment');
 
   const claim = await post(`/b/${ref}/transferred`);
   assert.equal(claim.status, 303);
   const claimed = await (await fetch(`${base}/b/${ref}`)).text();
-  assert.match(claimed, /you reported the transfer/);
+  assert.match(claimed, /You reported the transfer/);
+  assert.equal(app.db.prepare('select status from bookings where ref = ?').get(ref).status, 'awaiting_payment', 'reporting is a claim, not a state change');
 
   // The platform operator confirms against the bank statement; the system alone never does.
   const adminBefore = await (await fetch(`${base}/qt/${ADMIN}`)).text();
   assert.match(adminBefore, new RegExp(ref));
   const confirm = await post(`/qt/${ADMIN}/confirm`, { ref });
   assert.equal(confirm.status, 303);
-  assert.match(await (await fetch(`${base}/b/${ref}`)).text(), /payment received/);
+  const paid = await (await fetch(`${base}/b/${ref}`)).text();
+  assert.match(paid, /payment received/);
+  assert.match(paid, /href="https:\/\/meet\.example\.com\/hung-session"/, 'the meeting link appears once paid');
 
   const done = await post(`/qt/${ADMIN}/complete`, { ref });
   assert.equal(done.status, 303);

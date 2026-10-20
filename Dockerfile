@@ -7,6 +7,7 @@
 FROM node:22-alpine
 
 ENV NODE_ENV=production \
+    TZ=Asia/Ho_Chi_Minh \
     GEMBA_HOST=0.0.0.0 \
     GEMBA_PORT=8090 \
     GEMBA_DATA_DIR=/data \

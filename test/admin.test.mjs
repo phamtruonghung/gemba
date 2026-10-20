@@ -145,7 +145,7 @@ test('prices are settings: integers, in range, and they change what a booking co
   assert.equal(after.min_minutes, 30);
 
   // and it reaches the money: a 45-minute session at 800,000/h with a 25% share
-  const booking = await post('/book', { expert: 'hung-qa', agenda: 'a session', starts_at: '2026-11-01T09:00', minutes: '45', contact: 'a@b.c' });
+  const booking = await post('/book', { expert: 'hung-qa', agenda: 'a session', starts_at: '2030-11-01 09:00', minutes: '45', contact: 'a@b.c' });
   assert.equal(booking.status, 303, 'the booking is created');
   const row = app.db.prepare("select price_vnd, fee_vnd, payout_vnd from bookings order by id desc limit 1").get();
   assert.equal(row.price_vnd, 600000, '45 minutes at 800,000/h');

@@ -157,9 +157,26 @@ Published VND anchors for a 1:1 session, read 2026-10-10:
 | Freelance expert 1:1 | "Giá mỗi giờ đầu tiên: 650.000 VNĐ ($30)" / "Giá từ giờ thứ hai trở đi: 400.000 VNĐ ($20)" | vivu.edu.vn/book-tu-van |
 | Vietnamese law firm, online | consultation channels offered: "Zalo Facebook Messenger Google Meet", blocks "30 / 60 / 90 / 120 / 150 / 180 phút" | luatsuantam.vn (the VND 350,000/30-min figure the research pass reported was **not** on the page I read — treat as unconfirmed) |
 
-So a 45-minute session lands near VND 500–900k, i.e. ~USD 20–35: deliberately below the USD 250–1,600
+Measured with `quote()` (`node -e` over `src/pricing.mjs`; whole VND, price rounded to 10,000, 20% platform fee):
+
+| Hourly rate | 30 min | 45 min | 60 min | 90 min |
+|---|---|---|---|---|
+| 350,000 | 180,000 | 260,000 | 350,000 | 530,000 |
+| 500,000 | 250,000 | 380,000 | 500,000 | 750,000 |
+| 600,000 | 300,000 | 450,000 | 600,000 | 900,000 |
+| 700,000 | 350,000 | 530,000 | 700,000 | 1,050,000 |
+| 800,000 | 400,000 | 600,000 | 800,000 | 1,200,000 |
+| 900,000 | 450,000 | 680,000 | 900,000 | 1,350,000 |
+
+(700,000 for 45 minutes is 525,000, which rounds to 530,000.) So a 45-minute session lands at VND 260–680k, i.e. ~USD 10–27: deliberately below the USD 250–1,600
 platform day rate the research pass reported for independent consultants, because the buyer here is a
 supervisor or a plant manager paying out of a small budget, not a consultancy.
+
+Refunds and payouts are **instructions**, never movements the platform makes. A booking cancelled after
+it was paid records `refund_vnd`; the operator sends the transfer from their own bank and marks it sent
+(`refunded_at`, with the bank reference in the event log). A completed session's practitioner share is
+*owed* until the operator marks the payout sent (`payout_paid_at`). The statement shows three numbers
+per practitioner: paid out, owed, in flight. The platform holds nothing, so there is nothing to reverse.
 
 ## 7. Vietnam constraints
 
@@ -247,8 +264,27 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
 - `questions` — ref, text, plant type, asker, contact, topic, state (`open`/`routed`/`answered`),
   AI answer, citations (JSON), coverage, due date;
 - `answers` — expert answers to routed questions;
-- `bookings` — expert, asker, contact, topic, agenda, `starts_at`, minutes, price/fee/payout,
-  state (`requested` → `awaiting_payment` → `paid` → `completed`);
+- `bookings` — expert, asker, contact, topic, agenda, `starts_at`, minutes, price/fee/payout, state.
+  - `starts_at` is ISO UTC. The form takes `YYYY-MM-DD HH:MM` as Vietnam time (+07:00, no DST) through
+    one parser (`src/when.mjs`); anything else is a field error. The image sets `TZ=Asia/Ho_Chi_Minh`.
+  - Money is integer VND: `fee + payout === price` for every quote, sessions run 30–480 minutes, and
+    the platform share is a whole percent.
+  - State moves only through `transitionBooking`: `requested → awaiting_payment | cancelled`,
+    `awaiting_payment → paid | cancelled`, `paid → completed | cancelled`; `completed` and `cancelled`
+    are final. An illegal step is a sentence on a page, and the update is a compare-and-set.
+  - `requested` means the client asked for a time. `awaiting_payment` means the practitioner confirmed
+    the time (with an `https` `meeting_url`) and the transfer instruction is now shown. `paid` is set
+    only by the operator, against the bank statement. A client's "I have transferred" sets
+    `transfer_reported_at` and changes no state; a booking with a reported transfer cannot be
+    cancelled until the operator has checked the statement.
+  - `refunded_at`, `payout_paid_at`: the operator marked the refund / the practitioner payout as sent.
+  - `meeting_url` is shown to the client only once the booking is `paid` or `completed`.
+  - A refund is recorded (`refund_vnd`) only when a `paid` booking is cancelled.
+  - The length, and so the price, can change only while the booking is `requested`.
+  - One open booking per practitioner per time: an overlapping request is refused (409), and the same
+    person repeating the same request gets the booking they already have.
+  - Multi-statement writes run in `tx()` (`begin immediate` … `commit`, rollback on a throw). One
+    invitation makes one user: the invite is claimed inside the same transaction that creates the user.
 - `users` — email (unique, lowercased), name, `password_hash` (`scrypt`, salted), created/last seen;
 - `sessions` — session id (32 random bytes), user, expiry, user agent; a session is a row, so signing
   out revokes it;
