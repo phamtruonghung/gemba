@@ -408,6 +408,28 @@ footer.site .inner{max-width:1200px;margin:0 auto;padding:var(--space-8) var(--s
 }
 `;
 
+// Installable-app enhancement, never required for anything. The worker is registered only over https
+// or on localhost, and never from the private surfaces (the page that omits this block is the first
+// guard; the pathname test is the second). The install button stays `hidden` unless the browser offers
+// an install prompt, so without JavaScript it simply is not there.
+const PWA_SCRIPT = `
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') && !/^\\/(admin|desk|c)(\\/|$)/.test(location.pathname)) {
+  window.addEventListener('load', function () { navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {}); });
+}
+var installEvent = null;
+window.addEventListener('beforeinstallprompt', function (e) {
+  var b = document.querySelector('[data-install]');
+  if (!b) return;
+  e.preventDefault();
+  installEvent = e;
+  b.hidden = false;
+  b.addEventListener('click', function () { if (installEvent) { installEvent.prompt(); installEvent = null; } });
+});
+window.addEventListener('appinstalled', function () {
+  var b = document.querySelector('[data-install]');
+  if (b) b.hidden = true;
+});`;
+
 const NAV = [
   ['/', 'Ask', 'ask'],
   ['/library', 'Library', 'library'],
@@ -420,7 +442,7 @@ const NAV = [
  * screen readers and for the one visible "you are here" state. `nav: false` drops the chrome for
  * the tokenised desks and the operator console, which are private links rather than site pages.
  */
-export function layout({ title, body, nav = true, footer = '', user = null, active = '' }) {
+export function layout({ title, body, nav = true, footer = '', user = null, active = '', pwa = nav }) {
   const links = NAV.map(
     ([href, label, ico]) =>
       `<a href="${href}"${href === active ? ' aria-current="page"' : ''}>${icon(ico)}${esc(label)}</a>`
@@ -451,9 +473,14 @@ export function layout({ title, body, nav = true, footer = '', user = null, acti
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Production knowledge from people who have run the line — answered with citations, or refused, or sent to a practitioner.">
-<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#ea580c"/><text x="16" y="23" font-family="sans-serif" font-size="19" font-weight="700" fill="#1a0d03" text-anchor="middle">G</text></svg>'
-  )}">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#ea580c" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141110" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Gemba">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <title>${esc(title)} · Gemba</title><style>${CSS}</style></head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -514,7 +541,7 @@ document.addEventListener('submit', function (event) {
   button.textContent = label;
   // Disabling inside the handler can cancel the submission in some browsers; the next tick is safe.
   setTimeout(function () { button.disabled = true; }, 0);
-});
+});${pwa ? PWA_SCRIPT : ''}
 </script>
 </body></html>`;
 }
@@ -640,6 +667,7 @@ export function home({ stats, experts, notes, questions, user = null }) {
     <p class="row center-cta" style="margin-top:var(--space-5)">
       <a class="btn" href="#ask">${icon('ask')}Ask a question</a>
       <a class="btn alt" href="/library">${icon('book')}Read the notes</a>
+      <button class="btn alt" type="button" data-install hidden>Install the app</button>
     </p>
   </div>
 </section>
@@ -2045,6 +2073,22 @@ export function unauthorizedPage() {
       <p class="muted small">If no dialog appears: reload the page, or open it in a private window to clear an older sign-in.</p>
       <p style="margin:0"><a class="btn" href="/">Try again</a></p>
     </div>
+  </div>
+</section>`
+  });
+}
+
+/** What the service worker shows when a page is not cached and there is no network. Signed-out frame, no data. */
+export function offlinePage() {
+  return layout({
+    title: 'You are offline',
+    body: `
+<section class="hero center">
+  <div class="wrap narrow">
+    <p class="eyebrow">Offline</p>
+    <h1 style="font-size:clamp(30px,4vw,44px)">You are offline</h1>
+    <p class="lead">This page needs a connection. Notes you opened before are still readable, and asking a question needs a connection too.</p>
+    <p class="row center-cta" style="margin-top:var(--space-5)"><a class="btn" href="/library">${icon('book')}Open the library</a></p>
   </div>
 </section>`
   });

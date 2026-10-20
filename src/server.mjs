@@ -14,6 +14,9 @@ import { questionAt, draftNoteFromInterview, slugify, SCRIPT } from './interview
 import { loadSettings, checkSettings, saveSettings, SETTING_KEYS } from './settings.mjs';
 import { checkExpert, checkInvite, checkInviteAcceptance } from './experts.mjs';
 import * as views from './views.mjs';
+import { cachePolicy, buildServiceWorker, MANIFEST } from './pwa.mjs';
+import { serveStatic } from './static.mjs';
+import { PUBLIC_DIR } from './pwa.mjs';
 import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, newSessionId, sessionExpiry, hashPassword, verifyPassword, checkEmail, checkPassword, checkName, SESSION_COOKIE } from './auth.mjs';
 
 const ROUTE_DUE_HOURS = 48;
@@ -92,6 +95,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
   // ':memory:' explicitly; createApp({ dbPath }) still overrides for them.
   const db = dbm.openDb(dbPath ?? config.dbPath);
   let index = buildIndex(dbm.publishedNotes(db));
+  // The worker's source and version are fixed at start: the version hashes the template, views.mjs and
+  // public/, so a deploy that changes any of them gives clients a new cache name and drops the old ones.
+  const sw = buildServiceWorker();
+  const manifestJson = JSON.stringify(MANIFEST);
   const rebuildIndex = () => {
     index = buildIndex(dbm.publishedNotes(db));
     return index;
@@ -146,6 +153,22 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const sessionId = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? '';
     const account = dbm.sessionUser(db, sessionId);
     const user = dbm.publicUser(account);
+    // Central cache rule for the service worker (src/pwa.mjs). The worker cannot see Set-Cookie, so
+    // every response that sets one, every response on a never-cache path, and every page rendered for a
+    // signed-in person says `private, no-store` here, once, whichever route produced it. A route that
+    // sets its own cache-control (the static files, sw.js, the 401) is left alone.
+    const writeHead = res.writeHead;
+    res.writeHead = function (code, headers = {}) {
+      const keys = Object.keys(headers).map((k) => k.toLowerCase());
+      if (!keys.includes('cache-control')) {
+        const policy = cachePolicy(path, method);
+        const html = String(headers['content-type'] ?? '').startsWith('text/html');
+        if (keys.includes('set-cookie') || policy === 'none' || policy === 'network-first' || (account && html)) {
+          headers = { ...headers, 'cache-control': 'private, no-store' };
+        }
+      }
+      return writeHead.call(this, code, headers);
+    };
     const fail = (code, message) => send(code, views.errorPage({ code, message, user }));
     const withCookie = (to, id, secure) => {
       res.writeHead(303, { location: to, 'set-cookie': sessionCookie(id, { secure }) });
@@ -169,7 +192,11 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     // front of per-user accounts is the weakest link, and one that every expert has to hold is one that
     // leaks. So a request carrying a valid session passes, and the paths that exist *to* authenticate
     // stay open (otherwise nobody could ever sign in to become authenticated).
-    const gateExempt = /^\/(signin|signup|admin\/login|invite\/[^/]+)$/.test(path);
+    // The PWA files are exempt too: a browser fetches the manifest, the worker script and the icons
+    // without credentials, so a gated instance would otherwise never be installable. All five are
+    // public by construction: the manifest and sw.js are generated from constants and the repo's own
+    // source, the icons are static art, and /offline renders the signed-out frame with no data.
+    const gateExempt = /^\/(signin|signup|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
     if (!gateExempt && !account && !basicAuthOk(req.headers.authorization, config)) {
       res.writeHead(401, {
         'www-authenticate': 'Basic realm="gemba", charset="UTF-8"',
@@ -178,6 +205,19 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       });
       return res.end(views.unauthorizedPage());
     }
+
+    // --- installable-app files: manifest, worker, offline page, icons ------
+    if ((path === '/manifest.webmanifest' || path === '/sw.js') && (method === 'GET' || method === 'HEAD')) {
+      const isSw = path === '/sw.js';
+      res.writeHead(200, {
+        'content-type': isSw ? 'text/javascript; charset=utf-8' : 'application/manifest+json',
+        'cache-control': isSw ? 'no-cache' : 'public, max-age=86400',
+        ...(isSw ? { 'service-worker-allowed': '/' } : {})
+      });
+      return res.end(method === 'HEAD' ? undefined : isSw ? sw.source : manifestJson);
+    }
+    if (path === '/offline' && method === 'GET') return send(200, views.offlinePage());
+    if (path.startsWith('/icons/') && serveStatic(req, res, { root: PUBLIC_DIR, rawPath: (req.url ?? '').split('?')[0] })) return;
 
     // --- JSON API (used by tests and by anyone wiring this into a bot) ------
     if (path === '/api/ask' && method === 'POST') {
@@ -979,7 +1019,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     }
   });
 
-  return { server, db, index: () => index, rebuildIndex, runAsk, escalate: escalate(), config, rules };
+  return { server, db, sw, index: () => index, rebuildIndex, runAsk, escalate: escalate(), config, rules };
 }
 
 /** A slug nobody has taken. `uniqueSlug` below is for notes; practitioners need their own. */
