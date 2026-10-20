@@ -180,8 +180,17 @@ const CSS = `
   }
 }
 *,*::before,*::after{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--color-background);color:var(--color-foreground);font:16px/1.6 var(--font-sans);-webkit-font-smoothing:antialiased}
+html{-webkit-text-size-adjust:100%;scroll-padding-bottom:96px}
+/* Reading size is a preference (POST /prefs/text -> cookie -> data-text on <html>). It scales the text a
+   person reads (body, notes, answers); the chrome keeps its size so the nav and buttons stay where they are. */
+:root{--read-scale:1}
+html[data-text="large"]{--read-scale:1.2}
+html[data-text="xl"]{--read-scale:1.45}
+body{margin:0;background:var(--color-background);color:var(--color-foreground);font:calc(16px*var(--read-scale))/1.6 var(--font-sans);-webkit-font-smoothing:antialiased;overflow-wrap:break-word}
+/* A long unbroken word or URL wraps inside its box instead of widening the page. */
+p,li,dd,dt,h1,h2,h3,h4,.card,.cite,.answer,.prose,.refusal,.notice{overflow-wrap:anywhere}
+.grid > *,.row > *,.split > *,.cols > *,.form-row > *,.card > *{min-width:0}
+pre{max-width:100%;overflow-x:auto}
 img{max-width:100%;height:auto}
 .skip{position:absolute;left:-9999px;top:0;z-index:100;background:var(--color-accent);color:var(--color-on-accent);padding:12px 18px;border-radius:0 0 var(--radius-sm) 0;font-weight:600;text-decoration:none}
 .skip:focus{left:0}
@@ -189,7 +198,7 @@ img{max-width:100%;height:auto}
 .wrap{width:100%;max-width:1200px;margin:0 auto;padding:0 var(--space-5)}
 .narrow{max-width:820px}
 .ico{width:20px;height:20px;flex:none}
-h1{font-size:clamp(38px,6.2vw,64px);line-height:.98;letter-spacing:-.03em;font-weight:600;margin:0 0 var(--space-4)}
+h1{font-size:clamp(32px,calc(18px + 4.2vw),64px);line-height:.98;letter-spacing:-.03em;font-weight:600;margin:0 0 var(--space-4)}
 h2{font-size:clamp(26px,3.4vw,42px);line-height:1.05;letter-spacing:-.02em;font-weight:600;margin:0 0 var(--space-4)}
 h3{font-size:clamp(19px,2vw,24px);line-height:1.2;letter-spacing:-.01em;font-weight:600;margin:0 0 var(--space-3)}
 h4{font-size:17px;font-weight:600;margin:0 0 var(--space-2)}
@@ -197,6 +206,9 @@ p{margin:0 0 var(--space-4)}
 a{color:var(--color-accent-ink);text-underline-offset:3px}
 a:hover{color:var(--color-accent-hover)}
 a.plain{color:inherit;text-decoration:none}
+h3 > a.plain,.eyebrow > a.plain{display:inline-flex;align-items:center;min-height:44px;padding:0}
+.back{display:inline-flex;align-items:center;min-height:44px}
+.cite strong a{display:inline-block;padding:10px 0}
 .eyebrow{font-size:12px;font-weight:650;letter-spacing:.14em;text-transform:uppercase;color:var(--color-muted-foreground);margin:0 0 var(--space-3)}
 .lead{font-size:clamp(17px,1.6vw,20px);color:var(--color-muted-foreground);max-width:var(--measure);margin:0 0 var(--space-5)}
 .muted{color:var(--color-muted-foreground)}
@@ -252,9 +264,9 @@ nav.site button.link:hover{background:var(--color-muted)}
 .card > .push{margin-top:auto}
 .card h2,.card h3{margin-top:0}
 .card p:last-child{margin-bottom:0}
-.grid{display:grid;gap:var(--space-4);grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
-.grid.two{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
-.grid.four{grid-template-columns:repeat(auto-fit,minmax(225px,1fr))}
+.grid{display:grid;gap:var(--space-4);grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr))}
+.grid.two{grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr))}
+.grid.four{grid-template-columns:repeat(auto-fit,minmax(min(225px,100%),1fr))}
 .grid > .card{margin:0}
 .split{display:grid;gap:var(--space-6);grid-template-columns:1fr;align-items:center}
 @media (min-width:920px){.split{grid-template-columns:1fr 1fr}}
@@ -332,7 +344,12 @@ ol.steps li::before{content:counter(step);flex:none;width:26px;height:26px;borde
 ol.steps li.here::before{background:var(--color-accent);color:var(--color-on-accent)}
 table{width:100%;border-collapse:collapse;font-size:14.5px}
 select{max-width:100%}
-.table-wrap{overflow-x:auto;max-width:100%}
+.table-wrap,.table-scroll{overflow-x:auto;max-width:100%}
+.table-scroll{margin:0 0 var(--space-4)}
+.table-scroll table{margin:0}
+.table-scroll:focus-visible{outline:3px solid var(--color-ring);outline-offset:2px}
+/* table cells keep whole words: a table too wide for the phone scrolls inside its .table-scroll */
+.prose th,.prose td,th,td{overflow-wrap:normal}
 /* an invitation link is a long unbroken token: let it wrap rather than widen the card */
 .flash .mono,.card .mono{overflow-wrap:anywhere}
 th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--color-border);vertical-align:top}
@@ -341,11 +358,11 @@ th{color:var(--color-muted-foreground);font-weight:600;font-size:13px}
 .kv dt{color:var(--color-muted-foreground);padding:8px 0;border-bottom:1px solid var(--color-border)}
 .kv dd{margin:0;padding:8px 0;border-bottom:1px solid var(--color-border)}
 @media (max-width:560px){.kv{grid-template-columns:1fr}.kv dt{border-bottom:0;padding-bottom:0}}
-.answer{white-space:pre-wrap;font-size:15.5px;line-height:1.65;max-width:var(--measure)}
+.answer{white-space:pre-wrap;font-size:calc(15.5px*var(--read-scale));line-height:1.65;max-width:var(--measure)}
 /* The reading view. A note is markdown rendered to prose (see src/markdown.mjs): headings that read as
    section titles rather than as hashes, lists that hang, a quote that is a quote. Measure is capped so
    a line stays readable on a 1440px screen. */
-.prose{max-width:var(--measure);font-size:16.5px;line-height:1.72}
+.prose{max-width:var(--measure);font-size:calc(16.5px*var(--read-scale));line-height:1.72}
 .prose > *:first-child{margin-top:0}
 .prose > *:last-child{margin-bottom:0}
 .prose h2{font-size:clamp(21px,2.2vw,27px);line-height:1.2;margin:var(--space-6) 0 var(--space-3)}
@@ -354,6 +371,7 @@ th{color:var(--color-muted-foreground);font-weight:600;font-size:13px}
 .prose ul,.prose ol{margin:0 0 var(--space-4);padding-left:1.2em;display:grid;gap:7px}
 .prose li{padding-left:2px}
 .prose li::marker{color:var(--color-accent)}
+.prose li::before{content:none}
 .prose blockquote{margin:var(--space-5) 0;padding:var(--space-3) var(--space-4);border-left:3px solid var(--color-accent);background:var(--color-card);border-radius:0 var(--radius-sm) var(--radius-sm) 0}
 .prose blockquote p:last-child{margin-bottom:0}
 .prose code{font-family:var(--font-mono);font-size:.9em;background:var(--color-muted);padding:2px 6px;border-radius:5px}
@@ -384,7 +402,7 @@ code{background:var(--color-muted);padding:2px 6px;border-radius:5px}
 .cta-band p{color:var(--color-band-muted);max-width:58ch;margin-left:auto;margin-right:auto}
 footer.site{background:var(--color-card);border-top:1px solid var(--color-border);margin-top:var(--space-8)}
 footer.site ul{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}
-footer.site li a{color:var(--color-muted-foreground);text-decoration:underline;text-decoration-color:var(--color-border-strong);text-decoration-thickness:1px;text-underline-offset:3px;display:inline-flex;align-items:center;min-height:32px}
+footer.site li a{color:var(--color-muted-foreground);text-decoration:underline;text-decoration-color:var(--color-border-strong);text-decoration-thickness:1px;text-underline-offset:3px;display:inline-flex;align-items:center;min-height:44px}
 footer.site li a:hover{color:var(--color-accent-ink);text-decoration-color:currentColor}
 footer.site .inner{max-width:1200px;margin:0 auto;padding:var(--space-8) var(--space-5) var(--space-6)}
 .foot-cols{display:grid;gap:var(--space-6);grid-template-columns:1fr}
@@ -395,12 +413,61 @@ footer.site .inner{max-width:1200px;margin:0 auto;padding:var(--space-8) var(--s
 .foot-cols a{color:var(--color-foreground);text-decoration:none;min-height:44px;display:inline-flex;align-items:center}
 .foot-cols a:hover{color:var(--color-accent-ink);text-decoration:underline}
 .foot-base{border-top:1px solid var(--color-border);margin-top:var(--space-6);padding-top:var(--space-4);display:flex;justify-content:space-between;gap:var(--space-4);flex-wrap:wrap;font-size:13.5px;color:var(--color-muted-foreground)}
+/* the action bar is a plain row of buttons wherever there is room (and always without a layout engine) */
+.actionbar{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;margin:var(--space-3) 0}
+.textsize{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;margin:0 0 var(--space-4)}
+.textsize button{min-width:44px}
+.textsize button[aria-pressed="true"]{background:var(--color-accent-tint);border-color:var(--color-accent);color:var(--color-accent-ink)}
+.share{margin:var(--space-4) 0}
+.sec-anchor{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;margin:-12px 0 -12px 2px;color:var(--color-muted-foreground);text-decoration:none;font-weight:400;vertical-align:middle}
+.sec-anchor:hover{color:var(--color-accent-ink)}
+.center .continue{justify-content:center}
+.continue{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;margin:0 0 var(--space-4)}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+/* more contrast on request: darker secondary text, firm borders, links that are always underlined */
+@media (prefers-contrast: more){
+  :root{--color-muted-foreground:#2b2926;--color-border:#6b625a;--color-border-strong:#2b2926;--color-accent-ink:#7c2a0b}
+  .card,.refusal,.notice,input,textarea,select,.btn.alt,.cite{border-width:2px;border-color:var(--color-border-strong)}
+  a{text-decoration:underline}
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark){
+  :root{--color-muted-foreground:#e6e0d9;--color-border:#a39a91;--color-border-strong:#f5f1ec;--color-accent-ink:#fed7aa}
+}
+/* print: a note on paper is the text, in black on white, with the address of every link it cites */
+@media print{
+  .utility,header.site,footer.site,nav,.actionbar,.share,.textsize,.place,.cta-band,.skip,form,button,[data-share],[data-install]{display:none!important}
+  body{background:#fff;color:#000;font-size:12pt}
+  *{box-shadow:none!important;animation:none!important}
+  .card,.refusal,.notice{border:0;padding:0;background:none}
+  main > *{animation:none}
+  section{padding:0 0 12pt}
+  .prose a,.cite a,.answer a{color:#000}
+  .prose a[href]::after,.cite a[href]::after{content:" (" attr(href) ")";font-size:.85em;overflow-wrap:anywhere}
+  .prose a[href^="#"]::after,.sec-anchor::after{content:none}
+  .sec-anchor{display:none}
+  .table-scroll,.table-wrap{overflow:visible}
+  tr,pre,blockquote,img{break-inside:avoid}
+  h1,h2,h3,h4{break-after:avoid}
+}
 @media (prefers-reduced-motion: no-preference){
   main > *{animation:enter .28s ease-out both}
   @keyframes enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 }
 @media (max-width:640px){
-  header.site .inner{padding:var(--space-3) var(--space-4);gap:var(--space-3)}
+  /* the nav is its own scrolling row under the brand, and the header does not follow the page down:
+     a two-row sticky header is a third of a phone screen */
+  header.site{position:static}
+  header.site .inner{padding:var(--space-3) var(--space-4);gap:var(--space-2)}
+  nav.site{order:3;flex:1 1 100%;flex-wrap:nowrap;overflow-x:auto;margin:0 calc(var(--space-4)*-1);padding:0 var(--space-4);scrollbar-width:none}
+  nav.site a{flex:none}
+  .head-actions{margin-left:auto}
+  /* the primary action of a form stays reachable while the form is on screen */
+  .actionbar{position:sticky;bottom:max(var(--space-3),env(safe-area-inset-bottom));z-index:4;background:var(--color-card);border:1px solid var(--color-border-strong);border-radius:var(--radius);box-shadow:var(--shadow-md);padding:var(--space-3)}
+  .actionbar .btn{flex:1 1 auto;text-align:center}
+  .card{padding:var(--space-4)}
+  .prose blockquote{margin-inline:0;padding:var(--space-2) var(--space-3)}
+  .eyebrow.row > [aria-hidden]{display:none}
+  .table-scroll table{min-width:30rem}
   .wrap{padding:0 var(--space-4)}
   nav.site a,nav.site button.link{padding:8px 10px;font-size:14.5px}
   section{padding:var(--space-7) 0}
@@ -437,6 +504,11 @@ const NAV = [
   ['/how-it-works', 'How it works', 'rules']
 ];
 
+/** Put the reader's text-size preference on <html>; only the two known sizes are ever emitted. */
+export function withTextSize(html, size) {
+  return size === 'large' || size === 'xl' ? html.replace('<html lang="en">', `<html lang="en" data-text="${size}">`) : html;
+}
+
 /**
  * The one page frame. `user` is the signed-in person or null; `active` marks the nav item for
  * screen readers and for the one visible "you are here" state. `nav: false` drops the chrome for
@@ -470,7 +542,7 @@ export function layout({ title, body, nav = true, footer = '', user = null, acti
 </div></div>`
     : '';
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Production knowledge from people who have run the line — answered with citations, or refused, or sent to a practitioner.">
 <link rel="manifest" href="/manifest.webmanifest">
@@ -541,7 +613,18 @@ document.addEventListener('submit', function (event) {
   button.textContent = label;
   // Disabling inside the handler can cancel the submission in some browsers; the next tick is safe.
   setTimeout(function () { button.disabled = true; }, 0);
-});${pwa ? PWA_SCRIPT : ''}
+});
+// Sharing: the mailto link and the copyable address work without this; the native share sheet is
+// offered only where the browser has one.
+if (navigator.share) {
+  document.querySelectorAll('[data-share]').forEach(function (b) {
+    b.hidden = false;
+    b.addEventListener('click', function () {
+      navigator.share({ title: b.getAttribute('data-title'), url: b.getAttribute('data-url') }).catch(function () {});
+    });
+  });
+}
+document.addEventListener('focusin', function (e) { if (e.target.hasAttribute && e.target.hasAttribute('data-select')) e.target.select(); });${pwa ? PWA_SCRIPT : ''}
 </script>
 </body></html>`;
 }
@@ -567,10 +650,8 @@ function askForm({ q = '', action = '/ask', user = null } = {}) {
       <input id="asker" name="asker" value="${user ? esc(user.name) : ''}"${user ? ' readonly' : ''} placeholder="Hung"></div>
   </div>
   <p class="pending-note" data-pending-note hidden>Reading the notes and drafting an answer from them. This can take up to twenty seconds.</p>
-  <div class="row">
-    <button class="btn" type="submit">${icon('ask')}Ask the knowledge library</button>
-    <span class="muted small">${user ? 'This question is kept in your account.' : 'Answers cite notes written by people who worked the line. If the library does not cover it, the system says so instead of guessing — and offers to put you in touch with a practitioner.'}</span>
-  </div>
+  <div class="actionbar"><button class="btn" type="submit">${icon('ask')}Ask the library</button></div>
+  <p class="muted small" style="margin:0">${user ? 'This question is kept in your account.' : 'Answers cite notes written by people who worked the line. If the library does not cover it, the system says so instead of guessing — and offers to put you in touch with a practitioner.'}</p>
 </form>`;
 }
 
@@ -608,6 +689,39 @@ function expertCard(e, { compact = false } = {}) {
 </article>`;
 }
 
+// --- reading and sharing pieces ----------------------------------------------------------------
+
+/** Three buttons that POST a size preference and come back to this page. Works without script. */
+function textSizeForm({ next, text = 'normal' }) {
+  const sizes = [['normal', 'A', 'Normal text size'], ['large', 'A+', 'Large text'], ['xl', 'A++', 'Extra large text']];
+  return `<form class="textsize" method="post" action="/prefs/text" role="group" aria-label="Text size">
+  <input type="hidden" name="next" value="${esc(next)}">
+  <span class="small muted">Text size</span>
+  ${sizes.map(([v, label, aria]) => `<button class="btn alt tiny" type="submit" name="size" value="${v}" aria-label="${aria}" aria-pressed="${(text || 'normal') === v}">${label}</button>`).join('\n  ')}
+</form>`;
+}
+
+/** The share block: a real mailto link and a copyable address always; the native share sheet when there is one. */
+function shareBlock({ title, url }) {
+  const mail = `mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(`${title}\n${url}`)}`;
+  return `<div class="share" id="share">
+  <div class="field" style="margin-bottom:var(--space-3)">
+    <label for="share-url">Link to this page</label>
+    <input id="share-url" type="text" readonly value="${esc(url)}" data-select>
+  </div>
+  <p class="row" style="margin:0">
+    <a class="btn alt" href="${esc(mail)}">${icon('chat')}Send by email</a>
+    <button class="btn alt" type="button" data-share data-title="${esc(title)}" data-url="${esc(url)}" hidden>${icon('arrow')}Share…</button>
+  </p>
+</div>`;
+}
+
+function continueLink(place) {
+  return place
+    ? `<p class="continue"><span class="muted small">Continue reading:</span> <a class="link-cta" href="/notes/${esc(place.slug)}#${esc(place.id)}">${esc(place.title)} ${icon('arrow')}</a></p>`
+    : '';
+}
+
 function noteCard(n) {
   const href = `/notes/${esc(n.slug)}`;
   return `<article class="card">
@@ -635,7 +749,7 @@ function refusalPanel({ heading, missing = '', escalation = '' }) {
 
 // --- pages -----------------------------------------------------------------
 
-export function home({ stats, experts, notes, questions, user = null }) {
+export function home({ stats, experts, notes, questions, user = null, place = null }) {
   const chips = topicList()
     .map(([slug, label]) => `<a class="badge" href="/library?topic=${encodeURIComponent(slug)}">${esc(label)}</a>`)
     .join('');
@@ -664,6 +778,7 @@ export function home({ stats, experts, notes, questions, user = null }) {
     ])}
     <h1>Ask someone who<br>has run the line</h1>
     <p class="lead">Production knowledge from people who have stood at the line — not slide decks. Ask the library. If it cannot cover your question it says so, and the question can go straight to a practitioner.</p>
+    ${continueLink(place)}
     <p class="row center-cta" style="margin-top:var(--space-5)">
       <a class="btn" href="#ask">${icon('ask')}Ask a question</a>
       <a class="btn alt" href="/library">${icon('book')}Read the notes</a>
@@ -929,7 +1044,11 @@ ${flash ? `<div class="notice ok" role="status">${icon('check')} ${esc(flash)}</
   });
 }
 
-export function questionPage({ q, aiCitations, answers, experts, routedNames = [], bankConfigured, user = null, claimed = false }) {
+export function questionPage({ q, aiCitations, answers, experts, routedNames = [], bankConfigured, user = null, claimed = false, url = '', text = 'normal' }) {
+  // The stored contact (a phone number, an email) is the asker's. A page that can be shared by link
+  // must not hand it to whoever holds the link, so it is prefilled only for the owner; anyone else
+  // gets their own signed-in email, or an empty field.
+  const contactValue = claimed && q.contact ? q.contact : (user?.email ?? '');
   const cov = q.ai_coverage === 'thin';
   const cites = aiCitations
     .map(
@@ -974,6 +1093,7 @@ ${keepBanner}
 </section>
 <section class="tight">
   <div class="wrap narrow">
+    ${textSizeForm({ next: `/q/${q.ref}`, text })}
 ${cov
       ? refusalPanel({
           heading: 'The library cannot cover this one yet',
@@ -985,10 +1105,10 @@ ${cov
   </div>
   <div class="field">
     <label for="contact">Email or phone, so the answer can reach you</label>
-    <input id="contact" name="contact" value="${esc(q.contact || (user?.email ?? ''))}" placeholder="…@gmail.com">
+    <input id="contact" name="contact" value="${esc(contactValue)}" placeholder="…@gmail.com">
   </div>
   <p class="hint">There is one more rung: the question goes to the practitioner covering “${esc(topicLabel(q.topic))}”, free, with a 48-hour answer window. A paid 1:1 session is available on the same page.</p>
-  <button class="btn" type="submit">${icon('people')}Ask a practitioner</button>
+  <div class="actionbar"><button class="btn" type="submit">${icon('people')}Ask a practitioner</button><a class="btn alt" href="#share">${icon('arrow')}Share</a></div>
 </form>`
         })
       : `<div class="card" style="margin-top:0">
@@ -998,8 +1118,10 @@ ${cov
   <p class="small muted" style="margin:0">How it was produced: ${esc(q.ai_mode || 'unknown')}${q.ai_mode === 'extractive' ? ' (no model API key configured — the system quotes the note verbatim and does not paraphrase)' : ''}</p>
 </div>`}
 ${answerBlocks}
+    ${cov ? '' : `<div class="actionbar"><a class="btn" href="#book">${icon('people')}Book a 1:1 session</a><a class="btn alt" href="#share">${icon('arrow')}Share</a></div>`}
+    ${url ? `<div class="card">${shareBlock({ title: `Gemba question ${q.ref}`, url })}</div>` : ''}
     ${q.status === 'routed' ? `<div class="notice warn">${icon('people')} Sent to ${routedNames.length || 1} practitioner${(routedNames.length || 1) === 1 ? '' : 's'} covering this topic (${esc(routedNames.join(', ') || 'the practitioner on duty')}). The answer will appear on this page.</div>` : ''}
-    <div class="card">
+    <div class="card" id="book">
       <h2 style="font-size:24px">Book a 1:1 session</h2>
       <p class="muted small">An online session, paid by bank transfer. The platform keeps 20% and instructs the payment; it never holds the money.</p>
       ${experts.length
@@ -1011,7 +1133,7 @@ ${answerBlocks}
     </div>
     <div class="form-row two">
       <div class="field"><label for="starts_at">Preferred time</label><input id="starts_at" name="starts_at" placeholder="2026-10-15 20:00" required></div>
-      <div class="field"><label for="contact2">Contact for the meeting link</label><input id="contact2" name="contact" value="${esc(q.contact || (user?.email ?? ''))}" required></div>
+      <div class="field"><label for="contact2">Contact for the meeting link</label><input id="contact2" name="contact" value="${esc(contactValue)}" required></div>
     </div>
     <div class="field"><label for="agenda">What you want to solve in the session</label><textarea id="agenda" name="agenda">${esc(q.text.slice(0, 300))}</textarea></div>
     <p class="stack-sm" style="margin:0"><button class="btn" type="submit">Create the booking</button>
@@ -1077,7 +1199,7 @@ ${instruction
   });
 }
 
-export function corpusPage({ notes, topic, topics, user = null }) {
+export function corpusPage({ notes, topic, topics, user = null, place = null }) {
   const chips = topics
     .map(
       ([slug, label]) =>
@@ -1095,6 +1217,7 @@ export function corpusPage({ notes, topic, topics, user = null }) {
     <p class="eyebrow">The library</p>
     <h1 style="font-size:clamp(30px,4.4vw,52px)">${topic ? esc(topicLabel(topic)) : 'Every published note'}</h1>
     <p class="lead">${notes.length} note${notes.length === 1 ? '' : 's'}${topic ? ` filed under ${esc(topicLabel(topic))}` : ''}. Only notes that passed the gate are in here: no customer names, no plant figures, no internal documents.</p>
+    ${continueLink(place)}
     <p class="stack-sm" style="margin-top:var(--space-5)">${chips}<a class="badge" href="/library"${topic ? '' : ' aria-current="true"'}>All topics</a> <a class="badge" href="/how-it-works">The rules</a></p>
   </div>
 </section>
@@ -1113,7 +1236,15 @@ export function corpusPage({ notes, topic, topics, user = null }) {
   });
 }
 
-export function notePage({ note, expert, user = null, links = null }) {
+/** The note's heading outline (ids as rendered), for validating a saved place. */
+export function renderNoteBody(note, outline) {
+  return renderMarkdown(note.body, { title: note.title, outline });
+}
+
+export function notePage({ note, expert, user = null, links = null, url = '', text = 'normal' }) {
+  const outline = [];
+  const bodyHtml = renderMarkdown(note.body, { title: note.title, links, outline });
+  const sections = outline.filter((h) => h.level === 2);
   const gate = (() => {
     try {
       return JSON.parse(note.gate || '{}');
@@ -1141,8 +1272,16 @@ export function notePage({ note, expert, user = null, links = null }) {
 </section>
 <section class="tight">
   <div class="wrap narrow">
-    <article class="card" style="margin-top:0"><div class="prose">${renderMarkdown(note.body, { title: note.title, links })}</div></article>
-    <p class="small muted"><a href="/library">← The knowledge library</a></p>
+    ${textSizeForm({ next: `/notes/${note.slug}`, text })}
+    <article class="card" style="margin-top:0"><div class="prose">${bodyHtml}</div></article>
+    ${sections.length ? `<form class="place card" method="post" action="/notes/${esc(note.slug)}/place" style="flex-direction:row;flex-wrap:wrap;align-items:end">
+      <div class="field" style="margin:0;flex:1 1 220px"><label for="place-section" style="margin-top:0">Keep my place at</label>
+      <select id="place-section" name="section">${sections.map((h) => `<option value="${esc(h.id)}">${esc(h.text)}</option>`).join('')}</select></div>
+      <button class="btn alt" type="submit">Keep my place</button>
+      <p class="hint" style="flex-basis:100%;margin:0">Saved on this device. The library and the home page will offer to continue here.</p>
+    </form>` : ''}
+    ${url ? `<div class="card share-card">${shareBlock({ title: note.title, url })}</div>` : ''}
+    <p class="small muted"><a class="back" href="/library">← The knowledge library</a></p>
   </div>
 </section>
 <section class="tight">

@@ -256,7 +256,7 @@ test('the expert workspace is not reachable without the token', async () => {
 
 test('the home page states the ladder and the demo status plainly', async () => {
   const html = await (await fetch(`${base}/`)).text();
-  assert.match(html, /Answer from the note library|Ask the knowledge library/);
+  assert.match(html, /Answer from the note library|Ask the library/);
   assert.match(html, /Prototype/);
   const how = await (await fetch(`${base}/how-it-works`)).text();
   assert.match(how, /The gate/);

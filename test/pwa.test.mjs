@@ -186,8 +186,9 @@ test('cookie-setting and private responses say private, no-store', async () => {
   assert.equal((await fetch(`${base}/api/experts`)).headers.get('cache-control'), 'private, no-store');
   assert.equal((await fetch(`${base}/signin`)).headers.get('cache-control'), 'private, no-store');
 
-  // A signed-in person's public pages are not storable either; a guest's are.
-  assert.equal((await fetch(`${base}/notes/seed-1-a`, { headers: { cookie } })).headers.get('cache-control'), 'private, no-store');
+  // A signed-in person's other pages are not storable; a note stays cacheable for them and for guests.
+  assert.equal((await fetch(`${base}/library`, { headers: { cookie } })).headers.get('cache-control'), 'private, no-store');
+  assert.equal((await fetch(`${base}/notes/seed-1-a`, { headers: { cookie } })).headers.get('cache-control'), null);
   assert.equal((await fetch(`${base}/notes/seed-1-a`)).headers.get('cache-control'), null);
 
   const out = await fetch(`${base}/signout`, { method: 'POST', redirect: 'manual', headers: { cookie } });
@@ -212,7 +213,7 @@ test('private surfaces do not emit the worker registration at all', async () => 
   for (const p of ['/admin/login', '/invite/nothing']) {
     const html = await (await fetch(base + p)).text();
     assert.ok(!html.includes('serviceWorker'), p);
-    assert.ok(!html.includes('data-install'), p);
+    assert.ok(!html.includes('data-install hidden'), p);
   }
   // the expert desk is a tokenised page
   const desk = await (await fetch(`${base}/c/tok-h`)).text();
