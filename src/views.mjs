@@ -22,6 +22,7 @@
 //   4. No proof strip and no logo carousel. There are no customers yet, and the README promises
 //      not to fake evidence.
 
+import { createHash } from 'node:crypto';
 import { formatVnd, MIN_MINUTES, MAX_MINUTES, PLATFORM_TAKE_PCT, quote } from './pricing.mjs';
 import { ATTESTATION_TEXT } from './gate.mjs';
 import { SCRIPT } from './interview.mjs';
@@ -133,7 +134,7 @@ const icon = (name, cls = 'ico') =>
 // --- the design system -----------------------------------------------------
 // Tokens first, then components. Every colour on a page is a token, so dark mode is one override
 // block rather than a hunt through rules, and the accessible pairs stay accessible in both modes.
-const CSS = `
+export const CSS = `
 :root{
   color-scheme:light;
   /* warm field-notes paper, orange as the brand, graphite for structure */
@@ -207,7 +208,7 @@ img{max-width:100%;height:auto}
 .wrap{width:100%;max-width:1200px;margin:0 auto;padding:0 var(--space-5)}
 .narrow{max-width:820px}
 .ico{width:20px;height:20px;flex:none}
-h1{font-size:clamp(32px,calc(18px + 4.2vw),64px);line-height:.98;letter-spacing:-.03em;font-weight:600;margin:0 0 var(--space-4)}
+h1{font-size:clamp(32px,calc(18px + 4.2vw),64px);line-height:1.06;letter-spacing:-.03em;font-weight:600;margin:0 0 var(--space-4)}
 h2{font-size:clamp(26px,3.4vw,42px);line-height:1.05;letter-spacing:-.02em;font-weight:600;margin:0 0 var(--space-4)}
 h3{font-size:clamp(19px,2vw,24px);line-height:1.2;letter-spacing:-.01em;font-weight:600;margin:0 0 var(--space-3)}
 h4{font-size:17px;font-weight:600;margin:0 0 var(--space-2)}
@@ -464,10 +465,19 @@ footer.site .inner{max-width:1200px;margin:0 auto;padding:var(--space-8) var(--s
 }
 @media (max-width:640px){
   :root{--header-h:0px}
+  /* the utility bar is the prototype notice and a second row of links to pages the nav already reaches; on a
+     phone it was 102px before the page began. The footer says "Prototype" too. */
+  .utility{display:none}
+  /* twelve topic chips wrapped to 300px of tapping before the first note; one swipeable row instead */
+  .chips{flex-wrap:nowrap;overflow-x:auto;margin-inline:calc(var(--space-4)*-1);padding-inline:var(--space-4);scrollbar-width:none}
+  .chips > *{flex:none}
+  .page-head{padding:var(--space-5) 0 0}
+  /* nothing a person has to read is under 14px on a phone */
+  .eyebrow,.badge,.badge.tag,.hint,.utility,th,.small,.mock .float,.foot-cols h4,.foot-base,.refusal .tag{font-size:14px}
   /* the nav is its own scrolling row under the brand, and the header does not follow the page down:
      a two-row sticky header is a third of a phone screen */
   header.site{position:static}
-  header.site .inner{padding:var(--space-3) var(--space-4);gap:var(--space-2)}
+  header.site .inner{padding:var(--space-2) var(--space-4);gap:var(--space-2)}
   nav.site{order:3;flex:1 1 100%;flex-wrap:nowrap;overflow-x:auto;margin:0 calc(var(--space-4)*-1);padding:0 var(--space-4);scrollbar-width:none}
   nav.site a{flex:none}
   .head-actions{margin-left:auto}
@@ -484,6 +494,13 @@ footer.site .inner{max-width:1200px;margin:0 auto;padding:var(--space-8) var(--s
   .cta-band{padding:var(--space-7) var(--space-5)}
 }
 `;
+
+/**
+ * The stylesheet is its own file, named by its hash so it can be cached for a year: 27 KB of the page was
+ * this CSS repeated on every navigation. The error fallback (STATIC_PAGE in server.mjs) keeps its own inline
+ * style because it must not depend on a second request.
+ */
+export const CSS_HREF = `/app.${createHash('sha256').update(CSS).digest('hex').slice(0, 12)}.css`;
 
 // Installable-app enhancement, never required for anything. The worker is registered only over https
 // or on localhost, and never from the private surfaces (the page that omits this block is the first
@@ -574,7 +591,7 @@ export function layout({ title, body, nav = true, footer = '', user = null, acti
 <meta name="apple-mobile-web-app-title" content="Gemba">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
-<title>${esc(title)} · Gemba</title><style>${CSS}</style></head>
+<title>${esc(title)} · Gemba</title><link rel="stylesheet" href="${CSS_HREF}"></head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 ${utility}
@@ -1278,7 +1295,7 @@ export function corpusPage({ notes, total = notes.length, page = 1, pages = 1, t
     <h1 style="font-size:clamp(30px,4.4vw,52px)">${topic ? esc(topicLabel(topic)) : 'Every published note'}</h1>
     <p class="lead">${total} note${total === 1 ? '' : 's'}${topic ? ` filed under ${esc(topicLabel(topic))}` : ''}. Only notes that passed the gate are in here: no customer names, no plant figures, no internal documents.</p>
     ${continueLink(place)}
-    <p class="stack-sm" style="margin-top:var(--space-5)">${chips}<a class="badge" href="/library"${topic ? '' : ' aria-current="true"'}>All topics</a> <a class="badge" href="/how-it-works">The rules</a></p>
+    <p class="stack-sm chips" style="margin-top:var(--space-5)">${chips}<a class="badge" href="/library"${topic ? '' : ' aria-current="true"'}>All topics</a> <a class="badge" href="/how-it-works">The rules</a></p>
   </div>
 </section>
 <section class="tight">

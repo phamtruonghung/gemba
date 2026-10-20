@@ -4,6 +4,7 @@
 import http from 'node:http';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from 'node:fs';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 
 import * as dbm from './db.mjs';
 import { checkNote, decidePublication, loadRules } from './gate.mjs';
@@ -187,6 +188,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
   // public/, so a deploy that changes any of them gives clients a new cache name and drops the old ones.
   const sw = buildServiceWorker();
   const manifestJson = JSON.stringify(MANIFEST);
+  const cssRaw = Buffer.from(views.CSS);
+  const cssGz = gzipSync(cssRaw);
   const rebuildIndex = () => {
     index = buildIndex(dbm.publishedNotes(db));
     return index;
@@ -262,11 +265,28 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const cookies = parseCookies(req.headers.cookie);
     const textSize = ['normal', 'large', 'xl'].includes(cookies[TEXT_COOKIE]) ? cookies[TEXT_COOKIE] : 'normal';
     const send = (code, html, headers = {}) => {
-      res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', ...headers });
       // A signed-in person's forms carry their session's CSRF token. Notes are the one signed-in page a
       // worker may cache, so they are left without it (their only forms set a preference cookie).
       const tokened = typeof html === 'string' && account && cachePolicy(path, method) !== 'swr' ? views.withCsrf(html, dbm.csrfFor(db, sessionId)) : html;
-      res.end(typeof tokened === 'string' ? views.withTextSize(tokened, textSize) : tokened);
+      const page = typeof tokened === 'string' ? views.withTextSize(tokened, textSize) : tokened;
+      // A guest's page is compressed and revalidated with an ETag (the phone user on a weak signal is a guest).
+      // A signed-in page is neither: it carries a CSRF token beside text the asker typed, which is what BREACH
+      // reads out of a compressed length, and it is `private, no-store` anyway.
+      if (typeof page === 'string' && !account && code === 200 && (method === 'GET' || method === 'HEAD') && !('set-cookie' in headers)) {
+        const raw = Buffer.from(page);
+        const etag = `"${createHash('sha256').update(raw).digest('base64url').slice(0, 22)}"`;
+        const gz = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''));
+        const base = { 'content-type': 'text/html; charset=utf-8', etag, vary: 'accept-encoding', ...headers };
+        if (String(req.headers['if-none-match'] ?? '').split(',').some((t) => t.trim().replace(/^W\//, '') === etag)) {
+          res.writeHead(304, { etag, vary: 'accept-encoding', ...(headers['cache-control'] ? { 'cache-control': headers['cache-control'] } : {}) });
+          return res.end();
+        }
+        const out = gz ? gzipSync(raw) : raw;
+        res.writeHead(200, { ...base, ...(gz ? { 'content-encoding': 'gzip' } : {}), 'content-length': out.length });
+        return res.end(method === 'HEAD' ? undefined : out);
+      }
+      res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', ...headers });
+      res.end(page);
     };
     // Absolute URL of this request's page, for the share block. x-forwarded-proto is honoured the way
     // the session cookie honours it; the Host header is used only if it looks like a host.
@@ -290,6 +310,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         const html = String(headers['content-type'] ?? '').startsWith('text/html');
         if (keys.includes('set-cookie') || policy === 'none' || policy === 'network-first' || (account && html && policy !== 'swr')) {
           headers = { ...headers, 'cache-control': 'private, no-store' };
+        } else if (html && policy !== 'swr' && keys.includes('etag')) {
+          // a guest page with an ETag: the browser may keep it but must ask before it uses it (a note says nothing, as it always has)
+          headers = { ...headers, 'cache-control': 'no-cache' };
         }
       }
       return writeHead.call(this, code, headers);
@@ -362,7 +385,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     // without credentials, so a gated instance would otherwise never be installable. All five are
     // public by construction: the manifest and sw.js are generated from constants and the repo's own
     // source, the icons are static art, and /offline renders the signed-out frame with no data.
-    const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
+    const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|app\.[0-9a-f]{12}\.css|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
     if (!gateExempt && !account && !basicAuthOk(req.headers.authorization, config)) {
       res.writeHead(401, {
         'www-authenticate': 'Basic realm="gemba", charset="UTF-8"',
@@ -397,6 +420,14 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         ...(isSw ? { 'service-worker-allowed': '/' } : {})
       });
       return res.end(method === 'HEAD' ? undefined : isSw ? sw.source : manifestJson);
+    }
+    if (path === views.CSS_HREF && (method === 'GET' || method === 'HEAD')) {
+      const etag = `"${path.slice(5, 17)}"`;
+      const gz = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''));
+      const headers = { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=31536000, immutable', etag, vary: 'accept-encoding' };
+      if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); return res.end(); }
+      res.writeHead(200, { ...headers, ...(gz ? { 'content-encoding': 'gzip' } : {}), 'content-length': gz ? cssGz.length : cssRaw.length });
+      return res.end(method === 'HEAD' ? undefined : gz ? cssGz : cssRaw);
     }
     if (path === '/offline' && method === 'GET') return send(200, views.offlinePage());
 

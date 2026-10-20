@@ -144,3 +144,88 @@ test('a note page stays cacheable, and the note carries the place form', async (
   assert.equal(res.headers.get('cache-control'), null);
   assert.ok((await res.text()).includes('action="/notes/seed-1-a/place"'));
 });
+
+// --- page weight: one cached stylesheet, and guests get gzip + ETag -----------------------------------
+import { gunzipSync } from 'node:zlib';
+import { CSS_HREF } from '../src/views.mjs';
+import { SHELL_URLS, cachePolicy } from '../src/pwa.mjs';
+
+const raw = (path, headers = {}) => new Promise((resolve, reject) => {
+  http.get(base + path, { headers }, (r) => {
+    const c = []; r.on('data', (d) => c.push(d)); r.on('end', () => resolve({ status: r.statusCode, headers: r.headers, body: Buffer.concat(c) }));
+  }).on('error', reject);
+});
+
+test('the stylesheet is a hashed file, not 27 KB repeated in every page', async () => {
+  const home = (await raw('/')).body.toString();
+  assert.ok(!/<style>/.test(home), 'no inline <style> in the page');
+  assert.ok(home.includes(`<link rel="stylesheet" href="${CSS_HREF}">`));
+  assert.ok(Buffer.byteLength(home) < 30000, `the page is ${Buffer.byteLength(home)} bytes`);
+  assert.match(CSS_HREF, /^\/app\.[0-9a-f]{12}\.css$/);
+
+  const css = await raw(CSS_HREF);
+  assert.equal(css.status, 200);
+  assert.match(css.headers['content-type'], /^text\/css/);
+  assert.match(css.headers['cache-control'], /immutable/);
+  assert.match(css.headers['cache-control'], /max-age=31536000/);
+  assert.ok(css.headers.etag);
+  assert.ok(css.body.toString().includes('header.site'));
+  const gz = await raw(CSS_HREF, { 'accept-encoding': 'gzip' });
+  assert.equal(gz.headers['content-encoding'], 'gzip');
+  assert.equal(gunzipSync(gz.body).toString(), css.body.toString());
+  assert.equal((await raw('/app.000000000000.css')).status, 404, 'a wrong hash is not the stylesheet');
+  assert.equal((await raw(CSS_HREF, { 'if-none-match': css.headers.etag })).status, 304);
+});
+
+test('the worker precaches the stylesheet, so /offline is styled with no signal', () => {
+  assert.ok(SHELL_URLS.includes(CSS_HREF));
+  assert.equal(cachePolicy(CSS_HREF, 'GET'), 'shell');
+});
+
+test('a guest page is gzipped and revalidates with an ETag; the bytes are the same page', async () => {
+  const plain = await raw('/');
+  const gz = await raw('/', { 'accept-encoding': 'gzip' });
+  assert.equal(plain.headers['content-encoding'], undefined);
+  assert.equal(gz.headers['content-encoding'], 'gzip');
+  assert.equal(gz.headers.vary, 'accept-encoding');
+  assert.equal(gunzipSync(gz.body).toString(), plain.body.toString());
+  assert.ok(gz.body.length < plain.body.length / 2, `${gz.body.length} vs ${plain.body.length}`);
+  assert.equal(gz.headers['cache-control'], 'no-cache');
+
+  const again = await raw('/', { 'accept-encoding': 'gzip', 'if-none-match': gz.headers.etag });
+  assert.equal(again.status, 304);
+  assert.equal(again.body.length, 0);
+  const head = await new Promise((resolve) => http.request(base + '/', { method: 'HEAD', headers: { 'accept-encoding': 'gzip' } }, (r) => { r.resume(); r.on('end', () => resolve(r)); }).end());
+  assert.equal(head.statusCode, 200);
+});
+
+test('a page that knows who you are is never compressed or tagged (BREACH: token beside typed text)', async () => {
+  const signup = await form('/signup', { name: 'Gz', email: 'gz@example.com', password: 'a sentence of ten' });
+  const cookie = signup.headers.get('set-cookie').split(';')[0];
+  const res = await raw('/account', { cookie, 'accept-encoding': 'gzip' });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers['content-encoding'], undefined);
+  assert.equal(res.headers.etag, undefined);
+  assert.equal(res.headers['cache-control'], 'private, no-store');
+  assert.ok(res.body.toString().includes('name="csrf"'));
+});
+
+test('a tokenised guest page keeps `private, no-store`: an ETag does not make it cacheable', async () => {
+  const res = await raw(`/q/${ref}`, { 'accept-encoding': 'gzip' });
+  assert.equal(res.headers['cache-control'], 'private, no-store');
+});
+
+test('a gated instance serves the stylesheet to the 401 and sign-in pages without a password', async () => {
+  const gated = createApp({
+    dbPath: ':memory:', rules: loadRules(),
+    config: { port: 0, host: '127.0.0.1', dbPath: ':memory:', dataDir: 'data', adminToken: 'tok', user: 'u', pass: 'p', bankBin: '', bankAccount: '', llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 } }
+  });
+  await new Promise((r) => gated.server.listen(0, '127.0.0.1', r));
+  try {
+    const b = `http://127.0.0.1:${gated.server.address().port}`;
+    assert.equal((await fetch(b + '/')).status, 401);
+    const css = await fetch(b + CSS_HREF);
+    assert.equal(css.status, 200);
+    assert.match(css.headers.get('content-type'), /text\/css/);
+  } finally { gated.server.close(); }
+});

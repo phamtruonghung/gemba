@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CSS_HREF } from './views.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const PUBLIC_DIR = join(HERE, '..', 'public');
@@ -48,6 +49,7 @@ export const SHELL_URLS = [
   '/experts',
   '/offline',
   '/manifest.webmanifest',
+  CSS_HREF,
   '/icons/icon.svg',
   '/icons/icon-192.png',
   '/icons/apple-touch-icon.png'
@@ -82,6 +84,7 @@ export function cachePolicy(pathname, method) {
   if (/^\/notes\/[^\/]+$/.test(p)) return 'swr';
   if (['/', '/library', '/how-it-works', '/experts', '/offline', '/manifest.webmanifest'].indexOf(p) >= 0) return 'shell';
   if (/^\/icons\/[^\/]+$/.test(p)) return 'shell';
+  if (/^\/app\.[0-9a-f]{12}\.css$/.test(p)) return 'shell';
   return 'none';
 }
 
