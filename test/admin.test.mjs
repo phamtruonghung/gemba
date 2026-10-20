@@ -11,10 +11,12 @@ import { join } from 'node:path';
 
 import { createApp } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
-import { upsertExpert, upsertNote } from '../src/db.mjs';
+import { upsertExpert, upsertNote, createUser } from '../src/db.mjs';
 import { hashPassword } from '../src/auth.mjs';
 import { loadSettings, SETTING_SPECS } from '../src/settings.mjs';
 
+// Not under test here: the limiter has its own tests (test/hardening.test.mjs); this fixture signs in many times from one address.
+const R = { capacity: 10_000, perMs: 60_000 };
 let app;
 let base;
 
@@ -27,7 +29,8 @@ before(async () => {
     rules: loadRules(),
     config: {
       port: 0, host: '127.0.0.1', dbPath: ':memory:', dataDir: 'data',
-      adminToken: 'admin-token', bankBin: '', bankAccount: '',
+      adminToken: 'admin-token',
+      limits: { askIp: R, askIdentity: R, signinIp: R, signinEmail: R, signupIp: R }, bankBin: '', bankAccount: '',
       gate: { user: '', pass: '' },
       llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 }
     }
@@ -188,7 +191,8 @@ test('the gate protects anonymous visitors, and steps aside for a session', asyn
     rules: loadRules(),
     config: {
       port: 0, host: '127.0.0.1', dbPath: ':memory:', dataDir: 'data',
-      adminToken: 'gated-token', bankBin: '', bankAccount: '',
+      adminToken: 'gated-token',
+      limits: { askIp: R, askIdentity: R, signinIp: R, signinEmail: R, signupIp: R }, bankBin: '', bankAccount: '',
       user: 'gate-user', pass: 'gate-password',
       llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 }
     }
@@ -199,21 +203,24 @@ test('the gate protects anonymous visitors, and steps aside for a session', asyn
     const anon = await fetch(`${gbase}/`, { redirect: 'manual' });
     assert.equal(anon.status, 401, 'an anonymous visitor meets the gate');
 
-    for (const open of ['/admin/login', '/signin', '/signup']) {
+    for (const open of ['/admin/login', '/signin']) {
       const res = await fetch(gbase + open, { redirect: 'manual' });
       assert.equal(res.status, 200, `${open} must be reachable without the gate — it is how you sign in`);
     }
+    // /signup is not one of them: it was a way to mint an account, and so a session, around the gate.
+    assert.equal((await fetch(`${gbase}/signup`, { redirect: 'manual' })).status, 401, 'a gated instance does not offer /signup anonymously');
     const invite = await fetch(`${gbase}/invite/some-single-use-token`, { redirect: 'manual' });
     assert.notEqual(invite.status, 401, 'and so must an invitation link');
 
-    // sign in through the gate-free door, then walk back to a gated page with only the session
-    const signup = await fetch(`${gbase}/signup`, {
+    // an account made by the operator signs in at the still-open door, then walks back with only the session
+    createUser(gated.db, { email: 'walker@gemba.test', name: 'Gate Walker', password_hash: await hashPassword('a-long-enough-password') });
+    const signin = await fetch(`${gbase}/signin`, {
       method: 'POST', redirect: 'manual',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: form({ name: 'Gate Walker', email: 'walker@gemba.test', password: 'a-long-enough-password' })
+      body: form({ email: 'walker@gemba.test', password: 'a-long-enough-password' })
     });
-    const cookie = cookieOf(signup);
-    assert.ok(cookie.includes('gemba_session='), 'the account was created through the open door');
+    const cookie = cookieOf(signin);
+    assert.ok(cookie.includes('gemba_session='), 'the account signed in through the open door');
     const withSession = await fetch(`${gbase}/`, { redirect: 'manual', headers: { cookie } });
     assert.equal(withSession.status, 200, 'a signed-in visitor does not need the shared password');
   } finally {

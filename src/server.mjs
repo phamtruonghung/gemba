@@ -17,6 +17,7 @@ import { checkExpert, checkInvite, checkInviteAcceptance, checkMeetingUrl } from
 import * as views from './views.mjs';
 import { cachePolicy, buildServiceWorker, MANIFEST, PUBLIC_DIR } from './pwa.mjs';
 import { serveStatic } from './static.mjs';
+import { createLimiter, DEFAULT_LIMITS } from './ratelimit.mjs';
 import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, newSessionId, sessionExpiry, hashPassword, verifyPassword, checkEmail, checkPassword, checkName, SESSION_COOKIE } from './auth.mjs';
 
 const ROUTE_DUE_HOURS = 48;
@@ -39,7 +40,9 @@ function sameSecret(a, b) {
 }
 
 export function basicAuthOk(header, { user, pass }) {
-  if (!user || !pass) return true;
+  // Open only when neither half is set. One half alone is a misconfiguration, and it fails closed.
+  if (!user && !pass) return true;
+  if (!user || !pass) return false;
   if (typeof header !== 'string' || !header.startsWith('Basic ')) return false;
   let decoded;
   try {
@@ -68,6 +71,9 @@ export function loadConfig(env = process.env) {
   // the working directory. None of them are required — a container or a systemd unit passes its own.
   const fileEnv = { ...readEnvFile(process.env.GEMBA_ENV_FILE || '/root/.hermes/.env'), ...readEnvFile('.env') };
   const merged = { ...fileEnv, ...env };
+  if (Boolean(merged.GEMBA_USER) !== Boolean(merged.GEMBA_PASS)) {
+    throw new Error('refusing to start: set both GEMBA_USER and GEMBA_PASS, or neither');
+  }
   const dataDir = merged.GEMBA_DATA_DIR || 'data';
   mkdirSync(dataDir, { recursive: true });
   const tokenFile = `${dataDir}/admin.token`;
@@ -91,9 +97,31 @@ export function loadConfig(env = process.env) {
     pass: merged.GEMBA_PASS || '',
     bankBin: merged.GEMBA_BANK_BIN || '',
     bankAccount: merged.GEMBA_BANK_ACCOUNT || '',
+    // Behind the Cloudflare tunnel every visitor reaches us from 127.0.0.1; with this set the limiter
+    // keys on the address the proxy reports. Off by default: on a direct bind the header is forgeable.
+    trustProxy: merged.GEMBA_TRUST_PROXY === '1',
     llm: llmConfig(merged)
   };
 }
+
+/** The address a request's limits are charged to. See `trustProxy` in `loadConfig`. */
+export function clientIp(req, config = {}) {
+  if (config.trustProxy) {
+    const cf = String(req.headers['cf-connecting-ip'] ?? '').trim();
+    if (cf) return cf;
+    const xff = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+    if (xff) return xff;
+  }
+  return req.socket?.remoteAddress ?? 'unknown';
+}
+
+// Body caps. A practitioner's note is long Vietnamese text, which URL-encodes to 6-9 bytes a character,
+// so the authoring routes get more room than every other form.
+export const BODY_CAP = 64 * 1024;
+export const AUTHORING_BODY_CAP = 512 * 1024;
+export const MAX_QUESTION_CHARS = 2000;
+const bodyCapFor = (path) => (/^\/c\/[^/]+\/(note|draft|answer)$/.test(path) ? AUTHORING_BODY_CAP : BODY_CAP);
+const DEFAULT_TIMEOUTS = { headersTimeout: 10_000, requestTimeout: 30_000, keepAliveTimeout: 5_000, connectionsCheckingInterval: 1_000 };
 
 /** What the price tables on the public pages are quoted with: the operator's own settings. */
 const pricingFor = (db) => {
@@ -110,6 +138,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
   // container mounted, a different one — an empty corpus with no error anywhere.) Tests pass
   // ':memory:' explicitly; createApp({ dbPath }) still overrides for them.
   const db = dbm.openDb(dbPath ?? config.dbPath);
+  const limiter = createLimiter(config.limits ?? DEFAULT_LIMITS);
   let index = buildIndex(dbm.publishedNotes(db));
   // The worker's source and version are fixed at start: the version hashes the template, views.mjs and
   // public/, so a deploy that changes any of them gives clients a new cache name and drops the old ones.
@@ -225,6 +254,47 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       res.end();
     };
 
+    // Only these three are served; PUT, DELETE, TRACE, OPTIONS and the rest are refused before anything runs.
+    if (method !== 'GET' && method !== 'HEAD' && method !== 'POST') {
+      res.writeHead(405, { allow: 'GET, HEAD, POST', 'content-length': '0' });
+      return res.end();
+    }
+    const ip = clientIp(req, config);
+    // A refused attempt answers 429 with Retry-After; JSON for the API, a page with a way back otherwise.
+    const tooMany = (r, { api = false, kind = '' } = {}) => {
+      dbm.logEvent(db, 'rate_limited', '', `${kind || path} retry=${r.retryAfter}s`);
+      if (api) {
+        res.writeHead(429, { 'content-type': 'application/json; charset=utf-8', 'retry-after': String(r.retryAfter) });
+        res.end(JSON.stringify({ error: 'rate limited' }));
+      } else {
+        send(429, views.errorPage({
+          code: 429, message: 'Too many tries — wait a moment.', user,
+          lead: `Please try again in ${r.retryAfter} seconds.`, retry: safeNext(refererPath())
+        }), { 'retry-after': String(r.retryAfter) });
+      }
+      return true; // the response is sent; callers `return` on it
+    };
+    const refererPath = () => {
+      try {
+        const ref = new URL(String(req.headers.referer ?? ''));
+        return ref.host === req.headers.host ? ref.pathname + ref.search : '/';
+      } catch {
+        return '/';
+      }
+    };
+    const tooManySignups = () => {
+      const r = limiter.check('signupIp', ip);
+      return r.ok ? null : tooMany(r, { kind: 'signup' });
+    };
+    const askLimit = (api) => {
+      const r = limiter.checkAll([['askIp', ip], ['askIdentity', account ? `user:${account.id}` : `ip:${ip}`]]);
+      return r.ok ? null : tooMany(r, { api, kind: 'ask' });
+    };
+    const signinLimit = (email) => {
+      const r = limiter.checkAll([['signinIp', ip], ['signinEmail', String(email).trim().toLowerCase()]]);
+      return r.ok ? null : tooMany(r, { kind: 'signin' });
+    };
+
     // --- health (the only path that answers without the front gate) --------
     if (path === '/healthz') return sendJson(200, { ok: true, notes: index.n, llm: config.llm.enabled ? 'configured' : 'none' });
 
@@ -238,7 +308,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     // without credentials, so a gated instance would otherwise never be installable. All five are
     // public by construction: the manifest and sw.js are generated from constants and the repo's own
     // source, the icons are static art, and /offline renders the signed-out frame with no data.
-    const gateExempt = /^\/(signin|signup|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
+    const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
     if (!gateExempt && !account && !basicAuthOk(req.headers.authorization, config)) {
       res.writeHead(401, {
         'www-authenticate': 'Basic realm="gemba", charset="UTF-8"',
@@ -293,14 +363,18 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
 
     // --- JSON API (used by tests and by anyone wiring this into a bot) ------
     if (path === '/api/ask' && method === 'POST') {
-      const text = (json?.question ?? form.q ?? '').trim();
+      const field = (name, alt) => String(json?.[name] ?? alt ?? '');
+      const text = field('question', form.q).trim();
       if (!text) return sendJson(400, { error: 'missing question' });
+      if (text.length > MAX_QUESTION_CHARS) return sendJson(400, { error: `question is longer than ${MAX_QUESTION_CHARS} characters` });
+      const limited = askLimit(true);
+      if (limited) return limited;
       const out = await runAsk({
         text,
-        plant_type: json?.plant_type ?? form.plant_type ?? '',
-        asker: json?.asker ?? form.asker ?? account?.name ?? '',
-        contact: json?.contact ?? form.contact ?? account?.email ?? '',
-        topic: json?.topic ?? form.topic ?? '',
+        plant_type: field('plant_type', form.plant_type),
+        asker: field('asker', form.asker ?? account?.name),
+        contact: field('contact', form.contact ?? account?.email),
+        topic: field('topic', form.topic),
         user_id: account?.id ?? null
       });
       return sendJson(200, {
@@ -337,6 +411,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (path === '/signin' && method === 'POST') {
       const email = String(form.email ?? '').trim();
       const password = String(form.password ?? '');
+      const limited = signinLimit(email);
+      if (limited) return limited;
       const found = dbm.userByEmail(db, email);
       // A locked account is refused *after* the password check, not before: the person proved they own
       // the account, and "this account is locked — ask the operator" is a message they can act on,
@@ -372,6 +448,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       return withCookie(keep ? `/q/${encodeURIComponent(keep)}` : next && next.startsWith('/') ? next : '/account', id, isSecureRequest(req));
     }
     if (path === '/signup' && method === 'POST') {
+      const limited = tooManySignups();
+      if (limited) return limited;
       const name = checkName(form.name);
       const email = checkEmail(form.email);
       const password = checkPassword(form.password);
@@ -419,6 +497,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       if (method === 'POST') {
         const email = String(form.email ?? '').trim();
         const password = String(form.password ?? '');
+        const limited = signinLimit(email);
+        if (limited) return limited;
         const found = dbm.userByEmail(db, email);
         if (!found || !(await verifyPassword(password, found.password_hash))) {
           dbm.logEvent(db, 'admin_login_failed', '', `email=${email.slice(0, 60)}`);
@@ -790,6 +870,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (path === '/ask' && method === 'POST') {
       const text = String(form.q ?? '').trim();
       if (!text) return fail(400, 'No question was entered.');
+      if (text.length > MAX_QUESTION_CHARS) return fail(400, `Keep the question under ${MAX_QUESTION_CHARS} characters.`);
+      const limited = askLimit(false);
+      if (limited) return limited;
       const out = await runAsk({
         text,
         plant_type: form.plant_type ?? '',
@@ -1152,11 +1235,41 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     return fail(404, `There is no page ${path}.`);
   }
 
-  const server = http.createServer(async (req, res) => {
+  // Read the body with a ceiling. A declared length over the cap is refused before a byte is read; a
+  // chunked body is counted as it arrives and abandoned the moment it passes the cap.
+  const TOO_LARGE = Symbol('body too large');
+  async function readBody(req, cap) {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > cap) throw TOO_LARGE;
+    const chunks = [];
+    let total = 0;
+    for await (const c of req) {
+      total += c.length;
+      if (total > cap) throw TOO_LARGE;
+      chunks.push(c);
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  }
+
+  const STATIC_PAGE = (code, text) =>
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${code}</title><body style="font-family:system-ui;max-width:32rem;margin:15vh auto;padding:0 1rem"><h1>${code} — ${text}</h1><p><a href="/">Back to the start</a></p></body>`;
+
+  const timeouts = { ...DEFAULT_TIMEOUTS, ...(config.timeouts ?? {}) };
+  const server = http.createServer(timeouts, async (req, res) => {
     try {
-      const chunks = [];
-      for await (const c of req) chunks.push(c);
-      const raw = Buffer.concat(chunks).toString('utf8');
+      let raw = '';
+      const method = req.method ?? 'GET';
+      if (method === 'POST') {
+        const path = (req.url ?? '/').split('?')[0].replace(/\/+$/, '') || '/';
+        try {
+          raw = await readBody(req, bodyCapFor(path));
+        } catch (err) {
+          if (err !== TOO_LARGE) throw err;
+          // Close the connection once the answer is out; a client still uploading gets the 413 first.
+          res.writeHead(413, { 'content-type': 'text/html; charset=utf-8', connection: 'close' });
+          return res.end(STATIC_PAGE(413, 'that request is too large'), () => req.destroy());
+        }
+      }
       let form = {};
       let json = null;
       const ctype = String(req.headers['content-type'] ?? '');
@@ -1171,17 +1284,28 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       // this catch used to throw a second error *while handling the first*, which took the whole
       // process down: every later request then hung on a socket nobody was listening to, and the
       // original error was never printed. A 500 handler that can kill the server is worse than no
-      // 500 handler.
-      const message = String(err?.stack ?? err?.message ?? err);
-      console.error('unhandled error:', message);
+      // 500 handler. Nothing of the error reaches the visitor: they get a reference, the log gets the stack.
+      const id = randomBytes(4).toString('hex');
+      const busy = err?.errcode === 5 || err?.errcode === 6 || /database is locked/i.test(String(err?.message));
+      const bad = err instanceof URIError || err?.code === 'ERR_INVALID_URL';
+      if (!bad && !busy) console.error(`unhandled error ${id}:`, String(err?.stack ?? err?.message ?? err));
       if (!res.headersSent) {
-        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
-        res.end(`500 — the request could not be completed.\n\n${message}\n`);
+        if (bad) {
+          res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
+          res.end(STATIC_PAGE(400, 'that address is not valid'));
+        } else if (busy) {
+          res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '2' });
+          res.end(STATIC_PAGE(503, 'busy, try again in a moment'));
+        } else {
+          res.writeHead(500, { 'content-type': 'text/html; charset=utf-8' });
+          res.end(STATIC_PAGE(500, `something went wrong (reference ${id})`));
+        }
       } else {
         res.end();
       }
     }
   });
+  server.maxRequestsPerSocket = 100;
 
   return { server, db, sw, index: () => index, rebuildIndex, runAsk, escalate: escalate(), config, rules };
 }

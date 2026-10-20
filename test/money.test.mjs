@@ -18,6 +18,8 @@ import { hashPassword } from '../src/auth.mjs';
 const ADMIN_EMAIL = 'operator@gemba.test';
 const ADMIN_PASSWORD = 'a-long-enough-operator-password';
 
+// Not under test here: the limiter has its own tests (test/hardening.test.mjs); this fixture signs in many times from one address.
+const R = { capacity: 10_000, perMs: 60_000 };
 let app;
 let base;
 let cookie;
@@ -28,7 +30,8 @@ before(async () => {
     rules: loadRules(),
     config: {
       port: 0, host: '127.0.0.1', dbPath: ':memory:', dataDir: 'data',
-      adminToken: 'admin-token', bankBin: '970436', bankAccount: '0123456789',
+      adminToken: 'admin-token',
+      limits: { askIp: R, askIdentity: R, signinIp: R, signinEmail: R, signupIp: R }, bankBin: '970436', bankAccount: '0123456789',
       llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 }
     }
   });

@@ -12,6 +12,8 @@ import {
   parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, sessionExpiry, SESSION_COOKIE
 } from '../src/auth.mjs';
 
+// Not under test here: the limiter has its own tests (test/hardening.test.mjs); this fixture signs in many times from one address.
+const R = { capacity: 10_000, perMs: 60_000 };
 let app;
 let base;
 
@@ -25,6 +27,7 @@ before(async () => {
       dbPath: ':memory:',
       dataDir: 'data',
       adminToken: 'admin-token',
+      limits: { askIp: R, askIdentity: R, signinIp: R, signinEmail: R, signupIp: R },
       bankBin: '',
       bankAccount: '',
       llm: { enabled: false, base: '', model: '', key: '', timeoutMs: 1000 }

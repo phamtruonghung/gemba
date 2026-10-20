@@ -154,7 +154,8 @@ implemented. The contract is in `SPEC.md` section 3 and enforced by `test/llm.te
 |---|---|---|
 | `GEMBA_PORT` | `8090` | HTTP port |
 | `GEMBA_HOST` | `0.0.0.0` | bind address |
-| `GEMBA_USER` / `GEMBA_PASS` | — | HTTP basic auth in front of everything except `/healthz`; **set this before publishing the instance to any hostname** |
+| `GEMBA_USER` / `GEMBA_PASS` | — | HTTP basic auth in front of everything except `/healthz` (set both or neither: the server refuses to start with one); **set this before publishing the instance to any hostname** |
+| `GEMBA_TRUST_PROXY` | — | `1` behind the Cloudflare tunnel: rate limits are charged to `cf-connecting-ip` (else `x-forwarded-for`) instead of the socket, which is always `127.0.0.1` there. Leave unset on a direct bind, where those headers are forgeable. Limits: 10 asks/min per address, 60/h per identity; 5 sign-ins/min per address, 20/h per email; 5 sign-ups/min. Bodies over 64 KiB (512 KiB for a practitioner's note) answer 413 |
 | `GEMBA_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
 | `GEMBA_DB` | `<data>/gemba.db` | database path |
 | `GEMBA_HOST_PORT` | `8090` | host-side port in `docker-compose.yml`; the container always listens on 8090 internally |

@@ -2406,7 +2406,7 @@ export function offlinePage() {
   });
 }
 
-export function errorPage({ code, message, user = null }) {
+export function errorPage({ code, message, user = null, lead = 'Nothing is guessed here either — this page is simply missing.', retry = '' }) {
   return layout({
     title: `Error ${code}`,
     user,
@@ -2415,8 +2415,8 @@ export function errorPage({ code, message, user = null }) {
   <div class="wrap narrow">
     <p class="eyebrow">${esc(code)}</p>
     <h1 style="font-size:clamp(30px,4vw,44px)">${esc(message)}</h1>
-    <p class="lead">Nothing is guessed here either — this page is simply missing.</p>
-    <p class="row center-cta" style="margin-top:var(--space-5)"><a class="btn" href="/">${icon('ask')}Ask a question</a><a class="btn alt" href="/library">${icon('book')}Read the notes</a></p>
+    <p class="lead">${esc(lead)}</p>
+    <p class="row center-cta" style="margin-top:var(--space-5)">${retry ? `<a class="btn" href="${esc(retry)}">Go back and try again</a>` : ''}<a class="btn${retry ? ' alt' : ''}" href="/">${icon('ask')}Ask a question</a><a class="btn alt" href="/library">${icon('book')}Read the notes</a></p>
   </div>
 </section>`
   });
