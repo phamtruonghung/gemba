@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { createApp } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
 import { upsertExpert, upsertNote } from '../src/db.mjs';
+import { CSS_HREF } from '../src/views.mjs';
 
 const ADMIN = 'markup-admin-token';
 const EXPERT_TOKEN = 'tok-hung-markup';
@@ -95,7 +96,9 @@ test('the theme is orange and it is a token, not a scattered literal', async () 
   assert.match(src, /--color-accent:\s*#ea580c;/i, 'the brand colour is the orange token');
   assert.match(src, /--color-background:\s*#f7f4f1;/i, 'and the page sits on warm paper');
 
-  const { html } = await get('/');
+  const { html: page } = await get('/');
+  const { html: css } = await get(CSS_HREF); // the stylesheet is its own file now
+  const html = page + css;
   // the brand orange appears in the page through the token; the mark and the primary action use it
   assert.match(html, /--color-accent:#ea580c/i);
   assert.match(html, /class="brand"/);
@@ -160,4 +163,31 @@ test('the booking page QR encodes the bank, the account, the amount and the refe
   assert.ok(src.includes(`amount=${price}`), `the amount in the query: ${src}`);
   assert.ok(src.includes(`addInfo=${ref}`), `the reference in the query: ${src}`);
   assert.ok(!/vietqr-B-/.test(src), 'not built from the ref alone');
+});
+
+test('the Ask call to action lands on the form: one id="ask", and every in-page link resolves', async () => {
+  // The bug this guards: two buttons linked `#ask` and nothing carried that id, so a tap set the hash
+  // and the page did not move. The browser half (the viewport actually moves) is in ui-check.py.
+  const home = await get('/');
+  assert.equal([...home.html.matchAll(/\bid="ask"/g)].length, 1, 'exactly one id="ask" on /');
+  assert.match(home.html, /<form [^>]*\bid="ask"/, 'and it is on the ask form');
+  assert.match((await get(CSS_HREF)).html, /#ask\{scroll-margin-top:calc\(var\(--header-h\) \+ 8px\)\}/, 'it clears the sticky header');
+  assert.match(home.html, /<a href="\/#ask"[^>]*>[^<]*<svg[^]*?Ask<\/a>/, 'the nav Ask link points at the form');
+  assert.match(home.html, /<a href="\/#ask" aria-current="page">/, 'and the home page is still its current page');
+
+  const asked = await fetch(`${base}/ask`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ q: 'The press keeps stopping mid-shift, what should I check first?' })
+  });
+  const pages = { '/': home.html };
+  for (const path of ['/library', '/notes/markup-note', '/account', '/experts']) pages[path] = (await get(path)).html;
+  pages[new URL(asked.url).pathname] = await asked.text();
+
+  for (const [path, html] of Object.entries(pages)) {
+    for (const [, target, frag] of html.matchAll(/\bhref="(\/?)#([^"]+)"/g).map((m) => [m[0], m[1], m[2]])) {
+      const where = target === '/' ? pages['/'] : html;
+      assert.ok(where.includes(`id="${frag}"`), `${path}: #${frag} points at an element that exists`);
+    }
+  }
 });

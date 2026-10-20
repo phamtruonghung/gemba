@@ -233,6 +233,19 @@ export function isEnglishQuestion(s) {
   return isEnglishWords(words(s));
 }
 
+const VI_ONLY = /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i;
+
+/**
+ * The language a question was asked in: 'vi' when it holds a letter only Vietnamese uses, or when it is not
+ * plainly English (Vietnamese typed without diacritics, which phones often do); otherwise 'en'.
+ */
+export function questionLang(s) {
+  const text = String(s ?? '');
+  if (VI_ONLY.test(text)) return 'vi';
+  if (!/[a-z]/i.test(text)) return 'en';
+  return isEnglishQuestion(text) ? 'en' : 'vi';
+}
+
 export function queryUnits(s, index = null) {
   const units = queryUnitsRaw(s);
   if (TUNING.stem !== 'fallback' || !index) return units;

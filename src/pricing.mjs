@@ -39,9 +39,15 @@ export function quote(rateVnd, minutes = DEFAULT_MINUTES, takePct = PLATFORM_TAK
   return { minutes, ...split(price, takePct) };
 }
 
-/** "600,000 VND" — integer VND, no decimals, thousands separated. */
+/**
+ * "520.000 ₫": a dot between thousands, a no-break space, the dong sign. In Vietnamese "520,000" reads as
+ * 520 and a decimal, so the English grouping is wrong for the people who pay. Built by hand rather than
+ * with toLocaleString('vi-VN'), whose output depends on the ICU build Node was compiled with.
+ */
 export function formatVnd(n) {
-  return `${Math.round(n).toLocaleString('en-US')} VND`;
+  const v = Math.round(n);
+  const digits = String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return `${v < 0 ? '-' : ''}${digits}\u00a0₫`;
 }
 
 /** A safe default when an expert has not set a rate: seniority, cheap-first. */

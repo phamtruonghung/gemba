@@ -8,6 +8,7 @@ is refused), then loads each page at five phone widths and prints a table plus t
 any page scrolls sideways, any input is under 16px, or any non-inline tap target is under 44x44.
 """
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -20,6 +21,11 @@ BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8195").rstrip("/
 OUT = Path(sys.argv[2] if len(sys.argv) > 2 else "shots")
 OUT.mkdir(parents=True, exist_ok=True)
 WIDTHS = [320, 360, 390, 414, 430]
+# The operator console is behind an account; give the check one and it signs in and measures /admin/accounts too.
+ADMIN_EMAIL = os.environ.get("MC_ADMIN_EMAIL")
+ADMIN_PASSWORD = os.environ.get("MC_ADMIN_PASSWORD")
+CHROME_MAX = 120      # px: utility bar + site header, on a phone
+REPEAT_MAX = 15_000   # bytes: what a second visit to / costs
 TABLE_NOTE = "/notes/vault-tpm-pillars-and-the-losses-they-target"  # the seeded note with a pipe table
 
 
@@ -41,7 +47,7 @@ def ask(text):
 
 ANSWER = ask("What are the three parts of OEE and how do I use them?")  # on-corpus: cited answer in extractive mode
 REFUSAL = ask("What is the best recipe for pho bo with a thirty-two-hour broth?")
-for loc, want in ((ANSWER, "Answer from the note library"), (REFUSAL, "INSUFFICIENT_DATA")):
+for loc, want in ((ANSWER, "Answer from the note library"), (REFUSAL, 'class="refusal"')):
     if want not in urllib.request.urlopen(BASE + loc).read().decode():
         raise SystemExit(f"{loc} does not show {want!r}: pick a different question for this corpus")
 PAGES = [("home", "/"), ("answer", ANSWER), ("refusal", REFUSAL), ("library", "/library"), ("note-table", TABLE_NOTE)]
@@ -78,7 +84,7 @@ JS = r"""
 }
 """
 
-rows, bad = [], False
+rows, bad, extra = [], False, []
 details = {}
 with sync_playwright() as p:
     br = p.chromium.launch()
@@ -96,6 +102,32 @@ with sync_playwright() as p:
             details[f"{name}@{w}"] = {"overflow": r["overflow"], "taps": hard[:8], "inline": inline[:6], "small": r["small"][:5]}
             bad |= r["sw"] > w or bool(r["small"]) or bool(hard)
             pg.close()
+        # chrome height, and what a repeat visit to / transfers (the stylesheet is cached for a year)
+        pg = ctx.new_page()
+        pg.goto(BASE + "/", wait_until="load")
+        chrome = pg.evaluate("() => ['.utility', 'header.site'].reduce((n, s) => { const e = document.querySelector(s); return n + (e && getComputedStyle(e).display !== 'none' ? e.getBoundingClientRect().height : 0); }, 0)")
+        sizes = []
+        pg.on("response", lambda r: sizes.append(int(r.headers.get("content-length", "0") or 0)))
+        pg.goto(BASE + "/", wait_until="load")
+        pg.wait_for_timeout(200)
+        repeat = sum(sizes)
+        extra.append((w, round(chrome), repeat))
+        bad |= chrome > CHROME_MAX or repeat > REPEAT_MAX
+        pg.close()
+        if ADMIN_EMAIL and ADMIN_PASSWORD:
+            pg = ctx.new_page()
+            pg.goto(BASE + "/admin/login", wait_until="load")
+            pg.fill("#email", ADMIN_EMAIL)
+            pg.fill("#password", ADMIN_PASSWORD)
+            pg.click("button[type=submit]")
+            pg.wait_for_load_state("load")
+            pg.goto(BASE + "/admin/accounts", wait_until="load")
+            r = pg.evaluate(JS, w)
+            hard = [t for t in r["taps"] if not t["inline"]]
+            rows.append(("admin-acct", w, f'{r["sw"]}/{w}', len(hard), len(r["taps"]) - len(hard), len(r["small"])))
+            details[f"admin-acct@{w}"] = {"overflow": r["overflow"], "taps": hard[:8], "inline": [], "small": r["small"][:5]}
+            bad |= r["sw"] > w or bool(r["small"]) or bool(hard)
+            pg.close()
         ctx.close()
     br.close()
 
@@ -106,5 +138,8 @@ if "-v" in sys.argv or "--verbose" in sys.argv or True:
     for k, v in details.items():
         if v["overflow"] or v["taps"] or v["small"] or v["inline"]:
             print(f"\n{k}\n  " + json.dumps(v, ensure_ascii=False, indent=1).replace("\n", "\n  "))
+print(f"\n{'width':>6}{'utility+header px':>19}{'repeat visit /':>16}")
+for w, chrome, repeat in extra:
+    print(f"{w:>6}{chrome:>19}{repeat:>13} B")
 print("\nANSWER:", ANSWER, " REFUSAL:", REFUSAL)
 sys.exit(1 if bad else 0)

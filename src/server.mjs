@@ -4,10 +4,11 @@
 import http from 'node:http';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from 'node:fs';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 
 import * as dbm from './db.mjs';
 import { checkNote, decidePublication, loadRules } from './gate.mjs';
-import { buildIndex, search, coverage } from './retrieval.mjs';
+import { buildIndex, search, coverage, questionLang } from './retrieval.mjs';
 import { askFromCorpus, llmConfig } from './llm.mjs';
 import { quote, formatVnd, MIN_MINUTES, transferInstruction, suggestRateVnd } from './pricing.mjs';
 import { parseLocal } from './when.mjs';
@@ -17,6 +18,7 @@ import { checkExpert, checkInvite, checkInviteAcceptance, checkMeetingUrl } from
 import * as views from './views.mjs';
 import { cachePolicy, buildServiceWorker, MANIFEST, PUBLIC_DIR } from './pwa.mjs';
 import { serveStatic } from './static.mjs';
+import * as outbox from './outbox.mjs';
 import { createLimiter, DEFAULT_LIMITS } from './ratelimit.mjs';
 import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookies, newSessionId, sessionExpiry, hashPassword, verifyPassword, needsRehash, Busy, checkEmail, checkPassword, checkName, sessionIdFrom } from './auth.mjs';
 
@@ -143,6 +145,13 @@ export function loadConfig(env = process.env) {
     // Behind the Cloudflare tunnel every visitor reaches us from 127.0.0.1; with this set the limiter
     // keys on the address the proxy reports. Off by default: on a direct bind the header is forgeable.
     trustProxy: merged.GEMBA_TRUST_PROXY === '1',
+    // Outbound mail (src/outbox.mjs). The origin goes into every link a message carries, so a real
+    // deployment sets GEMBA_PUBLIC_URL; the transport is 'sendmail', 'file' or unset (nothing is sent).
+    publicUrl: (merged.GEMBA_PUBLIC_URL || '').replace(/\/+$/, ''),
+    mailTransport: ['sendmail', 'file'].includes(merged.GEMBA_MAIL_TRANSPORT) ? merged.GEMBA_MAIL_TRANSPORT : '',
+    sendmailPath: merged.GEMBA_SENDMAIL || '',
+    mailFrom: merged.GEMBA_MAIL_FROM || 'Gemba <gemba@localhost>',
+    operatorEmail: merged.GEMBA_OPERATOR_EMAIL || '',
     llm: llmConfig(merged)
   };
 }
@@ -173,7 +182,7 @@ const pricingFor = (db) => {
 };
 const NOT_CONFIRMED = 'The practitioner has not confirmed the time yet; no payment was requested.';
 
-export function createApp({ dbPath, config = loadConfig(), rules = loadRules() } = {}) {
+export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), transport = null, sweepEveryMs = 0 } = {}) {
   // The configured path wins. GEMBA_DB / GEMBA_DATA_DIR are what the README, the systemd unit, the
   // installer and the container volume all describe, so the running app has to open *that* file.
   // (It used to default to a relative 'data/gemba.db', which silently ignored the configuration:
@@ -187,6 +196,20 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
   // public/, so a deploy that changes any of them gives clients a new cache name and drops the old ones.
   const sw = buildServiceWorker();
   const manifestJson = JSON.stringify(MANIFEST);
+  const cssRaw = Buffer.from(views.CSS);
+  const cssGz = gzipSync(cssRaw);
+  // Links in a message need an absolute origin; the request's own origin is not known to a timer.
+  const publicUrl = () => config.publicUrl || `http://localhost:${server?.address?.()?.port ?? config.port}`;
+  const mailTransport = outbox.transportFrom(config, transport);
+  const operatorEmails = () => (config.operatorEmail ? [config.operatorEmail] : []);
+  const runOutbox = (extra = {}) => outbox.runOnce(db, { transport: mailTransport, publicUrl: publicUrl(), operatorEmails: operatorEmails(), from: config.mailFrom, ...extra });
+  // Every booking state change goes through here, so the message that goes with it is written in the same
+  // transaction as the change; a failed or refused transition says nothing.
+  const transition = (ref, to, opts) => dbm.tx(db, () => {
+    const r = dbm.transitionBooking(db, ref, to, opts);
+    if (r.ok) outbox.afterTransition(db, r.booking, to, { publicUrl: publicUrl() });
+    return r;
+  });
   const rebuildIndex = () => {
     index = buildIndex(dbm.publishedNotes(db));
     return index;
@@ -196,7 +219,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const hits = search(text, index, 5);
     const cov = coverage(text, hits, index);
     const inferredTopic = topic || hits[0]?.note?.topic || 'other';
-    const ai = await askFromCorpus({ question: text, hits, plantType: plant_type, coverageVerdict: cov, cfg: config.llm });
+    const lang = questionLang(text);
+    const ai = await askFromCorpus({ question: text, hits, plantType: plant_type, lang, coverageVerdict: cov, cfg: config.llm });
     // The row and its event are one fact; the model call above is the only await, and it is finished.
     const q = dbm.tx(db, () => {
       const row = dbm.insertQuestion(db, {
@@ -211,6 +235,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         ai_coverage: ai.coverage,
         ai_mode: ai.mode,
         ai_missing: ai.missing,
+        lang,
         user_id,
         claim_hash
       });
@@ -239,16 +264,28 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     return (ref, contact) => {
       const q = dbm.questionByRef(db, ref);
       if (!q) return null;
-      const pool = dbm.expertsForTopic(db, q.topic).slice(0, MAX_EXPERTS_PER_QUESTION);
-      const due = new Date(Date.now() + ROUTE_DUE_HOURS * 3600 * 1000).toISOString();
-      const routed = pool.length ? pool : dbm.listExperts(db).slice(0, 1);
-      const updated = dbm.tx(db, () => {
-        const row = dbm.routeQuestion(db, ref, routed.map((e) => e.id), due);
-        dbm.logEvent(db, 'escalate', ref, `-> ${routed.map((e) => e.slug).join(', ')} due ${due}`);
-        return row;
-      });
-      return { question: updated, routed };
+      // A question that is already routed stays as it is. Anyone holding the ref can post here, and
+      // re-routing would move `due_at` on every post: the 48-hour promise could be postponed forever.
+      if (q.status === 'routed' || q.status === 'answered') return { question: q, routed: [], unchanged: true };
+      return route(q, dbm.expertsForTopic(db, q.topic));
     };
+  }
+
+  /** Route a question to a pool of practitioners, set its due time, and write the messages, as one change. */
+  function route(q, candidates, { exclude = null, suffix = '' } = {}) {
+    let pool = candidates.filter((e) => e.id !== exclude).slice(0, MAX_EXPERTS_PER_QUESTION);
+    // Nobody else covers the topic: the same practitioners again beat a question that goes nowhere.
+    if (!pool.length) pool = candidates.slice(0, MAX_EXPERTS_PER_QUESTION);
+    const due = new Date(Date.now() + ROUTE_DUE_HOURS * 3600 * 1000).toISOString();
+    const routed = pool.length ? pool : dbm.listExperts(db).slice(0, 1);
+    const updated = dbm.tx(db, () => {
+      const row = dbm.routeQuestion(db, q.ref, routed.map((e) => e.id), due);
+      db.prepare('update questions set breach_at = null where id = ?').run(q.id);
+      dbm.logEvent(db, 'escalate', q.ref, `-> ${routed.map((e) => e.slug).join(', ')} due ${due}${suffix}`);
+      outbox.queueRouted(db, { ...row, breach_at: null }, routed, { publicUrl: publicUrl() });
+      return row;
+    });
+    return { question: updated, routed };
   }
 
   async function handle(req, res, body) {
@@ -262,11 +299,28 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const cookies = parseCookies(req.headers.cookie);
     const textSize = ['normal', 'large', 'xl'].includes(cookies[TEXT_COOKIE]) ? cookies[TEXT_COOKIE] : 'normal';
     const send = (code, html, headers = {}) => {
-      res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', ...headers });
       // A signed-in person's forms carry their session's CSRF token. Notes are the one signed-in page a
       // worker may cache, so they are left without it (their only forms set a preference cookie).
       const tokened = typeof html === 'string' && account && cachePolicy(path, method) !== 'swr' ? views.withCsrf(html, dbm.csrfFor(db, sessionId)) : html;
-      res.end(typeof tokened === 'string' ? views.withTextSize(tokened, textSize) : tokened);
+      const page = typeof tokened === 'string' ? views.withTextSize(tokened, textSize) : tokened;
+      // A guest's page is compressed and revalidated with an ETag (the phone user on a weak signal is a guest).
+      // A signed-in page is neither: it carries a CSRF token beside text the asker typed, which is what BREACH
+      // reads out of a compressed length, and it is `private, no-store` anyway.
+      if (typeof page === 'string' && !account && code === 200 && (method === 'GET' || method === 'HEAD') && !('set-cookie' in headers)) {
+        const raw = Buffer.from(page);
+        const etag = `"${createHash('sha256').update(raw).digest('base64url').slice(0, 22)}"`;
+        const gz = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''));
+        const base = { 'content-type': 'text/html; charset=utf-8', etag, vary: 'accept-encoding', ...headers };
+        if (String(req.headers['if-none-match'] ?? '').split(',').some((t) => t.trim().replace(/^W\//, '') === etag)) {
+          res.writeHead(304, { etag, vary: 'accept-encoding', ...(headers['cache-control'] ? { 'cache-control': headers['cache-control'] } : {}) });
+          return res.end();
+        }
+        const out = gz ? gzipSync(raw) : raw;
+        res.writeHead(200, { ...base, ...(gz ? { 'content-encoding': 'gzip' } : {}), 'content-length': out.length });
+        return res.end(method === 'HEAD' ? undefined : out);
+      }
+      res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', ...headers });
+      res.end(page);
     };
     // Absolute URL of this request's page, for the share block. x-forwarded-proto is honoured the way
     // the session cookie honours it; the Host header is used only if it looks like a host.
@@ -290,6 +344,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         const html = String(headers['content-type'] ?? '').startsWith('text/html');
         if (keys.includes('set-cookie') || policy === 'none' || policy === 'network-first' || (account && html && policy !== 'swr')) {
           headers = { ...headers, 'cache-control': 'private, no-store' };
+        } else if (html && policy !== 'swr' && keys.includes('etag')) {
+          // a guest page with an ETag: the browser may keep it but must ask before it uses it (a note says nothing, as it always has)
+          headers = { ...headers, 'cache-control': 'no-cache' };
         }
       }
       return writeHead.call(this, code, headers);
@@ -362,7 +419,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     // without credentials, so a gated instance would otherwise never be installable. All five are
     // public by construction: the manifest and sw.js are generated from constants and the repo's own
     // source, the icons are static art, and /offline renders the signed-out frame with no data.
-    const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
+    const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|app\.[0-9a-f]{12}\.css|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
     if (!gateExempt && !account && !basicAuthOk(req.headers.authorization, config)) {
       res.writeHead(401, {
         'www-authenticate': 'Basic realm="gemba", charset="UTF-8"',
@@ -398,7 +455,18 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       });
       return res.end(method === 'HEAD' ? undefined : isSw ? sw.source : manifestJson);
     }
+    if (path === views.CSS_HREF && (method === 'GET' || method === 'HEAD')) {
+      const etag = `"${path.slice(5, 17)}"`;
+      const gz = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''));
+      const headers = { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=31536000, immutable', etag, vary: 'accept-encoding' };
+      if (req.headers['if-none-match'] === etag) { res.writeHead(304, headers); return res.end(); }
+      res.writeHead(200, { ...headers, ...(gz ? { 'content-encoding': 'gzip' } : {}), 'content-length': gz ? cssGz.length : cssRaw.length });
+      return res.end(method === 'HEAD' ? undefined : gz ? cssGz : cssRaw);
+    }
     if (path === '/offline' && method === 'GET') return send(200, views.offlinePage());
+    // Terms, privacy and complaints, in Vietnamese: drafts marked for counsel (src/views.mjs LEGAL_PAGES).
+    const legalMatch = /^\/(dieu-khoan|bao-mat|khieu-nai)$/.exec(path);
+    if (legalMatch && (method === 'GET' || method === 'HEAD')) return send(200, views.legalPage({ slug: legalMatch[1], user }));
 
     // --- reader preferences: both answer with a cookie, so both are `no-store` -----------------
     if (path === '/prefs/text' && method === 'POST') {
@@ -671,6 +739,19 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           flash: url.searchParams.get('saved') === '1' ? 'Saved. Prices use these immediately.' : ''
         }));
       }
+      if (path === '/admin/outbox/sweep' && method === 'POST') {
+        const r = await runOutbox();
+        dbm.logEvent(db, 'admin', 'outbox', `actor=${actor} sweep breached=${r.breached} sent=${r.sent}`);
+        return redirect(`/admin/outbox?swept=${r.breached}`);
+      }
+      if (path === '/admin/outbox') {
+        const status = ['pending', 'sent', 'failed'].includes(url.searchParams.get('status')) ? url.searchParams.get('status') : '';
+        return send(200, views.adminOutboxPage({
+          admin: account, status, rows: dbm.outboxRows(db, { status, limit: 200 }), counts: dbm.outboxCounts(db),
+          breaches: dbm.breachedQuestions(db), delivery: mailTransport ? 'configured' : 'none',
+          flash: url.searchParams.get('swept') !== null ? `Sweep done: ${Number(url.searchParams.get('swept')) || 0} newly late.` : ''
+        }));
+      }
       if (path === '/admin/audit') {
         const kind = url.searchParams.get('kind') ?? '';
         return send(200, views.adminAuditPage({
@@ -901,7 +982,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           // sentence. Payment is not auto-stepped from `requested`: that would mark money received for
           // a session nobody has confirmed.
           if (action === 'paid' && b.status === 'requested') return back({ error: NOT_CONFIRMED });
-          const r = dbm.transitionBooking(db, ref, action === 'paid' ? 'paid' : 'completed', {
+          const r = transition(ref, action === 'paid' ? 'paid' : 'completed', {
             actor, note: `${b.price_vnd}`,
             fields: action === 'paid' && String(form.payment_ref ?? '').trim() ? { payment_ref: String(form.payment_ref).trim().slice(0, 100) } : {}
           });
@@ -1052,6 +1133,18 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       escalate()(ref, form.contact);
       return redirect(`/q/${ref}`);
     }
+    const rerouteMatch = /^\/q\/([^/]+)\/reroute$/.exec(path);
+    if (rerouteMatch && method === 'POST') {
+      const ref = decodeURIComponent(rerouteMatch[1]);
+      const q = dbm.questionByRef(db, ref);
+      if (!q) return fail(404, 'No such question.');
+      // Only the person who asked (or the operator) moves a late question, and only once it is late.
+      if (!ownerOf(q, account, cookies)) return fail(403, 'Only the person who asked can send this question on.');
+      if (q.status !== 'routed' || !q.breach_at) return redirect(`/q/${ref}`);
+      route(q, dbm.expertsForTopic(db, q.topic), { exclude: q.expert_id, suffix: ' (re-routed after a breach)' });
+      dbm.logEvent(db, 'reroute', ref, 'after breach');
+      return redirect(`/q/${ref}`);
+    }
     const bookFromQ = /^\/q\/([^/]+)\/book$/.exec(path);
     if (bookFromQ && method === 'POST') return createBooking(send, redirect, { ref: decodeURIComponent(bookFromQ[1]), form });
     if (path === '/book' && method === 'POST') return createBooking(send, redirect, { ref: '', form });
@@ -1083,7 +1176,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         minutes: money.minutes,
         price_vnd: money.price_vnd,
         fee_vnd: money.fee_vnd,
-        payout_vnd: money.payout_vnd
+        payout_vnd: money.payout_vnd,
+        lang: q?.lang ?? questionLang(String(form.agenda ?? ''))
       });
       if (!made.ok) return fail(409, made.error);
       dbm.logEvent(db, made.duplicate ? 'booking_duplicate' : 'booking', made.booking.ref, `${expert.slug} ${minutes}p ${money.price_vnd}`);
@@ -1098,6 +1192,18 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         ? transferInstruction({ bankBin: config.bankBin, account: config.bankAccount, amountVnd: b.price_vnd, ref: b.ref })
         : null;
       return send(200, views.bookingPage({ b, instruction, bankConfigured: Boolean(instruction), user }));
+    }
+    const icsMatch = /^\/b\/([^/]+)\/session\.ics$/.exec(path);
+    if (icsMatch && (method === 'GET' || method === 'HEAD')) {
+      const b = dbm.bookingByRef(db, decodeURIComponent(icsMatch[1]));
+      const ics = b && ['paid', 'completed'].includes(b.status) ? outbox.icsFor(b, { publicUrl: publicUrl() }) : null;
+      if (!ics) return fail(404, 'No calendar file for this booking.');
+      res.writeHead(200, {
+        'content-type': 'text/calendar; charset=utf-8',
+        'content-disposition': `attachment; filename="gemba-${b.ref}.ics"`,
+        'cache-control': 'private, no-store'
+      });
+      return res.end(method === 'HEAD' ? undefined : ics);
     }
     const paidMatch = /^\/b\/([^/]+)\/transferred$/.exec(path);
     if (paidMatch && method === 'POST') {
@@ -1206,7 +1312,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         if (!b || b.expert_id !== expert.id) return fail(404, 'No such booking.');
         const who = `expert:${expert.slug}`;
         if (form.action === 'decline') {
-          const r = dbm.transitionBooking(db, b.ref, 'cancelled', {
+          const r = transition(b.ref, 'cancelled', {
             actor: who,
             fields: { cancelled_at: new Date().toISOString(), cancel_reason: 'declined by the practitioner', refund_vnd: 0 }
           });
@@ -1215,7 +1321,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         if (form.action !== 'confirm') return fail(400, 'Choose confirm or decline.');
         const link = checkMeetingUrl(form.meeting_url);
         if (!link.ok) return fail(400, link.error);
-        const r = dbm.transitionBooking(db, b.ref, 'awaiting_payment', { actor: who, fields: { meeting_url: link.url } });
+        const r = transition(b.ref, 'awaiting_payment', { actor: who, fields: { meeting_url: link.url } });
         return redirect(r.ok ? `/c/${token}` : `/c/${token}?err=${encodeURIComponent(r.error)}`);
       }
       if (sub === '/answer' && method === 'POST') {
@@ -1228,7 +1334,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
         const decision = decidePublication({ title: '', body: text }, { attested, rules });
         dbm.logEvent(db, 'answer_submit', ref, `${decision.reason} findings=${decision.report.findings.filter((f) => f.severity !== 'note').length}`);
         if (!decision.publish) return send(422, views.blockedNotePage({ expert, decision, title: '', answer: { ref, body: text } }));
-        dbm.addAnswer(db, { questionRef: ref, expertId: expert.id, body: text });
+        dbm.tx(db, () => {
+          const answered = dbm.addAnswer(db, { questionRef: ref, expertId: expert.id, body: text });
+          if (answered) outbox.queueAnswered(db, answered, { publicUrl: publicUrl() });
+        });
         return redirect(`/c/${expert.token}`);
       }
       if (sub === '/note' && method === 'POST') {
@@ -1347,11 +1456,11 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       if (sub === '/confirm' && method === 'POST') {
         const ref = String(form.ref ?? '');
         const b = dbm.bookingByRef(db, ref);
-        const r = b?.status === 'requested' ? { ok: false, error: NOT_CONFIRMED } : dbm.transitionBooking(db, ref, 'paid', { actor: 'qt-link' });
+        const r = b?.status === 'requested' ? { ok: false, error: NOT_CONFIRMED } : transition(ref, 'paid', { actor: 'qt-link' });
         return redirect(r.ok ? `/qt/${token}` : `/qt/${token}?err=${encodeURIComponent(r.error)}`);
       }
       if (sub === '/complete' && method === 'POST') {
-        const r = dbm.transitionBooking(db, String(form.ref ?? ''), 'completed', { actor: 'qt-link' });
+        const r = transition(String(form.ref ?? ''), 'completed', { actor: 'qt-link' });
         return redirect(r.ok ? `/qt/${token}` : `/qt/${token}?err=${encodeURIComponent(r.error)}`);
       }
       return send(200, views.adminPage({
@@ -1444,9 +1553,23 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
 
   // Stop taking requests, let the ones in flight finish, then fold the WAL into the database file and close it.
   // Idempotent: a second call returns the first call's promise.
+  // The 48-hour sweep and the outbox runner, on a timer. Off unless asked for, so a test that builds an app
+  // starts nothing; a throw inside is logged and never reaches the process.
+  let sweepTimer = null;
+  let sweeping = false;
+  if (sweepEveryMs > 0) {
+    sweepTimer = setInterval(async () => {
+      if (sweeping) return;
+      sweeping = true;
+      try { await runOutbox(); } catch (err) { console.error('outbox sweep failed:', err.message); } finally { sweeping = false; }
+    }, sweepEveryMs);
+    sweepTimer.unref();
+  }
+
   let closing = null;
   function shutdown({ graceMs = 2000 } = {}) {
     if (closing) return closing;
+    if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
     closing = new Promise((resolve) => {
       const finish = () => {
         try {
@@ -1465,7 +1588,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     return closing;
   }
 
-  return { server, db, sw, index: () => index, rebuildIndex, runAsk, escalate: escalate(), config, rules, shutdown };
+  return { server, db, sw, index: () => index, rebuildIndex, runAsk, escalate: escalate(), runOutbox, transition, config, rules, shutdown, sweepTimer: () => sweepTimer };
 }
 
 /** A slug nobody has taken. `uniqueSlug` below is for notes; practitioners need their own. */
@@ -1494,7 +1617,9 @@ function uniqueSlug(db, base) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const app = createApp();
+  const app = createApp({ sweepEveryMs: 60_000 });
+  if (!app.config.publicUrl) console.warn('  GEMBA_PUBLIC_URL is not set: links in outgoing messages will point at http://localhost');
+  if (!app.config.mailTransport) console.warn('  GEMBA_MAIL_TRANSPORT is not set: messages wait in the outbox as pending (see /admin/outbox)');
   app.server.listen(app.config.port, app.config.host, () => {
     const { bankBin, bankAccount } = app.config;
     console.log(`Gemba listening on http://${app.config.host}:${app.server.address().port}`);

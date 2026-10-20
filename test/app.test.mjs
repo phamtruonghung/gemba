@@ -234,8 +234,8 @@ test('money: a booking is priced in VND, split, and never marked paid by the sys
   const ref = location.split('/').pop();
 
   const page = await (await fetch(`${base}${location}`)).text();
-  assert.match(page, /800,000 VND/, 'one hour at the expert rate');
-  assert.match(page, /640,000 VND/, 'expert payout after the 20% platform fee');
+  assert.match(page, /800\.000\u00a0₫/, 'one hour at the expert rate');
+  assert.match(page, /640\.000\u00a0₫/, 'expert payout after the 20% platform fee');
   assert.match(page, /waiting for .* to confirm/i, 'the client is told the practitioner has to confirm the time first');
   assert.ok(!/vietqr/.test(page), 'and is not asked for money before that');
   assert.match(page, /waiting for the practitioner to confirm the time/, 'status shown as an English label, never the raw token');
