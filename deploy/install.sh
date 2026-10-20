@@ -38,19 +38,32 @@ say "0. rename migration (a legacy installation is moved in place)"
 # the old name. It exits immediately on a host that never used the old name.
 bash "$SRC_DIR/deploy/migrate-rename.sh"
 
-say "1. Node runtime (>= 22.5, for node:sqlite)"
+say "1. Node runtime (>= 22.13, for node:sqlite)"
 if [ -x "$NODE_DIR/bin/node" ]; then
   echo "already installed: $("$NODE_DIR/bin/node" -v)"
 else
-  VER="$(curl -fsSL https://nodejs.org/dist/index.json | python3 -c 'import json,sys; print(next(r["version"] for r in json.load(sys.stdin) if r["version"].startswith("v22.")))')"
-  echo "installing Node $VER into $NODE_DIR"
+  case "$(uname -m)" in
+    x86_64|amd64) NODE_ARCH=x64 ;;
+    aarch64|arm64) NODE_ARCH=arm64 ;;
+    *) echo "unsupported architecture $(uname -m): install Node >= 22.13 yourself at $NODE_DIR" >&2; exit 1 ;;
+  esac
+  VER="${GEMBA_NODE_VERSION:-$(curl -fsSL https://nodejs.org/dist/index.json | python3 -c 'import json,sys; print(next(r["version"] for r in json.load(sys.stdin) if r["version"].startswith("v22.")))')}"
+  echo "installing Node $VER ($NODE_ARCH) into $NODE_DIR"
   tmp="$(mktemp -d)"
-  curl -fsSL "https://nodejs.org/dist/$VER/node-$VER-linux-x64.tar.xz" -o "$tmp/node.tar.xz"
+  curl -fsSL "https://nodejs.org/dist/$VER/node-$VER-linux-$NODE_ARCH.tar.xz" -o "$tmp/node.tar.xz"
+  # Verify the download against the published checksum. This tarball becomes the runtime that answers
+  # the operator's questions; an installer that skips this trusts whatever the network path returned.
+  curl -fsSL "https://nodejs.org/dist/$VER/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
+  ( cd "$tmp" && sha256sum --ignore-missing -c SHASUMS256.txt | grep -F "node-$VER-linux-$NODE_ARCH.tar.xz: OK" )
   mkdir -p "$NODE_DIR"
   tar xJf "$tmp/node.tar.xz" -C "$NODE_DIR" --strip-components=1
   rm -rf "$tmp"
   "$NODE_DIR/bin/node" -v
 fi
+# Assert the floor instead of trusting the label: node:sqlite only exists from 22.13, and a runtime
+# that cannot load it failed three steps later — after step 2 had already replaced the application
+# tree — so the error arrived as "the service is unhealthy", not "this Node is too old".
+"$NODE_DIR/bin/node" -e 'const [a,b]=process.versions.node.split(".").map(Number); if(a<22||(a===22&&b<13)){console.error(`node:sqlite needs Node >= 22.13, found ${process.versions.node}`);process.exit(1)} require("node:sqlite")' 
 
 say "2. application code -> $APP_DIR"
 mkdir -p "$APP_DIR"
@@ -79,10 +92,13 @@ else
 # Gemba runtime configuration. Mode 600 — holds the LLM key and the operator token.
 GEMBA_PORT=$PORT
 GEMBA_HOST=0.0.0.0
-GEMBA_USER=${GEMBA_USER:-}
-GEMBA_PASS=${GEMBA_PASS:-}
+# Secrets are written below by deploy/set-env.py, never by this heredoc: an unquoted heredoc
+# expands `$` and a backtick inside the value.
+GEMBA_USER=
+GEMBA_PASS=
 GEMBA_DATA_DIR=$DATA_DIR
-GEMBA_LLM_KEY=${GEMBA_LLM_KEY:-}
+# GEMBA_LLM_KEY is written below, verbatim, by deploy/set-env.py
+GEMBA_LLM_KEY=
 # Default gateway: the OpenCode one. It speaks the same OpenAI-compatible protocol, and the model
 # id below is the one *it* serves — a mismatched pair fails at the first question, not at install.
 GEMBA_LLM_BASE_URL=${GEMBA_LLM_BASE_URL:-https://opencode.ai/zen/go/v1}
@@ -106,14 +122,33 @@ for key in GEMBA_USER GEMBA_PASS; do
     echo "added the missing key $key to $ENV_DIR/gemba.env (empty — fill it in to use it)"
   fi
 done
-if [ -n "${GEMBA_USER:-}" ] && [ -n "${GEMBA_PASS:-}" ]; then
-  sed -i "s|^GEMBA_USER=.*|GEMBA_USER=$GEMBA_USER|; s|^GEMBA_PASS=.*|GEMBA_PASS=$GEMBA_PASS|" "$ENV_DIR/gemba.env"
-  echo "front gate set from this script's environment"
+# A password is data, not syntax. This used to be a `sed` replacement built out of the value: `&`
+# expanded to the matched text, `|` broke the delimiter, and a space made the later sourced file
+# execute the tail as a command. The installer then printed "front gate set" and exited 0 while the
+# service held a password nobody knew.
+if [ -n "${GEMBA_USER:-}" ] || [ -n "${GEMBA_PASS:-}" ]; then
+  if [ -z "${GEMBA_USER:-}" ] || [ -z "${GEMBA_PASS:-}" ]; then
+    echo "refusing a half-configured front gate: set both GEMBA_USER and GEMBA_PASS, or neither." >&2
+    echo "  One of them alone used to leave the instance open to the internet." >&2
+    exit 1
+  fi
+  python3 "$SRC_DIR/deploy/set-env.py" "$ENV_DIR/gemba.env" GEMBA_USER "$GEMBA_USER" GEMBA_PASS "$GEMBA_PASS"
+  echo "front gate set from this script's environment (written verbatim, mode 600)"
+fi
+if [ -n "${GEMBA_LLM_KEY:-}" ]; then
+  python3 "$SRC_DIR/deploy/set-env.py" "$ENV_DIR/gemba.env" GEMBA_LLM_KEY "$GEMBA_LLM_KEY"
+  echo "LLM key written to $ENV_DIR/gemba.env (verbatim, mode 600)"
 fi
 chmod 600 "$ENV_DIR/gemba.env"
 
 say "4. seed the corpus (idempotent: upserts by slug)"
-set -a; . "$ENV_DIR/gemba.env"; set +a
+# Read the two paths the seed and the operator step need, line by line. Sourcing this file would
+# evaluate whatever an operator put in a value (`set -a; . gemba.env` splits on spaces and runs
+# `$(...)`), which is the same class of bug as the sed rewrite above.
+GEMBA_DATA_DIR="$(sed -n 's/^GEMBA_DATA_DIR=//p' "$ENV_DIR/gemba.env" | head -1)"
+GEMBA_DB="$(sed -n 's/^GEMBA_DB=//p' "$ENV_DIR/gemba.env" | head -1)"
+export GEMBA_DATA_DIR
+if [ -n "$GEMBA_DB" ]; then export GEMBA_DB; fi
 cd "$APP_DIR"
 
 # Migration for instances deployed before the app honoured its configured database path. Back then
@@ -142,8 +177,13 @@ if [ "$OLD_DB" != "$CONFIGURED_DB" ] && [ -f "$OLD_DB" ] && [ ! -f "$CONFIGURED_
   rm -f "$OLD_DB-shm"
 fi
 if [ "$OLD_DB" != "$CONFIGURED_DB" ] && [ -f "$OLD_DB" ] && [ -f "$CONFIGURED_DB" ]; then
-  echo "note: both $OLD_DB and $CONFIGURED_DB exist — the service uses $CONFIGURED_DB."
-  echo "      Check the old one with: node scripts/probe-db.mjs $OLD_DB $CONFIGURED_DB"
+  echo "refusing to continue: two databases exist and this script cannot tell which one is live." >&2
+  echo "  old location: $OLD_DB" >&2
+  echo "  configured:   $CONFIGURED_DB" >&2
+  echo "  Seeding now would write to the new file while the old one may hold the real state, and step 8" >&2
+  echo "  removes the old directory. Compare them, then move the one you want:" >&2
+  echo "    cd $APP_DIR && node scripts/probe-db.mjs $OLD_DB $CONFIGURED_DB" >&2
+  exit 1
 fi
 
 "$NODE_DIR/bin/node" scripts/seed.mjs
@@ -154,7 +194,7 @@ say "5. operator account"
 # on a later run it leaves the existing operator alone (scripts/admin-create.mjs owns that rule).
 GEMBA_ADMIN_EMAIL="${ADMIN_EMAIL_ARG:-operator@gemba.local}" \
 GEMBA_ADMIN_PASSWORD="$ADMIN_PASSWORD_ARG" \
-"$NODE_DIR/bin/node" scripts/admin-create.mjs || true
+"$NODE_DIR/bin/node" scripts/admin-create.mjs
 unset GEMBA_ADMIN_PASSWORD
 
 say "6. systemd unit"
@@ -179,12 +219,20 @@ echo "restarted at $ACTIVE_SINCE (pid $(systemctl show gemba.service -p MainPID 
 journalctl -u gemba.service --no-pager -n 6 -o cat | sed 's/^/  /' || true
 
 say "7. verify over HTTP"
-for i in 1 2 3 4 5; do
-  if curl -fsS "http://127.0.0.1:$PORT/healthz"; then break; fi
+HEALTH_OK=0
+for i in $(seq 1 15); do
+  if curl -fsS "http://127.0.0.1:$PORT/healthz"; then HEALTH_OK=1; break; fi
   sleep 2
 done
 echo
-echo "health above must show ok:true and the note count."
+if [ "$HEALTH_OK" -ne 1 ]; then
+  echo "ERROR: the service did not answer /healthz within 30s — it is not running." >&2
+  systemctl --no-pager --lines=20 status gemba.service >&2 || true
+  journalctl -u gemba.service --no-pager -n 40 -o cat >&2 || true
+  echo "  Nothing below would be testing anything. Fix the service, then re-run." >&2
+  exit 1
+fi
+echo "health: ok:true above, with the note count."
 # One factual question through the live AI tier, so a broken key shows up here and not in front
 # of a customer. It is a real question about a real note in the seeded corpus — and the installer
 # then deletes the row it created: a verification step must not leave its own test data on the
@@ -214,6 +262,20 @@ if [ -n "$PROBE_REF" ]; then
     const n = db.prepare("DELETE FROM questions WHERE ref = ?").run(process.env.PROBE_REF).changes;
     console.log("  probe question removed from the instance:", n, "row");
     db.close();'
+fi
+
+say "7b. backup timer"
+# A deployment that can lose its database in a disk failure is a demonstration, not a deployment.
+# The timer is installed here and the first copy is taken now, so the schedule is never the only
+# thing standing between a live instance and an empty directory.
+install -m 644 "$APP_DIR/deploy/gemba-backup.service" /etc/systemd/system/gemba-backup.service
+install -m 644 "$APP_DIR/deploy/gemba-backup.timer" /etc/systemd/system/gemba-backup.timer
+systemctl daemon-reload
+systemctl enable --now gemba-backup.timer
+if "$APP_DIR/deploy/gemba-backup.sh"; then
+  echo "first backup taken; check it any time with: $APP_DIR/deploy/gemba-backup.sh --list"
+else
+  echo "WARNING: the first backup failed — the timer is installed but there is no copy yet." >&2
 fi
 
 say "8. legacy directories"

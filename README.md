@@ -10,7 +10,7 @@ act on from a plausible paragraph a language model invented, and it is what turn
 question into revenue.
 
 - **Status:** prototype, running on the LAN. Demo corpus, one demo expert profile, no real money moves.
-- **Runtime:** Node ≥ 22.5, `node:http` + `node:sqlite`, zero dependencies, no build step.
+- **Runtime:** Node ≥ 22.13, `node:http` + `node:sqlite`, zero dependencies, no build step.
 - **UI:** English, server-rendered HTML, no build step and no framework.
 
 ## The four rungs
@@ -125,7 +125,7 @@ is produced by the model itself under the prompt contract, not by a regex on its
 ## Run it yourself
 
 ```bash
-node --version            # needs >= 22.5 for node:sqlite
+node --version            # needs >= 22.13 for node:sqlite
 npm run seed              # creates data/gemba.db: expert profiles + the corpus, every note through the gate
 npm start                 # http://127.0.0.1:8090
 npm test                  # node --test test/*.test.mjs
@@ -327,6 +327,26 @@ It runs as a systemd service (`gemba.service`) on the demo host `192.168.1.150:8
 there belong to another stack, so the app is published on 8090 — a reverse proxy is the deployment's
 job, not the app's.
 
+### Backups, and the one thing that must never be lost
+
+The database is the product's only state: the questions, the bookings, what was paid, the published
+notes. `deploy/gemba-backup.sh` takes a **transactionally consistent** copy (`VACUUM INTO`), opens it
+again, runs SQLite's integrity check, prints the row counts, and prunes copies older than seven days.
+`deploy/gemba-backup.timer` runs it hourly; the installer enables the timer and takes the first copy, so
+a fresh install is never the only copy.
+
+```bash
+deploy/gemba-backup.sh                    # take one now
+deploy/gemba-backup.sh --list             # what is held, with ages
+deploy/gemba-backup.sh --verify <file>    # does this copy open, and what is in it
+GEMBA_BACKUP_REMOTE=b2:gemba-backups deploy/gemba-backup.sh   # and copy it off the host
+```
+
+Restoring is a deliberate act, not a command in a script: stop the service, prove the copy opens with
+`--verify`, move the live file aside rather than over it, put the copy in its place, start the service,
+and ask `/healthz`. Copying or `tar`-ing a live volume is the thing this replaces: it can capture the
+database and its write-ahead log at different instants, which restores into a database that never existed.
+
 ### Docker, to move it to another machine
 
 The whole product is one Node process — no separate frontend service, no build step, no database
@@ -371,7 +391,9 @@ gate rather than relying on the deployment to remember one:
 - set `GEMBA_USER` and `GEMBA_PASS` and every path — the pages, `/api/ask`, the expert desks, the
   console — answers `401` with a basic-auth challenge until the browser authenticates;
 - `/healthz` stays open (it is the readiness probe) and deliberately does not print the database path;
-- with neither variable set the app is open, which is what local development wants.
+- with neither variable set the app is open, which is what local development wants;
+- the installer refuses to continue when only one of the pair is set: a half-configured gate used to
+  leave the instance open while every check reported it configured.
 
 Tunnelling is the deployment's business, not the app's. On this host the tunnel is managed in the
 Cloudflare dashboard (a token-managed `cloudflared` runs on the Proxmox host), so a public hostname

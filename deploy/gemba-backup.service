@@ -1,0 +1,21 @@
+[Unit]
+Description=Gemba database backup (transactionally consistent copy, verified, pruned)
+Documentation=https://github.com/phamtruonghung/gemba
+After=gemba.service
+# A failed backup must not take the app down with it, and a backup must still run when the app is
+# stopped for maintenance — hence no Requires= on gemba.service.
+ConditionPathExists=/var/lib/gemba/gemba.db
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gemba/deploy/gemba-backup.sh
+Environment=GEMBA_BACKUP_KEEP_DAYS=7
+# Writes the copy and the temporary VACUUM file; nothing else.
+ReadWritePaths=/var/backups/gemba /var/lib/gemba
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=300

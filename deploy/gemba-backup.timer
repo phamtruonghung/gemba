@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly Gemba database backup
+
+[Timer]
+# Hourly, but not on the hour: every deployment in the world backs up at :00.
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+AccuracySec=1min
+Unit=gemba-backup.service
+
+[Install]
+WantedBy=timers.target
