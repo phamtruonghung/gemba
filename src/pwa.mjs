@@ -82,7 +82,7 @@ export function cachePolicy(pathname, method) {
   if (/^\/(account|admin|signin|signup|signout|invite|ask|c|q|b|qt|healthz)(\/|$)/.test(p)) return 'none';
   if (/^\/api(\/|$)/.test(p)) return 'network-first';
   if (/^\/notes\/[^\/]+$/.test(p)) return 'swr';
-  if (['/', '/library', '/how-it-works', '/experts', '/offline', '/manifest.webmanifest'].indexOf(p) >= 0) return 'shell';
+  if (['/', '/library', '/how-it-works', '/experts', '/offline', '/manifest.webmanifest', '/dieu-khoan', '/bao-mat', '/khieu-nai'].indexOf(p) >= 0) return 'shell';
   if (/^\/icons\/[^\/]+$/.test(p)) return 'shell';
   if (/^\/app\.[0-9a-f]{12}\.css$/.test(p)) return 'shell';
   return 'none';

@@ -27,6 +27,7 @@ import { formatVnd, MIN_MINUTES, MAX_MINUTES, PLATFORM_TAKE_PCT, quote } from '.
 import { ATTESTATION_TEXT } from './gate.mjs';
 import { SCRIPT } from './interview.mjs';
 import { formatLocal } from './when.mjs';
+import { t } from './i18n.mjs';
 import { renderMarkdown, markdownToText } from './markdown.mjs';
 import { SETTING_SPECS, SETTING_KEYS } from './settings.mjs';
 
@@ -422,6 +423,7 @@ footer.site .inner{max-width:1200px;margin:0 auto;padding:var(--space-8) var(--s
 .foot-cols li{margin:0}
 .foot-cols a{color:var(--color-foreground);text-decoration:none;min-height:44px;display:inline-flex;align-items:center}
 .foot-cols a:hover{color:var(--color-accent-ink);text-decoration:underline}
+.foot-base a{display:inline-flex;align-items:center;min-height:44px;color:inherit}
 .foot-base{border-top:1px solid var(--color-border);margin-top:var(--space-6);padding-top:var(--space-4);display:flex;justify-content:space-between;gap:var(--space-4);flex-wrap:wrap;font-size:13.5px;color:var(--color-muted-foreground)}
 /* the action bar is a plain row of buttons wherever there is room (and always without a layout engine) */
 .actionbar{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;margin:var(--space-3) 0}
@@ -631,6 +633,7 @@ ${head}
   </div>
   <div class="foot-base">
     <span>Gemba — a factory-knowledge platform, built in Vietnam.</span>
+    <span class="row tight-gap" lang="vi"><a href="/dieu-khoan">Điều khoản</a><a href="/bao-mat">Bảo mật</a><a href="/khieu-nai">Khiếu nại</a></span>
     <span class="row tight-gap"><span>Prototype (v0.1): sample experts, no real transactions yet.</span><span>MIT licensed.</span></span>
   </div>
 </div></footer>
@@ -675,11 +678,22 @@ function eyebrowRow(items) {
     .join('<span aria-hidden="true">·</span>')}</p>`;
 }
 
+/**
+ * A string that decides trust, in both languages for a page that has no question to take a language from:
+ * Vietnamese first, the English beneath it (or after a dot, inside a button or a label).
+ */
+function bi(key, vars = {}, { inline = false } = {}) {
+  const en = esc(t(key, 'en', vars));
+  return `<span lang="vi">${esc(t(key, 'vi', vars))}</span>${inline
+    ? `<span lang="en" style="font-weight:400"> · ${en}</span>`
+    : `<span lang="en" class="small muted" style="display:block;font-weight:400;letter-spacing:0;text-transform:none">${en}</span>`}`;
+}
+
 function askForm({ q = '', action = '/ask', user = null } = {}) {
   return `<form method="post" action="${action}" class="card" id="ask" data-pending="Thinking…">
-  <h2 style="font-size:clamp(21px,2.3vw,27px)">Your question about production</h2>
-  <label for="q">Your question</label>
-  <p class="hint" id="q-hint">One question, as you would ask a colleague. The more specific it is, the better the answer.</p>
+  <h2 style="font-size:clamp(21px,2.3vw,27px)">${bi('ask_heading')}</h2>
+  <label for="q">${bi('ask_label')}</label>
+  <p class="hint" id="q-hint">${bi('ask_hint')}</p>
   <textarea id="q" name="q" aria-describedby="q-hint" placeholder="For example: the press keeps stopping mid-shift — what should I check, and in what order?">${esc(q)}</textarea>
   <div class="form-row two">
     <div class="field"><label for="plant_type">Type of plant <span class="muted" style="font-weight:400">(optional)</span></label>
@@ -688,7 +702,7 @@ function askForm({ q = '', action = '/ask', user = null } = {}) {
       <input id="asker" name="asker" value="${user ? esc(user.name) : ''}"${user ? ' readonly' : ''} placeholder="Hung"></div>
   </div>
   <p class="pending-note" data-pending-note hidden>Reading the notes and drafting an answer from them. This can take up to twenty seconds.</p>
-  <div class="actionbar"><button class="btn" type="submit">${icon('ask')}Ask the library</button></div>
+  <div class="actionbar"><button class="btn" type="submit">${icon('ask')}${bi('ask_submit', {}, { inline: true })}</button></div>
   <p class="muted small" style="margin:0">${user ? 'This question is kept in your account.' : 'Answers cite notes written by people who worked the line. If the library does not cover it, the system says so instead of guessing — and offers to put you in touch with a practitioner.'}</p>
 </form>`;
 }
@@ -896,7 +910,7 @@ export function home({ stats, experts, notes, user = null, place = null }) {
     <div class="split">
       <div>
         <p class="eyebrow">What a practitioner is paid</p>
-        <h2>Your time is worth 600,000–800,000 VND an hour</h2>
+        <h2>Your time is worth ${formatVnd(600000).replace('\u00a0₫', '')}–${formatVnd(800000)} an hour</h2>
         <p class="lead">A session is priced in whole VND at the practitioner's own rate, with a 30-minute minimum, split into a 20% platform fee and the rest paid out to them. The platform instructs the payment and never holds the money.</p>
         <ul class="prose">
           <li><strong>A fixed, published rate.</strong> No bidding, no haggling, no surprise at the end of the call.</li>
@@ -906,8 +920,8 @@ export function home({ stats, experts, notes, user = null, place = null }) {
         <p><a class="btn alt" href="/experts">See the rates ${icon('arrow')}</a></p>
       </div>
       <div class="mock">
-        <span class="float tl"><span class="eyebrow" style="margin:0">One hour at the rate</span><span class="n">800,000 VND</span></span>
-        <span class="float br"><span class="eyebrow" style="margin:0">Paid to the practitioner</span><span class="n">640,000 VND</span></span>
+        <span class="float tl"><span class="eyebrow" style="margin:0">One hour at the rate</span><span class="n">${formatVnd(800000)}</span></span>
+        <span class="float br"><span class="eyebrow" style="margin:0">Paid to the practitioner</span><span class="n">${formatVnd(640000)}</span></span>
         <div class="mock-card">
           <p class="row tight-gap" style="margin:0 0 var(--space-2)"><span class="badge tag">Booking</span><span class="badge">30 min minimum</span></p>
           <h4>1:1 session — Hung</h4>
@@ -973,7 +987,7 @@ export function signInPage({ email = '', error = '', field: bad = '', keep = '',
   <div class="wrap">
     <div class="auth">
       <p class="eyebrow">Your account</p>
-      <h1 style="font-size:clamp(30px,4vw,42px)">Sign in</h1>
+      <h1 style="font-size:clamp(30px,4vw,42px)">${bi('signin_heading')}</h1>
       <p class="lead">An account keeps the questions you ask, the answers to them, and any 1:1 session you book. Asking without one still works.</p>
 ${error && !bad ? `<div class="notice bad" role="alert">${icon('warn')} ${esc(error)}</div>` : ''}
 <form method="post" action="/signin" class="card">
@@ -981,7 +995,7 @@ ${error && !bad ? `<div class="notice bad" role="alert">${icon('warn')} ${esc(er
   ${next ? `<input type="hidden" name="next" value="${esc(next)}">` : ''}
   ${field({ id: 'email', label: 'Email', type: 'email', value: email, error: bad === 'email' ? error : '', autocomplete: 'username', attrs: 'required' })}
   ${field({ id: 'password', label: 'Password', type: 'password', error: bad === 'password' ? error : '', autocomplete: 'current-password', attrs: 'required' })}
-  <button class="btn row" type="submit">${icon('lock')}Sign in</button>
+  <button class="btn row" type="submit">${icon('lock')}${bi('signin_button', {}, { inline: true })}</button>
 </form>
       <p class="muted">No account yet? <a href="/signup${keep ? `?keep=${encodeURIComponent(keep)}` : ''}">Create one</a> — an email and a password of at least 10 characters.</p>
       <p class="muted small">Password reset is not built yet: it needs a mail path this deployment does not have. If you are locked out, the operator can reset the account by hand.</p>
@@ -1089,6 +1103,9 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
   // gets their own signed-in email, or an empty field.
   const contactValue = claimed && q.contact ? q.contact : (user?.email ?? '');
   const cov = q.ai_coverage === 'thin';
+  // The page speaks the language the question was asked in; the strings that decide trust come from src/i18n.mjs.
+  const lang = q.lang === 'vi' ? 'vi' : 'en';
+  const L = (key, vars) => esc(t(key, lang, vars));
   const cites = aiCitations
     .map(
       (n) => `<div class="cite">
@@ -1141,29 +1158,30 @@ export function questionPage({ q, aiCitations, answers, experts, routedNames = [
 ${keepBanner}
   </div>
 </section>
-<section class="tight">
+<section class="tight"${lang === 'vi' ? ' lang="vi"' : ''}>
   <div class="wrap narrow">
     ${textSizeForm({ next: `/q/${q.ref}`, text })}
 ${cov
       ? refusalPanel({
-          heading: 'The library cannot cover this one yet',
+          heading: t('refusal_heading', lang),
           missing: missingReason(q),
           escalation: `<form method="post" action="/q/${esc(q.ref)}/ask-expert" style="margin-top:var(--space-4)">
   <div class="field">
-    <label for="asker">Your name</label>
+    <label for="asker">${L('contact_name')}</label>
     <input id="asker" name="asker" value="${esc((claimed && q.asker) || (user?.name ?? ''))}">
   </div>
   <div class="field">
-    <label for="contact">Email or phone, so the answer can reach you</label>
+    <label for="contact">${L('contact_label')}</label>
     <input id="contact" name="contact" value="${esc(contactValue)}" placeholder="…@gmail.com">
   </div>
-  <p class="hint">There is one more rung: the question goes to the practitioner covering “${esc(topicLabel(q.topic))}”, free, with a 48-hour answer window. A paid 1:1 session is available on the same page.</p>
-  <div class="actionbar"><button class="btn" type="submit">${icon('people')}Ask a practitioner</button><a class="btn alt" href="#share">${icon('arrow')}Share</a></div>
+  <p class="hint">${L('route_hint', { topic: topicLabel(q.topic) })}</p>
+  <div class="actionbar"><button class="btn" type="submit">${icon('people')}${L('ask_practitioner')}</button><a class="btn alt" href="#share">${icon('arrow')}Share</a></div>
 </form>`
         })
       : `<div class="card" style="margin-top:0">
-  <h2 style="font-size:24px">Answer from the note library <span class="badge ${modeLabel(q.ai_mode).ok ? 'ok' : ''}">${icon('check')}${esc(modeLabel(q.ai_mode).badge)}</span></h2>
-  <div class="answer">${esc(q.ai_answer || '(none yet)')}</div>
+  <h2 style="font-size:24px">${L('answer_heading')} <span class="badge ${modeLabel(q.ai_mode).ok ? 'ok' : ''}">${icon('check')}${esc(modeLabel(q.ai_mode).badge)}</span></h2>
+  ${lang === 'vi' && q.ai_mode === 'extractive' ? `<p class="small muted" lang="vi">${L('extractive_header')}</p>` : ''}
+  <div class="answer"${lang === 'vi' && q.ai_mode === 'llm' ? ' lang="vi"' : ''}>${esc(q.ai_answer || '(none yet)')}</div>
   ${cites ? `<div>${cites}</div>` : ''}
   <p class="small muted" style="margin:0">How it was produced: ${esc(modeLabel(q.ai_mode).label)}${modeLabel(q.ai_mode).ok ? '' : ' — the system quotes the note verbatim and does not paraphrase'}</p>
 </div>`}
@@ -1174,7 +1192,7 @@ ${answerBlocks}
       ? `You can send it to other practitioners now, or book a paid 1:1 session below.</div></div>
     <form method="post" action="/q/${esc(q.ref)}/reroute" class="actionbar"><button class="btn" type="submit">${icon('people')}Send it to other practitioners</button></form>`
       : 'The person who asked can send it on to others.</div></div>'}` : ''}
-    ${q.status === 'routed' ? `<div class="notice warn">${icon('people')} Sent to ${routedNames.length || 1} practitioner${(routedNames.length || 1) === 1 ? '' : 's'} covering this topic (${esc(routedNames.join(', ') || 'the practitioner on duty')}). The answer will appear on this page.</div>` : ''}
+    ${q.status === 'routed' ? `<div class="notice warn">${icon('people')} ${L('routed_notice', { n: routedNames.length || 1, s: (routedNames.length || 1) === 1 ? '' : 's', names: routedNames.join(', ') || (lang === 'vi' ? 'chuyên gia trực' : 'the practitioner on duty') })}</div>` : ''}
     <div class="card" id="book">
       <h2 style="font-size:24px">Book a 1:1 session</h2>
       <p class="muted small">An online session, paid by bank transfer. The platform keeps 20% and instructs the payment; it never holds the money.</p>
@@ -1214,11 +1232,13 @@ const durationOptions = (opts, selected = 45) => opts
   .join('');
 
 export function bookingPage({ b, instruction, bankConfigured, user = null }) {
+  const lang = b.lang === 'vi' ? 'vi' : 'en';
+  const L = (key, vars) => esc(t(key, lang, vars));
   const steps = [
-    ['requested', 'Waiting for the practitioner to confirm the time'],
-    ['awaiting_payment', 'Time confirmed — transfer the amount below'],
-    ['paid', 'Payment received — meeting link below'],
-    ['completed', 'Session completed']
+    ['requested', t('step_requested', lang)],
+    ['awaiting_payment', t('step_awaiting_payment', lang)],
+    ['paid', t('step_paid', lang)],
+    ['completed', t('step_completed', lang)]
   ];
   const idx = steps.findIndex(([s]) => s === b.status);
   return layout({
@@ -1232,33 +1252,33 @@ export function bookingPage({ b, instruction, bankConfigured, user = null }) {
     <p class="lead">${esc(b.agenda || b.topic || '')}</p>
   </div>
 </section>
-<section class="tight">
+<section class="tight"${lang === 'vi' ? ' lang="vi"' : ''}>
   <div class="wrap narrow">
     <div class="card" style="margin-top:0">
-      <h2 style="font-size:24px">What it costs</h2>
+      <h2 style="font-size:24px">${L('cost_heading')}</h2>
       <table>
         <tbody>
-          <tr><th>Session</th><td>${b.minutes} minutes at ${formatVnd(b.rate_vnd ?? (b.minutes ? Math.round((b.price_vnd / b.minutes) * 60) : 0))} an hour</td></tr>
-          <tr><th>When</th><td>${esc(formatLocal(b.starts_at))} (Vietnam time, UTC+7)</td></tr>
-          <tr><th>Total</th><td><strong>${formatVnd(b.price_vnd)}</strong></td></tr>
-          <tr><th>Platform fee (20%)</th><td>${formatVnd(b.fee_vnd)}</td></tr>
-          <tr><th>Paid to the practitioner</th><td>${formatVnd(b.payout_vnd)}</td></tr>
+          <tr><th>${L('cost_session')}</th><td>${L('cost_session_value', { minutes: b.minutes, rate: formatVnd(b.rate_vnd ?? (b.minutes ? Math.round((b.price_vnd / b.minutes) * 60) : 0)) })}</td></tr>
+          <tr><th>${L('cost_when')}</th><td>${L('cost_when_value', { when: formatLocal(b.starts_at) })}</td></tr>
+          <tr><th>${L('cost_total')}</th><td><strong>${formatVnd(b.price_vnd)}</strong></td></tr>
+          <tr><th>${L('cost_fee')}</th><td>${formatVnd(b.fee_vnd)}</td></tr>
+          <tr><th>${L('cost_payout')}</th><td>${formatVnd(b.payout_vnd)}</td></tr>
         </tbody>
       </table>
-      <p class="hint">Whole VND only, and the platform instructs the payment — it never holds the money.</p>
+      <p class="hint">${L('cost_hint')}</p>
     </div>
 ${b.status === 'requested'
       ? `<div class="notice" role="status">${icon('check')} Waiting for ${esc(b.expert_name)} to confirm ${esc(formatLocal(b.starts_at))} (Vietnam time). Transfer instructions appear here once they confirm.</div>`
       : b.status === 'awaiting_payment'
         ? (instruction
           ? `<div class="card">
-  <h2 style="font-size:24px">How to pay</h2>
-  <p>The time is confirmed. Amount <strong>${formatVnd(instruction.amount_vnd)}</strong> — put exactly this reference in the transfer note: <span class="mono">${esc(instruction.ref)}</span></p>
+  <h2 style="font-size:24px">${L('pay_heading')}</h2>
+  <p>${L('pay_text', { amount: formatVnd(instruction.amount_vnd), ref: instruction.ref })}</p>
   <p class="muted small">Beneficiary bank: BIN ${esc(instruction.bank_bin)} · account ${esc(instruction.account)}</p>
   ${bankConfigured ? `<p><img src="${esc(instruction.qr_url)}" alt="Transfer ${esc(formatVnd(instruction.amount_vnd))} to account ${esc(instruction.account)}, reference ${esc(instruction.ref)}" width="220" height="220"></p>` : ''}
   ${b.transfer_reported_at
     ? `<p class="notice ok" role="status">${icon('check')} You reported the transfer at ${esc(formatLocal(b.transfer_reported_at))} — the operator is checking it against the bank statement.</p>`
-    : `<form method="post" action="/b/${esc(b.ref)}/transferred"><button class="btn" type="submit">${icon('check')}I have transferred the money</button></form>`}
+    : `<form method="post" action="/b/${esc(b.ref)}/transferred"><button class="btn" type="submit">${icon('check')}${L('pay_done')}</button></form>`}
   <p class="hint">${esc(bookingStatus(b.status))} · the operator matches the bank line against the transfer note before the session is confirmed as paid.</p>
 </div>`
           : `<div class="notice warn">${icon('warn')} No receiving account is configured (<span class="mono">GEMBA_BANK_BIN</span>, <span class="mono">GEMBA_BANK_ACCOUNT</span>). The platform does not draw a fake QR code and does not claim money it has not received.</div>`)
@@ -1266,8 +1286,8 @@ ${b.status === 'requested'
           ? `<div class="card"><h2 style="font-size:24px">Meeting link</h2><p class="muted small">${esc(formatLocal(b.starts_at))} (Vietnam time, UTC+7)</p><p class="actionbar" style="margin:0"><a class="btn" href="${esc(b.meeting_url)}" rel="noopener noreferrer">${icon('arrow')}Join the session</a>${/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(b.starts_at) ? `<a class="btn alt" href="/b/${esc(b.ref)}/session.ics" download>${icon('clock')}Add to calendar</a>` : ''}</p><p class="muted small" style="margin:var(--space-3) 0 0">${esc(b.meeting_url)}</p></div>`
           : ''}
     <div class="card">
-      <h3>Process</h3>
-      <ol class="steps">${steps.map(([s, label], i) => `<li class="${i === idx ? 'here' : ''}"><span>${esc(label)}${i === idx ? ' — you are here' : ''}</span></li>`).join('')}</ol>
+      <h3>${L('process_heading')}</h3>
+      <ol class="steps">${steps.map(([s, label], i) => `<li class="${i === idx ? 'here' : ''}"><span>${esc(label)}${i === idx ? ` — ${L('step_here')}` : ''}</span></li>`).join('')}</ol>
       <p class="muted small" style="margin:0">Money counts as received only when the operator reconciles the bank statement. The system never marks a booking paid by itself.</p>
     </div>
   </div>
@@ -2477,7 +2497,96 @@ export function offlinePage() {
   });
 }
 
-export function errorPage({ code, message, user = null, lead = 'Nothing is guessed here either — this page is simply missing.', retry = '' }) {
+// --- legal pages: draft Vietnamese, for counsel ------------------------------------------------------------
+// Nothing here is legal advice or a legal citation. The operator's identity is a placeholder on purpose: the
+// product does not invent a company name, a tax code or a statute. A lawyer reviews these before they bind anyone.
+const LEGAL_BANNER_VI = 'BẢN NHÁP — chưa được luật sư xem xét. Không có giá trị pháp lý cho đến khi được phê duyệt.';
+const LEGAL_BANNER_EN = 'DRAFT — not yet reviewed by counsel. It has no legal effect until it is approved.';
+const OPERATOR_ID_VI = '<p><strong>Đơn vị vận hành:</strong> [TÊN DOANH NGHIỆP] · <strong>Mã số thuế:</strong> [MST] · <strong>Địa chỉ:</strong> [ĐỊA CHỈ] · <strong>Email liên hệ:</strong> [EMAIL]</p>';
+
+export const LEGAL_PAGES = {
+  'dieu-khoan': {
+    title: 'Điều khoản sử dụng',
+    en: 'Terms of use',
+    body: `${OPERATOR_ID_VI}
+<h2>1. Dịch vụ là gì</h2>
+<p>Gemba trả lời câu hỏi về sản xuất từ các ghi chú đã được công bố của những người từng điều hành dây chuyền, kèm trích dẫn. Nếu thư viện không đủ cơ sở, hệ thống từ chối trả lời thay vì đoán, và đề nghị chuyển câu hỏi tới một chuyên gia hoặc đặt một buổi tư vấn 1:1.</p>
+<h2>2. Câu trả lời chỉ mang tính tham khảo</h2>
+<p>Câu trả lời là kinh nghiệm của người viết ghi chú, không phải tư vấn kỹ thuật hay pháp lý cho nhà máy cụ thể của bạn. Bạn chịu trách nhiệm về quyết định áp dụng tại dây chuyền của mình.</p>
+<h2>3. Câu hỏi miễn phí và buổi tư vấn có phí</h2>
+<p>Hỏi thư viện và gửi câu hỏi tới chuyên gia là miễn phí; chuyên gia được mong đợi trả lời trong vòng 48 giờ. Nếu quá hạn, chúng tôi báo cho bạn và cho phép gửi lại tới chuyên gia khác. Buổi tư vấn 1:1 được tính phí theo mức giá của chuyên gia, hiển thị đầy đủ trước khi bạn chuyển tiền.</p>
+<h2>4. Thanh toán</h2>
+<p>Thanh toán bằng chuyển khoản ngân hàng theo hướng dẫn trên trang đặt lịch. Nền tảng chỉ hướng dẫn thanh toán và không giữ tiền của bạn. Một buổi chỉ được coi là đã thanh toán khi người vận hành đối chiếu sao kê ngân hàng.</p>
+<h2>5. Hoàn tiền</h2>
+<p>Nếu một buổi bị hủy sau khi bạn đã thanh toán, nền tảng ghi nhận số tiền phải hoàn và người vận hành chuyển lại cho bạn, rồi đánh dấu đã gửi. Buổi bị chuyên gia từ chối trước khi thanh toán thì không phát sinh khoản nào. [THỜI HẠN HOÀN TIỀN — luật sư xác nhận]</p>
+<h2>6. Nội dung do chuyên gia viết</h2>
+<p>Mọi ghi chú và câu trả lời đều qua bước kiểm tra trước khi công bố: không tên khách hàng, không số liệu riêng của nhà máy, không số điện thoại. Chuyên gia chịu trách nhiệm xác nhận mình có quyền công bố nội dung.</p>
+<h2>7. Thay đổi và liên hệ</h2>
+<p>Điều khoản có thể thay đổi; bản có hiệu lực là bản đăng trên trang này. Khiếu nại xem tại <a href="/khieu-nai">Quy trình khiếu nại</a>.</p>`
+  },
+  'bao-mat': {
+    title: 'Chính sách bảo mật',
+    en: 'Privacy policy',
+    body: `${OPERATOR_ID_VI}
+<h2>1. Chúng tôi thu thập gì</h2>
+<ul>
+  <li><strong>Tên</strong> bạn nhập khi hỏi hoặc đăng ký (không bắt buộc khi hỏi).</li>
+  <li><strong>Thông tin liên hệ</strong> (email hoặc số điện thoại) để gửi câu trả lời hoặc đường dẫn buổi tư vấn.</li>
+  <li><strong>Nội dung câu hỏi</strong> và, với buổi tư vấn, nội dung bạn muốn giải quyết.</li>
+  <li><strong>Cookie phiên</strong> để giữ bạn đăng nhập, và cookie xác nhận câu hỏi bạn đã đặt khi chưa có tài khoản. Chúng tôi không dùng cookie quảng cáo.</li>
+</ul>
+<h2>2. Dùng để làm gì</h2>
+<p>Để trả lời câu hỏi, chuyển câu hỏi tới chuyên gia bạn chọn gửi, đặt lịch, gửi thông báo về câu hỏi hoặc buổi tư vấn của bạn, và vận hành dịch vụ. Số điện thoại và liên hệ của bạn không hiển thị với người chỉ có đường dẫn câu hỏi.</p>
+<h2>3. Ai nhìn thấy</h2>
+<p>Câu hỏi bạn chọn gửi tới chuyên gia được chuyển cho chuyên gia đó. Khi bật tính năng trả lời bằng mô hình ngôn ngữ, nội dung câu hỏi được gửi tới nhà cung cấp mô hình để soạn câu trả lời. [DANH SÁCH BÊN XỬ LÝ — cần bổ sung]</p>
+<h2>4. Thời gian lưu giữ</h2>
+<p>[THỜI HẠN LƯU TRỮ — luật sư xác nhận]. Bạn có thể yêu cầu xóa câu hỏi và dữ liệu liên hệ của mình qua email ở trên.</p>
+<h2>5. Thanh toán</h2>
+<p>Chúng tôi không lưu thông tin thẻ hay tài khoản ngân hàng của bạn; thanh toán là chuyển khoản trực tiếp.</p>
+<h2>6. Quyền của bạn</h2>
+<p>Bạn có quyền xem, sửa và yêu cầu xóa dữ liệu của mình. Gửi yêu cầu tới địa chỉ email ở trên hoặc theo <a href="/khieu-nai">quy trình khiếu nại</a>.</p>`
+  },
+  'khieu-nai': {
+    title: 'Quy trình khiếu nại',
+    en: 'Complaints',
+    body: `${OPERATOR_ID_VI}
+<h2>1. Gửi khiếu nại</h2>
+<p>Gửi email tới [EMAIL KHIẾU NẠI] kèm mã câu hỏi (dạng X-…) hoặc mã đặt lịch (dạng B-…), và mô tả ngắn điều đã xảy ra. Không gửi mật khẩu.</p>
+<h2>2. Thời gian phản hồi</h2>
+<p>Chúng tôi xác nhận đã nhận trong vòng [SỐ] ngày làm việc và trả lời nội dung trong vòng [SỐ] ngày làm việc. (Dự thảo đề xuất: 2 và 5 ngày làm việc — luật sư xác nhận.)</p>
+<h2>3. Các trường hợp thường gặp</h2>
+<ul>
+  <li><strong>Câu trả lời quá hạn 48 giờ:</strong> bạn được báo và có thể gửi lại tới chuyên gia khác ngay trên trang câu hỏi.</li>
+  <li><strong>Đã chuyển khoản nhưng chưa được xác nhận:</strong> gửi mã đặt lịch và mã giao dịch ngân hàng.</li>
+  <li><strong>Hủy buổi đã thanh toán:</strong> số tiền hoàn được ghi nhận và chuyển lại; xem điều 5 của <a href="/dieu-khoan">Điều khoản</a>.</li>
+  <li><strong>Nội dung không phù hợp hoặc lộ thông tin riêng:</strong> báo ngay, chúng tôi gỡ nội dung trong khi xem xét.</li>
+</ul>`
+  }
+};
+
+export function legalPage({ slug, user = null }) {
+  const page = LEGAL_PAGES[slug];
+  if (!page) return null;
+  return layout({
+    title: page.title,
+    user,
+    body: `<section class="tight" style="padding:var(--space-7) 0">
+  <div class="wrap narrow">
+    <div class="notice warn" role="note">${icon('warn')} <div><strong lang="vi">${esc(LEGAL_BANNER_VI)}</strong><br><span lang="en" class="small">${esc(LEGAL_BANNER_EN)}</span></div></div>
+    <article lang="vi" class="prose">
+      <h1 style="font-size:clamp(28px,3.6vw,42px)">${esc(page.title)}</h1>
+      <p class="muted small" lang="en">${esc(page.en)}. Vietnamese draft; the English above is the only English on this page.</p>
+      ${page.body}
+    </article>
+  </div>
+</section>`
+  });
+}
+
+const STATUS_HEADING = { 404: 'error_404', 403: 'error_403', 429: 'error_429', 500: 'error_500' };
+
+export function errorPage({ code, message, user = null, lead = '', retry = '' }) {
+  const heading = STATUS_HEADING[code] ? `<span lang="vi">${esc(t(STATUS_HEADING[code], 'vi'))}</span><span lang="en" class="small muted" style="display:block;font-weight:400;letter-spacing:0">${esc(message)}</span>` : esc(message);
   return layout({
     title: `Error ${code}`,
     user,
@@ -2485,9 +2594,9 @@ export function errorPage({ code, message, user = null, lead = 'Nothing is guess
 <section class="hero center">
   <div class="wrap narrow">
     <p class="eyebrow">${esc(code)}</p>
-    <h1 style="font-size:clamp(30px,4vw,44px)">${esc(message)}</h1>
-    <p class="lead">${esc(lead)}</p>
-    <p class="row center-cta" style="margin-top:var(--space-5)">${retry ? `<a class="btn" href="${esc(retry)}">Go back and try again</a>` : ''}<a class="btn${retry ? ' alt' : ''}" href="/">${icon('ask')}Ask a question</a><a class="btn alt" href="/library">${icon('book')}Read the notes</a></p>
+    <h1 style="font-size:clamp(30px,4vw,44px)">${heading}</h1>
+    <p class="lead">${lead ? esc(lead) : bi('error_lead')}</p>
+    <p class="row center-cta" style="margin-top:var(--space-5)">${retry ? `<a class="btn" href="${esc(retry)}">${bi('error_back', {}, { inline: true })}</a>` : ''}<a class="btn${retry ? ' alt' : ''}" href="/">${icon('ask')}Ask a question</a><a class="btn alt" href="/library">${icon('book')}Read the notes</a></p>
   </div>
 </section>`
   });

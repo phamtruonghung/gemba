@@ -8,7 +8,7 @@ import { gzipSync } from 'node:zlib';
 
 import * as dbm from './db.mjs';
 import { checkNote, decidePublication, loadRules } from './gate.mjs';
-import { buildIndex, search, coverage } from './retrieval.mjs';
+import { buildIndex, search, coverage, questionLang } from './retrieval.mjs';
 import { askFromCorpus, llmConfig } from './llm.mjs';
 import { quote, formatVnd, MIN_MINUTES, transferInstruction, suggestRateVnd } from './pricing.mjs';
 import { parseLocal } from './when.mjs';
@@ -219,7 +219,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
     const hits = search(text, index, 5);
     const cov = coverage(text, hits, index);
     const inferredTopic = topic || hits[0]?.note?.topic || 'other';
-    const ai = await askFromCorpus({ question: text, hits, plantType: plant_type, coverageVerdict: cov, cfg: config.llm });
+    const lang = questionLang(text);
+    const ai = await askFromCorpus({ question: text, hits, plantType: plant_type, lang, coverageVerdict: cov, cfg: config.llm });
     // The row and its event are one fact; the model call above is the only await, and it is finished.
     const q = dbm.tx(db, () => {
       const row = dbm.insertQuestion(db, {
@@ -234,6 +235,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
         ai_coverage: ai.coverage,
         ai_mode: ai.mode,
         ai_missing: ai.missing,
+        lang,
         user_id,
         claim_hash
       });
@@ -462,6 +464,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
       return res.end(method === 'HEAD' ? undefined : gz ? cssGz : cssRaw);
     }
     if (path === '/offline' && method === 'GET') return send(200, views.offlinePage());
+    // Terms, privacy and complaints, in Vietnamese: drafts marked for counsel (src/views.mjs LEGAL_PAGES).
+    const legalMatch = /^\/(dieu-khoan|bao-mat|khieu-nai)$/.exec(path);
+    if (legalMatch && (method === 'GET' || method === 'HEAD')) return send(200, views.legalPage({ slug: legalMatch[1], user }));
 
     // --- reader preferences: both answer with a cookie, so both are `no-store` -----------------
     if (path === '/prefs/text' && method === 'POST') {
@@ -1171,7 +1176,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(), 
         minutes: money.minutes,
         price_vnd: money.price_vnd,
         fee_vnd: money.fee_vnd,
-        payout_vnd: money.payout_vnd
+        payout_vnd: money.payout_vnd,
+        lang: q?.lang ?? questionLang(String(form.agenda ?? ''))
       });
       if (!made.ok) return fail(409, made.error);
       dbm.logEvent(db, made.duplicate ? 'booking_duplicate' : 'booking', made.booking.ref, `${expert.slug} ${minutes}p ${money.price_vnd}`);

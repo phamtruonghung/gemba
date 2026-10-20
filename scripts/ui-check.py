@@ -479,8 +479,10 @@ def run_checks():
                     """() => {
                       const r = document.querySelector('button[type=submit]').getBoundingClientRect();
                       const el = document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2));
+                      // The label may sit in a child span (a bilingual button); the button underneath is what must be hit.
+                      const btn = el.closest('button');
                       const cs = getComputedStyle(el);
-                      return { tag: el.tagName, bg: cs.backgroundColor, fg: cs.color };
+                      return { tag: btn ? btn.tagName : el.tagName, bg: btn ? getComputedStyle(btn).backgroundColor : cs.backgroundColor, fg: cs.color };
                     }"""
                 )
                 btn_ratio = contrast(parse_rgb(centre["fg"]), parse_rgb(centre["bg"]))

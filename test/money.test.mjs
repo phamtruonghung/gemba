@@ -448,8 +448,8 @@ test("the desk shows what was paid to the practitioner, what is owed, and what i
 
 test('the practitioners page shows the total in every duration option', async () => {
   const html = await (await get('/experts')).text();
-  assert.ok(html.includes('45 minutes — 600,000 VND'), 'hung-qa at 800k for 45 minutes');
-  assert.ok(html.includes('45 minutes — 380,000 VND'), 'lan-hr at 500k for 45 minutes');
+  assert.ok(html.includes('45 minutes — 600.000\u00a0₫'), 'hung-qa at 800k for 45 minutes');
+  assert.ok(html.includes('45 minutes — 380.000\u00a0₫'), 'lan-hr at 500k for 45 minutes');
   assert.match(html, /name="starts_at" type="datetime-local" step="1800"/);
   assert.match(html, /Proposed time \(Vietnam time, UTC\+7\)/);
 });
@@ -458,8 +458,8 @@ test('the question page lists every practitioner with every total, readable with
   const asked = await post('/ask', { q: 'the press keeps stopping at the last station', asker: 'Guest' });
   const html = await (await get(asked.headers.get('location'))).text();
   assert.match(html, /<table><caption[^>]*>What each session costs, in total/);
-  assert.ok(html.includes('<td class="mono">600,000 VND</td>'));
-  assert.ok(html.includes('<td class="mono">380,000 VND</td>'));
+  assert.ok(html.includes('<td class="mono">600.000\u00a0₫</td>'));
+  assert.ok(html.includes('<td class="mono">380.000\u00a0₫</td>'));
 });
 
 test('the booking page says who has to confirm, in Vietnam time', async () => {

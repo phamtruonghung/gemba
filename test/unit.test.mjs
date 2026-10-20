@@ -172,7 +172,13 @@ test('pricing: integer VND, 20% platform take, minimum 30 minutes', () => {
   assert.deepEqual(q, { minutes: 45, price_vnd: 450000, fee_vnd: 90000, payout_vnd: 360000 });
   assert.equal(PLATFORM_TAKE_RATE, 0.2);
   assert.throws(() => quote(600000, MIN_MINUTES - 1), /minimum/);
-  assert.equal(formatVnd(450000), '450,000 VND');
+  assert.equal(formatVnd(450000), '450.000\u00a0₫');
+  assert.equal(formatVnd(0), '0\u00a0₫');
+  assert.equal(formatVnd(10000), '10.000\u00a0₫');
+  assert.equal(formatVnd(999), '999\u00a0₫');
+  assert.equal(formatVnd(1234567), '1.234.567\u00a0₫');
+  assert.equal(formatVnd(-1500), '-1.500\u00a0₫', 'a negative keeps its sign (no caller passes one today)');
+  assert.equal(formatVnd(520000.4), '520.000\u00a0₫', 'whole dong only');
   assert.deepEqual(split(1000000), { price_vnd: 1000000, fee_vnd: 200000, payout_vnd: 800000 });
 });
 

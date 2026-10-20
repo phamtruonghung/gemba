@@ -268,8 +268,8 @@ test('revenue per practitioner is on the page an operator looks at', async () =>
   const html = await (await get('/admin/bookings', cookie)).text();
   assert.match(html, /Hung/);
   // 30 minutes at 800,000/h completed: 80,000 to the platform, 320,000 to the practitioner.
-  assert.match(html, /320,000/, 'the completed booking shows what the practitioner is owed');
-  assert.match(html, /80,000/, 'and what the platform keeps');
+  assert.match(html, /320\.000\u00a0₫/, 'the completed booking shows what the practitioner is owed');
+  assert.match(html, /80\.000\u00a0₫/, 'and what the platform keeps');
 });
 
 test('a booking that cannot move is refused politely, and the server survives it', async () => {

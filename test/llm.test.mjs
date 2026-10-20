@@ -259,3 +259,90 @@ test('the note page highlights the cited passage with no JS, and escapes the que
   assert.equal(highlightPassage(html, hostile), html, 'markup in the query matches nothing and is never emitted');
   assert.equal(highlightPassage('<a href="/x?y=Wipe the die face">t</a>', 'Wipe the die face'), '<a href="/x?y=Wipe the die face">t</a>', 'never inside a tag');
 });
+
+// --- #44: answer in the language asked -------------------------------------------------------------------
+import { questionLang } from '../src/retrieval.mjs';
+import { EN_FALLBACK_NOTE_VI } from '../src/llm.mjs';
+
+const EN_ANSWER = 'Replace the die when the burr grows past the gauge mark [1]. Run three parts at slow speed after every setup [2].';
+const VI_ANSWER = 'Thay khuôn khi ba via vượt quá vạch đo [1]. Chạy ba chi tiết ở tốc độ chậm sau mỗi lần cài đặt [2].';
+const askVi = (modelJson) => ask(async () => json(modelJson), { question: 'Khi nào tôi phải thay khuôn dập?', lang: 'vi' });
+
+test('questionLang: diacritics, Vietnamese without them, English, and a mix', () => {
+  const table = [
+    ['Máy dập hay dừng giữa ca, tôi nên kiểm tra gì trước?', 'vi'],
+    ['may dap hay dung giua ca thi nen kiem tra gi truoc', 'vi'],
+    ['Khi nao toi phai thay khuon dap', 'vi'],
+    ['What are the three parts of OEE and how do I use them?', 'en'],
+    ['when do I replace the die', 'en'],
+    ['How do I explain OEE to công nhân on the line?', 'vi'],
+    ['', 'en']
+  ];
+  for (const [text, want] of table) assert.equal(questionLang(text), want, text);
+});
+
+test('a Vietnamese question with a grounded answer_en and a faithful Vietnamese answer shows the Vietnamese', async () => {
+  const out = await askVi({ answer_en: EN_ANSWER, answer: VI_ANSWER, citations: [1, 2], coverage: 'ok', missing: '' });
+  assert.equal(out.mode, 'llm');
+  assert.equal(out.answer, VI_ANSWER);
+  assert.deepEqual(out.citations, [11, 22]);
+  assert.match(out.cites[0].snippet, /burr/, 'the cited sentence is still the English passage');
+});
+
+test('the Vietnamese is renumbered with the English: markers stay in step', async () => {
+  const out = await askVi({
+    answer_en: 'Run three parts at slow speed after every setup [2]. Replace the die when the burr grows past the gauge mark [1].',
+    answer: 'Chạy ba chi tiết ở tốc độ chậm sau mỗi lần cài đặt [2]. Thay khuôn khi ba via vượt quá vạch đo [1].',
+    citations: [1, 2], coverage: 'ok', missing: ''
+  });
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [22, 11]);
+  assert.equal(out.answer, 'Chạy ba chi tiết ở tốc độ chậm sau mỗi lần cài đặt [1]. Thay khuôn khi ba via vượt quá vạch đo [2].');
+});
+
+test('a Vietnamese answer that adds a figure the passage lacks falls back to the checked English', async () => {
+  const out = await askVi({ answer_en: EN_ANSWER, answer: VI_ANSWER.replace('vượt quá vạch đo', 'vượt quá 0,5 mm'), citations: [1, 2], coverage: 'ok', missing: '' });
+  assert.equal(out.mode, 'llm-en-fallback');
+  assert.ok(out.answer.startsWith(EN_FALLBACK_NOTE_VI));
+  assert.ok(out.answer.includes('Replace the die when the burr grows past the gauge mark [1]'));
+  assert.ok(!out.answer.includes('0,5'), 'the unchecked figure is never shown');
+  assert.deepEqual(out.citations, [11, 22]);
+});
+
+test('a Vietnamese answer that drops a marker falls back to the checked English', async () => {
+  const out = await askVi({ answer_en: EN_ANSWER, answer: 'Thay khuôn khi ba via vượt quá vạch đo [1]. Chạy ba chi tiết ở tốc độ chậm sau mỗi lần cài đặt.', citations: [1, 2], coverage: 'ok', missing: '' });
+  assert.equal(out.mode, 'llm-en-fallback');
+  assert.ok(!out.answer.includes('ba via'));
+});
+
+test('a Vietnamese answer with an extra marker, or no Vietnamese at all, also falls back', async () => {
+  const extra = await askVi({ answer_en: EN_ANSWER, answer: `${VI_ANSWER} Ghi lại [1].`, citations: [1, 2], coverage: 'ok', missing: '' });
+  assert.equal(extra.mode, 'llm-en-fallback');
+  const none = await askVi({ answer_en: EN_ANSWER, citations: [1, 2], coverage: 'ok', missing: '' });
+  assert.equal(none.mode, 'llm-en-fallback');
+});
+
+test('the English half still faces every check: an ungrounded answer_en is withheld however good the Vietnamese looks', async () => {
+  const out = await askVi({ answer_en: 'Repaint the walkways with yellow tape every quarter [1].', answer: 'Sơn lại lối đi bằng băng vàng mỗi quý [1].', citations: [1], coverage: 'ok', missing: '' });
+  refused(out, 'llm-ungrounded');
+  const noEn = await askVi({ answer: VI_ANSWER, citations: [1, 2], coverage: 'ok', missing: '' });
+  assert.match(noEn.mode, /^llm-unparsed/, 'Vietnamese with no English to check is never shown');
+});
+
+test('a Vietnamese refusal carries the model\'s Vietnamese reason', async () => {
+  const out = await askVi({ answer_en: 'x', answer: 'x', citations: [], coverage: 'thin', missing: 'Thư viện chưa có ghi chú nào về việc này.' });
+  assert.equal(out.mode, 'llm');
+  assert.equal(out.coverage, 'thin');
+  assert.equal(out.missing, 'Thư viện chưa có ghi chú nào về việc này.');
+});
+
+test('an English question sends exactly the prompt it always did; a Vietnamese one asks for both languages', () => {
+  const en = buildPrompt({ question: 'when do I replace the die', hits });
+  assert.equal(buildPrompt({ question: 'when do I replace the die', hits, lang: 'en' }).system, en.system);
+  assert.ok(en.system.includes('Voice: an experienced engineer talking to a colleague. English. Short, concrete, something they can act on today. At most 150 words.'));
+  assert.ok(en.user.endsWith('{"answer":"...","citations":[1,2],"coverage":"ok"|"thin","missing":"..."}'));
+  assert.ok(!en.system.includes('Vietnamese') && !en.user.includes('answer_en'));
+  const vi = buildPrompt({ question: 'khi nào thay khuôn', hits, lang: 'vi' });
+  assert.ok(vi.system.includes('Write answer_en in English') && vi.system.includes('Vietnamese'));
+  assert.ok(vi.user.includes('"answer_en"'));
+});

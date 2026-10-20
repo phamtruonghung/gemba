@@ -45,7 +45,7 @@ LOC=$(curl -s -o /dev/null -w '%{redirect_url}' -X POST "$BASE/book" \
   --data-urlencode "agenda=The line keeps stopping at the last station; I need an order to check things in.")
 BREF="${LOC##*/}"
 echo "   booking  : $LOC"
-curl -s "$BASE$LOC" | grep -oE '(800,000 VND|640,000 VND|160,000 VND|img\.vietqr\.io[^"]{0,40}|waiting for transfer instructions)' | sort -u | sed 's/^/     /'
+curl -s "$BASE$LOC" | grep -oE '(800\.000 ₫|640\.000 ₫|160\.000 ₫|img\.vietqr\.io[^"]{0,40}|waiting for transfer instructions)' | sort -u | sed 's/^/     /'
 curl -s -o /dev/null -w '   customer says paid → %{http_code}\n' -X POST "$BASE/b/$BREF/transferred"
 if [ -n "$ADMIN" ]; then
   curl -s -o /dev/null -w '   operator confirms  → %{http_code}\n' -X POST "$BASE/qt/$ADMIN/confirm" --data-urlencode "ref=$BREF"
