@@ -7,7 +7,7 @@ source: seed/vault-raw/how-open-work-is-managed.md
 
 # How open work is managed
 
-> What operations leaders, management trainers and established systems do with the same three objects this vault holds — a commitment, a deviation, an unanswered question — read from about thirty sources on 2026-09-26 (regulators, training bodies, practitioner forums, first-party framework documents). Every source with its URL and a verbatim quote is in the raw source above. What it settled: five of our mechanisms are ordinary practice, we were missing one rule, and the failure the literature warns about most is the one that applies to us. Related: [[supervisor-operating-rhythm]], [[tpm-pillars-and-losses]], [[SCHEMA]]
+> What operations leaders, management trainers and established systems do with the same three objects this vault holds — a commitment, a deviation, an unanswered question — read from about thirty sources (regulators, training bodies, practitioner forums, first-party framework documents). Every source with its URL and a verbatim quote is in the raw source above. What it settled: five of our mechanisms are ordinary practice, we were missing one rule, and the failure the literature warns about most is the one that applies to us. Related: [The supervisor's operating rhythm](/notes/vault-the-supervisor-s-operating-rhythm-the-craft), [TPM pillars and the losses they target](/notes/vault-tpm-pillars-and-the-losses-they-target)
 
 ## The five things that recur in every source
 
@@ -35,7 +35,7 @@ That is five of five, which is the useful part of the reading: the shape was not
 
 No source lets an item sit in the same state forever. One shift for a tier-1 issue; 48 hours for an escalation; 60 days on a CAPA flag; two days red before a 24-hour countermeasure; and the bluntest version, from RAID practice: "Any item assigned to you that has been stagnant for two weeks should be delegated to someone else or marked *Indefinitely deferred* and closed."
 
-This vault aged questions (R11 showed "open N weeks") but drew **no consequence** from the age. Adopted 2026-09-26: **an open question may not pass 14 days without one of the three answers** — answered, deferred with a stated reason and a new date, or declined. `ledger_count.py` prints the over-limit questions mechanically, and the Saturday run has to show them at the top of the review, so the rule does not depend on the run remembering to look.
+This vault aged questions (R11 showed "open N weeks") but drew **no consequence** from the age. Adopted rule: **an open question may not pass 14 days without one of the three answers** — answered, deferred with a stated reason and a new date, or declined. `ledger_count.py` prints the over-limit questions mechanically, and the Saturday run has to show them at the top of the review, so the rule does not depend on the run remembering to look.
 
 The same reading supplied the second half of the rule, and it is the part worth keeping: **a blank is a signal, not an infraction.** The Lean Enterprise Institute's guidance on unfilled leader standard work is to ask why it is blank rather than to chase it harder. So an over-limit question is not chased again — the review asks once whether the question is badly formed, not the human's to answer, or whether the volume itself is the problem, and then the question is answered, deferred or dropped.
 
@@ -49,5 +49,4 @@ The same reading supplied the second half of the rule, and it is the part worth 
 
 It is not a missing tool; it is a maintained one that stops being maintained. A partially-maintained system is worse than none; the platform becomes the workload; an unmonitored register is "a historical artifact"; "meetings die when escalations stop coming back answered, so the answer loop is audited before attendance." The exposure here is the automation itself: if the nightly filing or the Saturday review stops, every page in this vault ages at once and the ledger starts lying. Two things already limit the damage — the ledger holds only open questions, so a stalled run shows up as a growing page rather than as hidden rot, and the counts, the ageing and the roll-ups are computed by scripts rather than remembered. The audit that is still missing is the same one the tier meetings use: whether answers come back at all.
 ## Related
-- [[lessons]] — the running journal of portable lessons from the day's work: this page holds the method, that page holds the experience
-- [[index]] — the practice scope
+- [Lessons and experience from the work](/notes/vault-lessons-and-experience-from-the-work) — the running journal of portable lessons from the day's work: this page holds the method, that page holds the experience

@@ -1,7 +1,8 @@
 // src/seed-corpus.mjs — load the demo experts and the seed corpus into a database.
 //
 // Every note is run through the real publishability gate, exactly as an expert's submitted note is.
-// Notes that need attestation say so in the output: the seed declares them general craft knowledge.
+// Nobody attests for the seed: a note that needs the author's attestation, or that still carries
+// private-vault metadata (corpus_lint), is saved as a draft and not published. Fix the note, not the gate.
 // Importable so scripts (seed, eval) build the corpus the same way; paths resolve from the repo root,
 // never from the working directory.
 
@@ -52,25 +53,27 @@ export function seedDatabase(
     const author = db.prepare('select id from experts where slug = ?').get(authorSlug);
     if (!author) throw new Error(`expert "${authorSlug}" is not in the database — is it in seed/experts.json?`);
 
-    // Seed notes carry the author's attestation (they are general craft knowledge by construction).
-    const decision = decidePublication({ title, body }, { attested: true, rules });
+    // No `attested` here: the seed has no author to tick the box, so a figure needs the note rewritten.
+    const decision = decidePublication({ title, body }, { rules });
+    const lint = decision.report.findings.filter((x) => x.severity === 'lint');
+    const publish = decision.publish && lint.length === 0;
     upsertNote(db, {
       expert_id: author?.id ?? null,
       slug,
       title,
       topic,
       body,
-      status: decision.publish ? 'published' : 'blocked',
+      status: publish ? 'published' : decision.reason === 'blocked' ? 'blocked' : 'draft',
       gate: decision.report,
       origin: meta.origin ?? 'demo',
       source: meta.source ?? ''
     });
     seededSlugs.push(slug);
-    if (decision.publish) published += 1;
+    if (publish) published += 1;
     else {
       blocked += 1;
-      const why = decision.report.findings.filter((x) => x.severity === 'block').map((x) => `${x.rule}:${x.match}`);
-      log(`  BLOCKED ${slug} — ${decision.reason} ${why.join(' ')}`);
+      const why = decision.report.findings.filter((x) => x.severity !== 'note').map((x) => `${x.rule}:${x.match}`);
+      log(`  NOT PUBLISHED ${slug} — ${decision.publish ? 'corpus_lint' : decision.reason} ${why.join(' ')}`);
     }
   }
 

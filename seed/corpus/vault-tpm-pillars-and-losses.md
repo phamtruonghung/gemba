@@ -7,7 +7,7 @@ source: seed/vault-raw/tpm-pillars-and-losses.md
 
 # TPM pillars and the losses they target
 
-> What each TPM pillar asks of a supervisor day to day, and the loss vocabulary the abnormality pages classify with. The pillar list is **not** one canonical standard — JIPM, which introduced TPM in 1971, groups the eight into four loss-reduction pillars, two enabling pillars and two it calls optional and site-dependent. Source: the supervisor documentation brief (raw source above), which cites JIPM and JMAC, JIPM's consultancy arm. Related: [[production-glossary]], [[oee-factors-and-benchmarks]], [[board]], [[how-open-work-is-managed]]
+> What each TPM pillar asks of a supervisor day to day, and the loss vocabulary the abnormality pages classify with. The pillar list is **not** one canonical standard — JIPM, which introduced TPM in 1971, groups the eight into four loss-reduction pillars, two enabling pillars and two it calls optional and site-dependent. Source: the supervisor documentation brief (raw source above), which cites JIPM and JMAC, JIPM's consultancy arm. Related: [How open work is managed](/notes/vault-how-open-work-is-managed)
 
 ## The eight pillars, and the grouping that matters
 
@@ -41,7 +41,7 @@ The remaining eight are labour and unit-cost losses, which is why "reduce losses
 
 ## How this applies here
 
-- Abnormality pages already classify with the **Six Big Losses** (`loss_category`) — the OEE-measurable subset of the 16, mapped in [[oee-factors-and-benchmarks]].
-- The reportable-stop threshold — JIPM's 5–10 minutes versus "anything long enough to explain" — is still *open* in [[production-glossary]]. Pin one number before the shift supervisors start reporting, or the same event is logged by one shift and ignored by another.
+- Abnormality pages already classify with the **Six Big Losses** (`loss_category`) — the OEE-measurable subset of the 16.
+- The reportable-stop threshold — JIPM's 5–10 minutes versus "anything long enough to explain" — is still *open*. Pin one number before the shift supervisors start reporting, or the same event is logged by one shift and ignored by another.
 - The pillars that produce the loop the task pages already carry are Focused Improvement and Autonomous Maintenance: countermeasure → verification date → effective? → yokoten → standard updated. The pillar page does not create new process; it explains why that loop exists.
-- **Deferred by decision (2026-09-20):** gemba walk, kaizen/A3 and 5S audit pages are not in this wiki. Nothing here should imply those routines run at this plant yet.
+- **Deliberately left out:** gemba walk, kaizen/A3 and 5S audit pages are not covered in this note. Nothing here should imply those routines are already running.

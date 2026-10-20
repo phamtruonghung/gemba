@@ -96,9 +96,17 @@ An expert's daily notes are the **employer's** information. The single most comm
 dies is by capturing them and republishing them.
 
 So nothing enters the corpus without passing a publishability gate (`src/gate.mjs`) that blocks:
-named people, document references (PO/LSX/part numbers) and plant figures (output, rates, prices,
-OEE numbers, downtime durations). A note that fails is **shown to its author with the reason** — never
-dropped silently. What survives is the portable craft: the order of checks, the countermeasure, the
+named people (full Vietnamese surname set, lowercase after a kinship word, ALL CAPS), contact details
+(mobile/Zalo/landline/email), customer and supplier names, plant identifiers (line, shift, lot, station,
+serial) and document references that carry a value (PO/LSX/part/drawing numbers, prices), and that asks for
+the author's attestation on plant figures (output, rates, OEE numbers, downtime durations). A note that
+fails is **shown to its author with the reason** — never dropped silently.
+
+**Nobody attests for the author.** An interview ends in a *draft*: the author sees the rendered note, the
+gate's findings and the attestation text, can edit it and re-run the gate, and the note is published only
+when the form posts the attestation checkbox *and* the gate passes. The same gate stops an expert's answer
+to a routed question. The seed passes no attestation either: a shipped note that would need one stays
+unpublished (today all twelve pass without it). What survives is the portable craft: the order of checks, the countermeasure, the
 standard, the diagnostic question.
 
 Every note records its `origin` (`demo`, `vault`, `interview`, or an expert submission), so a reader
@@ -279,7 +287,7 @@ than the coverage number because of what they found:
   rendered through a label map, and a test asserts no raw token reaches a page.
 - Moving the content to English moved three things at once (UI strings, the refusal marker, the URL
   routes), so the corpus notes were retranslated with the gate's rules restated as a constraint: they
-  still pass it clean, in the new language. The gate's Vietnamese patterns stayed — a Vietnamese note
+  pass it clean, in the new language (this was untrue for a while: two vault notes carried a figure and the seed attested for them; the attestation is gone from the seed, the notes were rewritten, and `test/gate.test.mjs` asserts every shipped note publishes with none). The gate's Vietnamese patterns stayed — a Vietnamese note
   carrying an employer's order number is still someone else's information.
 - Renaming the topics silently mis-attributed every note: the seed mapped topic to author with a
   hardcoded table whose keys were the old Vietnamese slugs, and a `?? 'hung-qa'` fallback turned the

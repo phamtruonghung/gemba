@@ -2,7 +2,7 @@
 // scripts/seed.mjs — build a fresh database: demo expert profiles + the seed corpus.
 //
 // Every note is run through the real publishability gate, exactly as an expert's submitted note is.
-// Notes that need attestation say so in the output: the seed declares them general craft knowledge.
+// Nobody attests for the seed: a note that needs attestation or carries vault metadata stays unpublished.
 // The loading logic lives in src/seed-corpus.mjs so the eval harness seeds the same way.
 
 import { openDb, stats, publishedNotes } from '../src/db.mjs';
@@ -35,7 +35,7 @@ if (process.env.GEMBA_ADMIN_EMAIL && process.env.GEMBA_ADMIN_PASSWORD) {
 
 logSeed(db, result);
 const s = stats(db);
-console.log(`notes: ${published} published / ${blocked} blocked of ${files}`);
+console.log(`notes: ${published} published / ${blocked} not published of ${files}`);
 console.log(`db: ${dbPath}`);
 console.log(`stats: ${JSON.stringify(s)}`);
 console.log(`published slugs: ${publishedNotes(db).map((n) => n.slug).join(', ')}`);

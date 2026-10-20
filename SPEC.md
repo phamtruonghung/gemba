@@ -34,7 +34,7 @@ page myself the row says so.
 | Answer in the expert's own published material, not in general knowledge | Delphi (delphi.ai) | "Upload writing, videos, podcasts, or link to live feeds – Delphi indexes it all." (product page, read 2026-10-10) | The corpus *is* the answer space; the prompt forbids outside knowledge |
 | Monetise access in tiers instead of only by the hour | Delphi | "Create flexible membership tiers or pay-as-you-go plans tailored to your clients' needs." | Roadmap: session now, subscription once a corpus exists |
 | Price a session by the minute, hold the money before the call, settle on actual duration | Clarity.fm | "A *pre-charge* is a temporary hold on your card for the estimated cost of the call." / "You'll be charged based on the actual duration of the call at the expert's rate — not the estimated time." / "If the call ends sooner, you'll receive a refund or credit for the unused time." (help.startups.com, read 2026-10-10) | Session price = rate × minutes, minimum 30; payment is instructed by VietQR and confirmed by the operator (no card rails, and we never hold funds — §7) |
-| Capture tacit knowledge by an AI-led interview instead of asking for documents | Tacivo | "AI-guided sessions capture what departing employees know." + use cases: exit interviews, handovers, SOPs, after-action reviews + pushes to Notion/Confluence/SharePoint/Drive and an MCP server (homepage, read 2026-10-10) | `/c/:token/phong-van`: a scripted interview drafts a note, which then has to pass the gate before it is published |
+| Capture tacit knowledge by an AI-led interview instead of asking for documents | Tacivo | "AI-guided sessions capture what departing employees know." + use cases: exit interviews, handovers, SOPs, after-action reviews + pushes to Notion/Confluence/SharePoint/Drive and an MCP server (homepage, read 2026-10-10) | `/c/:token/interview`: a scripted interview drafts a note; the author reviews, edits and attests it, and it has to pass the gate before it is published |
 | Human experts positioned *against* chatbots, cheap 1:1 packages | Askany (Vietnam) | "Askany, startup tiên phong trong việc kết nối các chuyên gia tư vấn với doanh nghiệp nhỏ, startup tại Việt Nam. Startup này đã đầu tư đến 27 tỉ đồng để phát triển app và marketing." / "đặt lịch tư vấn theo gói 15 phút, theo giờ" (thanhnien.vn, read 2026-10-10) | The ladder's bottom rung: 15–30 minute packages, escalating from a machine answer |
 | AI as the front door, a human as the escalation, and the session itself turned into a reusable artifact | ExpertNetwork.AI | "Describe your question — AI recommends top experts by domain, seniority, and availability in minutes, not days." / "Every call generates a structured summary with key insights, action items, and searchable transcript." (research pass, 2026-10-10; the closest single model to this product) | Partial: the answer → escalation → paid session shape is built; turning a session into a new *published* note (with consent) is not |
 | Expert vetting, tiered revenue share by sustained quality | JustAnswer (mechanism), AlphaSights/GLG (conflict + compliance checks) | JustAnswer's "paid $2-11 per question, depending on what tier you're in" is **third-party (search result), not read on their page**; AlphaSights/GLG's conflict checks and "interactive compliance training prior to your first interaction" were read by the research pass | Not built: vetting is manual for the prototype (see §10) |
@@ -80,16 +80,30 @@ expert's:
 
 | Class | Examples matched |
 |---|---|
-| Named people | Vietnamese full names (per-token `\p{Lu}` + `\p{Ll}`, no `\b` — it does not work around accented letters) |
-| Company documents | `PO 12345`, `LSX 88/2026`, `part no #`, `mã hàng`, `mã vật tư` |
-| Commercial figures | prices (`đơn giá`, giá nhập/bán), output/rates, `%`, VND amounts, `OEE … 42`, ppm/pcs/kg/tấn, downtime durations, per-week/month frequencies |
-| Employer scope paths | any path into the employer's own knowledge tree |
+| Named people | Vietnamese full names, decided per token (no `\b` — it does not work around accented letters): the full surname set followed by a capitalised word (also ALL CAPS); lowercase names after a kinship word (`chị nguyễn thị hoa`); surnames that are also ordinary words (Do/Đỗ, Mai, Hồ, Lý, Lam, Lê, Vũ, …) only with a kinship word in front or a middle name (`Văn`/`Thị`) behind, so `Do Not run it dry` is clean |
+| Contact details | email, Vietnamese mobile numbers with spaces/dots/dashes (`0909 123 456`, `0912.345.678`, `+84 …`), landlines with an area code, Zalo/phone labels followed by a number |
+| Customers and suppliers | a configurable name list (`customer_names`: Bosch, Samsung, …) and a context pattern (`khách hàng X`, `nhà cung cấp X`, lowercase `customer X`) |
+| Plant identifiers | `line / chuyền / ca / lô / lot / trạm / serial / số hiệu` + a code (must contain a digit, or be one capital letter), case- and diacritic-insensitive |
+| Company documents | `PO 12345`, `LSX 88/2026`, `part no 4417-B`, `mã hàng 1234`, `đơn giá 45.000`, `bản vẽ AB1234`, … — every pattern needs an actual **value**: `write the part number on the traveller` and `đơn giá gia công tính theo giờ máy` are clean |
 
-Severities `attest` (the author must assert it is portable) and `note` (advisory) also exist. Every
+The `attest` class (rule `figure`) covers commercial figures: `%`, VND amounts, `OEE … 42`, ppm/pcs/kg/tấn, downtime durations,
+per-week/month frequencies. The author must assert, per note, that the figure is general craft knowledge.
+
+The `lint` class (rule `corpus_lint`) is private-vault metadata: `[[wiki links]]`, ISO dates, `src:` provenance paths, and
+first-person employer deixis (`at this plant`, `our plant`, `nhà máy mình`). It is reported but never blocks a person's note; the
+seed loader refuses to publish a note that carries it, because a published note is quoted back to customers.
+
+All matches are reported (`matchAll`), not just the first. The `note` class (advisory) also exists. Every
 note carries `origin` and, where applicable, the author's attestation text. A blocked note is
 **displayed with its reasons** to the person who submitted it (`views.blockedNotePage`), and a
-blocked interview draft returns HTTP 422 with the same page — silently swallowing a rejection is the
+blocked interview draft is shown on the draft review page with the same reasons — silently swallowing a rejection is the
 failure mode that makes an expert stop contributing.
+
+**Attestation is a human act, never a default.** No code path passes `attested: true`. An interview produces a *draft*
+(`/c/:token/draft`): the rendered note, the gate findings, `ATTESTATION_TEXT`, an editable textarea, and a checkbox. The note is
+published only when that form posts the checkbox and the gate passes; "Check again" re-runs the gate on the edit and never
+publishes. An expert's answer to a routed question runs through the same gate (a block-class finding stops it, a figure needs the
+answer's own attestation). The seed has no author, so a note that needs attestation stays a draft.
 
 Known limit: this is a pattern gate, not a lawyer. It catches the shapes it knows; §11 lists the
 vetting it does not replace.

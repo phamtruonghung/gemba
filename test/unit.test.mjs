@@ -51,7 +51,7 @@ test('gate: an English name with a title is blocked, like a Vietnamese one', () 
 });
 
 test('gate: an order number, a drawing or a price is blocked, in either language', () => {
-  for (const leak of ['Theo PO 45123 giao tuần này.', 'Xem bản vẽ AB1234-C ở trạm 2.', 'Đơn giá linh kiện này rất thấp.', 'Unit price per piece is higher than planned.', 'Invoice no 8891 is attached.']) {
+  for (const leak of ['Theo PO 45123 giao tuần này.', 'Xem bản vẽ AB1234-C ở trạm 2.', 'Đơn giá linh kiện này là 45.000 đồng.', 'Unit price per piece is 4.5 dollars.', 'Invoice no 8891 is attached.']) {
     const report = checkNote({ title: 'Note', body: `${CRAFT}\n${leak}` });
     assert.equal(report.ok, false, `should block: ${leak}`);
     assert.ok(report.findings.some((f) => f.rule === 'document'));

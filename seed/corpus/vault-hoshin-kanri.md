@@ -7,7 +7,7 @@ source: seed/vault-raw/hoshin-kanri.md
 
 # Hoshin Kanri — strategy deployment, and the last mile
 
-> Review of *Understanding Hoshin Kanri* — the Lean Enterprise Institute's 18-page compilation of five Lean Post articles (Womack, Reich, Greco, Mottola ×2), filed 2026-09-27 on the vault-level shelf; provenance, source URL, checksum and the file itself are on its document page ([[2026-09-27-hoshin-lei-ebook]]). What the method is, what the five articles actually contain, and the part that matters one level down from the board room: an objective dies on the front line unless the level receiving it is given a number, a date, a name and a method. Related: [[supervisor-operating-rhythm]], [[how-open-work-is-managed]]
+> Review of *Understanding Hoshin Kanri* — the Lean Enterprise Institute's 18-page compilation of five Lean Post articles (Womack, Reich, Greco, Mottola ×2). What the method is, what the five articles actually contain, and the part that matters one level down from the board room: an objective dies on the front line unless the level receiving it is given a number, a date, a name and a method. Related: [The supervisor's operating rhythm](/notes/vault-the-supervisor-s-operating-rhythm-the-craft), [How open work is managed](/notes/vault-how-open-work-is-managed)
 
 ## What Hoshin Kanri is, in the publisher's own words
 
@@ -34,15 +34,15 @@ source: seed/vault-raw/hoshin-kanri.md
 - **Provenance is strong.** LEI publishes it and the vocabulary is the Lean Lexicon's, so the definitions can be cited as the originating institute's.
 - **Method density is low.** Of the five, one observes a cascade inside a plant, one is a model essay (skeleton and muscle), two are a coaching essay in two parts, and one is a school-district case study — two of the five are not about manufacturing at all, and none contains an X-matrix, a catchball protocol, an annual calendar or a worked front-line example.
 - **It is also a lead-generation asset**: the closing pages are LEI's course catalogue, which is worth knowing before quoting it as doctrine.
-- Verdict: read it for the shape of a cascade and for the exact failure mode it names; do not treat it as a procedure. The two pieces a front-line manager actually needs are outside it — a routine with enough protected time to work an objective at all ([[supervisor-operating-rhythm]]) and a loop that stops an objective sliding into a wish ([[how-open-work-is-managed]]).
+- Verdict: read it for the shape of a cascade and for the exact failure mode it names; do not treat it as a procedure. The two pieces a front-line manager actually needs are outside it — a routine with enough protected time to work an objective at all ([The supervisor's operating rhythm](/notes/vault-the-supervisor-s-operating-rhythm-the-craft)) and a loop that stops an objective sliding into a wish ([How open work is managed](/notes/vault-how-open-work-is-managed)).
 
 ## What it settles for the last mile
 
 - An objective arriving at the front line has to become four things the same day, or it decays into a whisper: a **number** (what is different, by how much), a **date**, a **named owner**, and a **method** (the experiment loop or the loss drill that will move it).
-- The precondition is stability, not willpower. Toyota's cascade landed in a plant running better than 98% of the time with about a thousand andon pulls a day answered inside takt — which is precisely why its managers were "not bogged down in fire-fighting" and had time to think about hoshin targets at all. A front line without that stability cannot absorb an objective; the objective then competes with the chaos it was meant to resolve.
+- The precondition is stability, not willpower. Toyota's cascade landed in a plant that ran almost all of its scheduled time, with its andon pulls answered inside takt — which is precisely why its managers were "not bogged down in fire-fighting" and had time to think about hoshin targets at all. A front line without that stability cannot absorb an objective; the objective then competes with the chaos it was meant to resolve.
 - Deploy the objective *through* the front-line leaders, not past them. In the plant Womack walked, the redesign of jobs and equipment was done by a group leader with four team leaders and the operators themselves over three months, against a stated objective — not handed to staff experts. A target assigned over the heads of the people who own the process arrives as a number with no method.
-- Do not bolt a second cadence on to carry it. The objective should ride the routine that already exists, because "a standing rhythm that keeps firing while changing nothing" is the documented failure ([[supervisor-operating-rhythm]]).
-- A number that arrives as a cascade target is the place to be most careful about Goodhart: pair it with a counter-measure, and read the trend before it is allowed to become a judged score ([[supervisor-operating-rhythm]] carries the pairing rule).
+- Do not bolt a second cadence on to carry it. The objective should ride the routine that already exists, because "a standing rhythm that keeps firing while changing nothing" is the documented failure ([The supervisor's operating rhythm](/notes/vault-the-supervisor-s-operating-rhythm-the-craft)).
+- A number that arrives as a cascade target is the place to be most careful about Goodhart: pair it with a counter-measure, and read the trend before it is allowed to become a judged score ([The supervisor's operating rhythm](/notes/vault-the-supervisor-s-operating-rhythm-the-craft) carries the pairing rule).
 
 ## Open
 
