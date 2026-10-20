@@ -46,6 +46,7 @@ ADMIN_PAGES = [
     ("operator-overview", "/admin"),
     ("operator-practitioners", "/admin/experts"),
     ("operator-bookings", "/admin/bookings"),
+    ("operator-outbox", "/admin/outbox"),
     ("operator-accounts", "/admin/accounts"),
     ("operator-invitations", "/admin/invites"),
     ("operator-settings", "/admin/settings"),
@@ -270,7 +271,8 @@ def admin_pass(browser):
     npage.click("button[type=submit]")
     npage.wait_for_load_state("load")
     for name, path in [("operator-overview", "/admin"), ("operator-practitioners", "/admin/experts"),
-                       ("operator-bookings", "/admin/bookings"), ("operator-accounts", "/admin/accounts")]:
+                       ("operator-bookings", "/admin/bookings"),
+    ("operator-outbox", "/admin/outbox"), ("operator-accounts", "/admin/accounts")]:
         npage.goto(BASE + path, wait_until="load")
         settle(npage)
         over = npage.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")

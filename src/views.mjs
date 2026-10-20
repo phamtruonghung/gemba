@@ -1170,6 +1170,10 @@ ${cov
 ${answerBlocks}
     ${cov ? '' : `<div class="actionbar"><a class="btn" href="#book">${icon('people')}Book a 1:1 session</a><a class="btn alt" href="#share">${icon('arrow')}Share</a></div>`}
     ${url ? `<div class="card">${shareBlock({ title: `Gemba question ${q.ref}`, url })}</div>` : ''}
+    ${q.status === 'routed' && q.breach_at ? `<div class="notice warn" role="status">${icon('warn')} <div><strong>This answer is late.</strong> It was due ${esc(formatLocal(q.due_at))} and nobody has answered yet. ${claimed
+      ? `You can send it to other practitioners now, or book a paid 1:1 session below.</div></div>
+    <form method="post" action="/q/${esc(q.ref)}/reroute" class="actionbar"><button class="btn" type="submit">${icon('people')}Send it to other practitioners</button></form>`
+      : 'The person who asked can send it on to others.</div></div>'}` : ''}
     ${q.status === 'routed' ? `<div class="notice warn">${icon('people')} Sent to ${routedNames.length || 1} practitioner${(routedNames.length || 1) === 1 ? '' : 's'} covering this topic (${esc(routedNames.join(', ') || 'the practitioner on duty')}). The answer will appear on this page.</div>` : ''}
     <div class="card" id="book">
       <h2 style="font-size:24px">Book a 1:1 session</h2>
@@ -1259,7 +1263,7 @@ ${b.status === 'requested'
 </div>`
           : `<div class="notice warn">${icon('warn')} No receiving account is configured (<span class="mono">GEMBA_BANK_BIN</span>, <span class="mono">GEMBA_BANK_ACCOUNT</span>). The platform does not draw a fake QR code and does not claim money it has not received.</div>`)
         : ['paid', 'completed'].includes(b.status) && b.meeting_url
-          ? `<div class="card"><h2 style="font-size:24px">Meeting link</h2><p><a href="${esc(b.meeting_url)}" rel="noopener noreferrer">${esc(b.meeting_url)}</a></p><p class="muted small" style="margin:0">${esc(formatLocal(b.starts_at))} (Vietnam time, UTC+7)</p></div>`
+          ? `<div class="card"><h2 style="font-size:24px">Meeting link</h2><p class="muted small">${esc(formatLocal(b.starts_at))} (Vietnam time, UTC+7)</p><p class="actionbar" style="margin:0"><a class="btn" href="${esc(b.meeting_url)}" rel="noopener noreferrer">${icon('arrow')}Join the session</a>${/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(b.starts_at) ? `<a class="btn alt" href="/b/${esc(b.ref)}/session.ics" download>${icon('clock')}Add to calendar</a>` : ''}</p><p class="muted small" style="margin:var(--space-3) 0 0">${esc(b.meeting_url)}</p></div>`
           : ''}
     <div class="card">
       <h3>Process</h3>
@@ -1703,6 +1707,7 @@ const ADMIN_NAV = [
   ['/admin', 'Overview', 'scale'],
   ['/admin/experts', 'Practitioners', 'people'],
   ['/admin/bookings', 'Bookings', 'clock'],
+  ['/admin/outbox', 'Outbox', 'ask'],
   ['/admin/accounts', 'Accounts', 'account'],
   ['/admin/invites', 'Invitations', 'book'],
   ['/admin/settings', 'Settings', 'rules'],
@@ -1873,6 +1878,44 @@ export function adminAuditPage({ admin, kind = '', events = [], kinds = [] }) {
   <tbody>${rows || '<tr><td colspan="4" class="muted">Nothing recorded for this filter.</td></tr>'}</tbody></table></div>
   <p class="small muted">Writes record the operator's email in Detail — the whole point of the trail is answering “who changed this”.</p>
 </div></section>`,
+  });
+}
+
+/** What the product promised to send, and whether it went; and the questions that missed their 48 hours. */
+export function adminOutboxPage({ admin, status = '', rows = [], counts = {}, breaches = [], delivery = '', flash = '' }) {
+  const chips = [['', 'Everything'], ['pending', `pending (${counts.pending ?? 0})`], ['sent', `sent (${counts.sent ?? 0})`], ['failed', `failed (${counts.failed ?? 0})`]]
+    .map(([value, label]) => {
+      const on = value === status;
+      return `<a class="badge${on ? ' ok' : ''}" href="${value ? `/admin/outbox?status=${value}` : '/admin/outbox'}"${on ? ' aria-current="page"' : ''}>${esc(label)}</a>`;
+    })
+    .join(' ');
+  // Only the domain of an address is shown: the operator needs to see where a message went, not read a list of people.
+  const masked = (a) => (a ? `…@${esc(String(a).split('@')[1] ?? '')}` : '<span class="muted">none on file</span>');
+  const body = rows
+    .map(
+      (r) => `<tr><td class="mono">${esc((r.created_at ?? '').slice(0, 19).replace('T', ' '))}</td><td>${esc(r.kind)}</td>
+      <td class="mono">${esc(r.ref)}</td><td>${masked(r.to_addr)}</td>
+      <td><span class="badge ${r.status === 'sent' ? 'ok' : r.status === 'failed' ? 'bad' : 'warn'}">${esc(r.status)}</span></td>
+      <td>${r.attempts}</td><td class="small">${esc(r.last_error)}</td></tr>`
+    )
+    .join('');
+  const late = breaches
+    .map((q) => `<tr><td class="mono"><a href="/q/${esc(q.ref)}">${esc(q.ref)}</a></td><td>${esc(topicLabel(q.topic))}</td><td class="mono">${esc((q.due_at ?? '').slice(0, 16).replace('T', ' '))}</td><td class="mono">${esc((q.breach_at ?? '').slice(0, 16).replace('T', ' '))}</td></tr>`)
+    .join('');
+  return adminShell({
+    admin, active: '/admin/outbox', title: 'Outbox', eyebrow: 'Operator console', flash,
+    body: `
+<section class="tight"><div class="wrap">
+  <p class="notice ${delivery === 'configured' ? 'ok' : 'warn'}">${icon(delivery === 'configured' ? 'check' : 'warn')} Delivery is ${esc(delivery === 'configured' ? 'configured' : 'not configured: messages wait here as pending (set GEMBA_MAIL_TRANSPORT to sendmail or file)')}.</p>
+  <h2 style="font-size:24px">Questions past their 48 hours</h2>
+  <div class="table-wrap"><table><thead><tr><th>Question</th><th>Topic</th><th>Was due</th><th>Flagged</th></tr></thead>
+  <tbody>${late || '<tr><td colspan="4" class="muted">None. Every routed question is inside its window or answered.</td></tr>'}</tbody></table></div>
+  <form method="post" action="/admin/outbox/sweep" class="actionbar"><button class="btn alt" type="submit">${icon('clock')}Run the sweep now</button></form>
+  <h2 style="font-size:24px">Messages</h2>
+  <p class="row tight-gap">${chips}</p>
+  <div class="table-wrap"><table><thead><tr><th>Queued</th><th>Kind</th><th>Ref</th><th>To</th><th>Status</th><th>Tries</th><th>Last error</th></tr></thead>
+  <tbody>${body || '<tr><td colspan="7" class="muted">Nothing queued.</td></tr>'}</tbody></table></div>
+</div></section>`
   });
 }
 

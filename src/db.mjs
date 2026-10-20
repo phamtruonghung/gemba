@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { checkEmail } from './auth.mjs';
 
 export const SCHEMA = `
 create table if not exists experts (
@@ -138,6 +139,25 @@ create table if not exists settings (
   value text not null,
   updated_at text not null
 );
+-- The one place a message leaves the system. A row is a promise: it says who was told what, and whether
+-- the telling happened. dedupe makes enqueueing idempotent, so a retried POST or a second sweep never
+-- sends twice; attempts and last_error are what the operator reads when something did not arrive.
+create table if not exists outbox (
+  id integer primary key,
+  kind text not null,
+  ref text not null default '',
+  channel text not null default 'email' check (channel in ('email','none')),
+  to_addr text not null default '',
+  subject text not null default '',
+  body text not null default '',
+  status text not null default 'pending' check (status in ('pending','sent','failed')),
+  attempts integer not null default 0,
+  last_error text not null default '',
+  claimed_at text,
+  created_at text not null,
+  sent_at text,
+  dedupe text not null unique
+);
 create index if not exists idx_notes_topic on notes(topic, status);
 create index if not exists idx_questions_status on questions(status);
 create index if not exists idx_bookings_status on bookings(status);
@@ -193,6 +213,12 @@ export function migrate(db) {
   addColumn('bookings', 'payout_paid_at', 'payout_paid_at text');
   addColumn('bookings', 'meeting_url', "meeting_url text not null default ''");
   addColumn('bookings', 'transfer_reported_at', 'transfer_reported_at text');
+  // The 48-hour promise: set once, by the sweep, when a routed question passed its due time unanswered.
+  addColumn('questions', 'breach_at', 'breach_at text');
+  addColumn('outbox', 'claimed_at', 'claimed_at text');
+  // The language a question was asked in ('vi' | 'en'); a booking carries the language of the question it came from.
+  addColumn('questions', 'lang', "lang text not null default 'en'");
+  addColumn('bookings', 'lang', "lang text not null default 'en'");
   // A backstop for "one slot, one open booking". Old rows hold free-text starts_at and may collide, so
   // a failed build must not stop the app from booting: the check inside createBookingOnce is the guarantee.
   try {
@@ -211,7 +237,8 @@ export function migrate(db) {
     'create index if not exists idx_notes_expert on notes(expert_id)',
     'create index if not exists idx_events_kind on events(kind, id)',
     'create index if not exists idx_questions_expert on questions(expert_id)',
-    'create index if not exists idx_questions_user on questions(user_id)'
+    'create index if not exists idx_questions_user on questions(user_id)',
+    'create index if not exists idx_outbox_status on outbox(status, id)'
   ]) db.exec(ddl);
   return db;
 }
@@ -834,9 +861,9 @@ export function notesForExpert(db, expertId) {
 export function insertQuestion(db, q) {
   const ref = q.ref ?? makeRef('X');
   db.prepare(
-    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, ai_missing, status, user_id, claim_hash, created_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
-  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.ai_missing ?? '', q.user_id ?? null, q.claim_hash ?? '', nowIso());
+    `insert into questions (ref, asker, contact, plant_type, topic, text, ai_answer, ai_citations, ai_coverage, ai_mode, ai_missing, status, user_id, claim_hash, lang, created_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`
+  ).run(ref, q.asker ?? '', q.contact ?? '', q.plant_type ?? '', q.topic ?? 'other', q.text, q.ai_answer ?? '', JSON.stringify(q.ai_citations ?? []), q.ai_coverage ?? 'thin', q.ai_mode ?? '', q.ai_missing ?? '', q.user_id ?? null, q.claim_hash ?? '', q.lang === 'vi' ? 'vi' : 'en', nowIso());
   return questionByRef(db, ref);
 }
 
@@ -901,6 +928,112 @@ export function recentQuestions(db, limit = 20) {
   return db.prepare('select * from questions order by id desc limit ?').all(limit);
 }
 
+
+/** Routed, past its due time, unanswered, and not yet flagged: what the 48-hour sweep acts on. */
+export function overdueRouted(db, nowIsoStr = nowIso()) {
+  return db
+    .prepare(
+      `select q.* from questions q
+       where q.status = 'routed' and q.due_at is not null and q.due_at < ? and q.breach_at is null
+         and not exists (select 1 from answers a where a.question_id = q.id)
+       order by q.due_at`
+    )
+    .all(nowIsoStr);
+}
+
+/** Flag a breach once. Returns false when it was already flagged (or the question moved on). */
+export function setBreach(db, ref, at = nowIso()) {
+  return db.prepare("update questions set breach_at = ? where ref = ? and status = 'routed' and breach_at is null").run(at, ref).changes === 1;
+}
+
+/** Questions the sweep has flagged and nobody has answered: the operator's breach table. */
+export function breachedQuestions(db, limit = 100) {
+  return db
+    .prepare(
+      `select q.* from questions q
+       where q.breach_at is not null and q.status = 'routed' and not exists (select 1 from answers a where a.question_id = q.id)
+       order by q.breach_at desc limit ?`
+    )
+    .all(limit);
+}
+
+// --- outbox ----------------------------------------------------------------
+
+export const OUTBOX_MAX_ATTEMPTS = 5;
+
+/**
+ * Record a message that must leave the system. Idempotent on `dedupe`: the second insert is ignored, so
+ * a retried POST or a repeated sweep promises once. An address that is not an email (a phone number
+ * typed into the contact box, or something with a line break in it) is still recorded, as `failed`
+ * with the reason, so the operator sees the promise and can phone the person; it never reaches a transport.
+ */
+export function enqueue(db, { kind, ref = '', to = '', subject = '', body = '', dedupe }) {
+  const addr = checkEmail(to);
+  const bad = !addr.ok || /[\r\n<>,;]/.test(String(to));
+  const key = dedupe ?? `${kind}:${ref}:${String(to).trim().toLowerCase()}`;
+  const info = db
+    .prepare(
+      `insert into outbox (kind, ref, channel, to_addr, subject, body, status, last_error, created_at, dedupe)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict(dedupe) do nothing`
+    )
+    .run(
+      kind, ref, bad ? 'none' : 'email', bad ? '' : addr.value, String(subject).replace(/[\r\n]+/g, ' ').slice(0, 300), String(body),
+      bad ? 'failed' : 'pending', bad ? 'no email address on file' : '', nowIso(), key
+    );
+  return info.changes === 1;
+}
+
+/**
+ * Take up to `limit` pending rows for sending. A row is claimed with one compare-and-set that bumps its
+ * attempts and stamps a lease, so a second process (the CLI sweep alongside the server) that reads the same
+ * row loses the claim and skips it. The lease runs out after `leaseMs`, which is how a row whose sender
+ * died mid-send is tried again instead of staying claimed forever.
+ */
+export function claimPending(db, limit = 20, { leaseMs = 120_000 } = {}) {
+  const now = nowIso();
+  const expired = new Date(Date.now() - leaseMs).toISOString();
+  const rows = db
+    .prepare("select id from outbox where status = 'pending' and channel = 'email' and (claimed_at is null or claimed_at <= ?) order by id limit ?")
+    .all(expired, limit);
+  const take = db.prepare(
+    "update outbox set attempts = attempts + 1, claimed_at = ? where id = ? and status = 'pending' and (claimed_at is null or claimed_at <= ?)"
+  );
+  return rows.filter(({ id }) => take.run(now, id, expired).changes === 1).map(({ id }) => db.prepare('select * from outbox where id = ?').get(id));
+}
+
+export function markSent(db, id) {
+  db.prepare("update outbox set status = 'sent', sent_at = ?, last_error = '' where id = ?").run(nowIso(), id);
+}
+
+/** Back to `pending` for another try, until the attempts are used up; then `failed` for good. */
+export function markFailed(db, id, err) {
+  const row = db.prepare('select attempts from outbox where id = ?').get(id);
+  const status = (row?.attempts ?? 0) >= OUTBOX_MAX_ATTEMPTS ? 'failed' : 'pending';
+  db.prepare('update outbox set status = ?, last_error = ? where id = ?').run(status, String(err?.message ?? err).slice(0, 300), id);
+}
+
+export function outboxRows(db, { status = '', limit = 200 } = {}) {
+  return status
+    ? db.prepare('select * from outbox where status = ? order by id desc limit ?').all(status, limit)
+    : db.prepare('select * from outbox order by id desc limit ?').all(limit);
+}
+
+export function outboxCounts(db) {
+  const out = { pending: 0, sent: 0, failed: 0 };
+  for (const r of db.prepare('select status, count(*) c from outbox group by status').all()) out[r.status] = r.c;
+  return out;
+}
+
+/** The operator addresses to tell about a breach: the configured one, else every admin account. */
+export function adminEmails(db) {
+  return db.prepare("select email from users where role = 'admin' and status = 'active' order by id").all().map((r) => r.email);
+}
+
+/** The email on an expert's account, or '' (the demo experts have none). */
+export function expertEmail(db, expertId) {
+  return db.prepare('select u.email from experts e join users u on u.id = e.user_id where e.id = ?').get(expertId)?.email ?? '';
+}
+
 // --- bookings --------------------------------------------------------------
 
 const SLOT_TAKEN = (name) => `That time is already booked with ${name || 'this practitioner'}. Choose another time.`;
@@ -937,9 +1070,9 @@ export function createBookingOnce(db, b) {
     const ref = b.ref ?? makeRef('B');
     try {
       db.prepare(
-        `insert into bookings (ref, expert_id, asker, contact, topic, agenda, starts_at, minutes, price_vnd, fee_vnd, payout_vnd, status, user_id, created_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)`
-      ).run(ref, b.expert_id, b.asker, b.contact, b.topic ?? '', b.agenda ?? '', b.starts_at, b.minutes, b.price_vnd, b.fee_vnd, b.payout_vnd, b.user_id ?? null, nowIso());
+        `insert into bookings (ref, expert_id, asker, contact, topic, agenda, starts_at, minutes, price_vnd, fee_vnd, payout_vnd, status, user_id, lang, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?)`
+      ).run(ref, b.expert_id, b.asker, b.contact, b.topic ?? '', b.agenda ?? '', b.starts_at, b.minutes, b.price_vnd, b.fee_vnd, b.payout_vnd, b.user_id ?? null, b.lang === 'vi' ? 'vi' : 'en', nowIso());
     } catch (err) {
       if (/constraint/i.test(String(err.message))) return { ok: false, error: SLOT_TAKEN(b.expert_name) };
       throw err;

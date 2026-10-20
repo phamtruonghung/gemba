@@ -166,6 +166,8 @@ implemented. The contract is in `SPEC.md` section 3 and enforced by `test/llm.te
 | `GEMBA_LLM_SESSION` | minted at install | the OpenCode gateway routes by this header; without it the call is refused (`400` from the API, or `403` with Cloudflare error `1010` through the edge) |
 | `GEMBA_LLM_TIMEOUT_MS` | `45000` | per-request timeout |
 | `GEMBA_BANK_BIN` / `GEMBA_BANK_ACCOUNT` | — | VietQR recipient; unset ⇒ the booking page shows the amount with no QR |
+| `GEMBA_MAIL_TRANSPORT` | — | `sendmail` pipes each message to `GEMBA_SENDMAIL` (default `/usr/sbin/sendmail`) as `sendmail -i -- <address>`; `file` writes `<data dir>/mail-sink/<id>.eml`. Unset ⇒ nothing is sent and every message waits in the outbox as `pending` |
+| `GEMBA_MAIL_FROM` / `GEMBA_PUBLIC_URL` / `GEMBA_OPERATOR_EMAIL` | `Gemba <gemba@localhost>` / `http://localhost:<port>` / the admin accounts | The From header; the origin that goes into every link in a message (set it, or the links are unusable); who is told when a question misses its 48 hours |
 
 Secrets belong in the environment or in the systemd `EnvironmentFile`, never in the repo.
 
@@ -447,3 +449,25 @@ SPEC.md    the mechanism being copied, the constraints, the decisions, the open 
 ## License
 
 MIT (`LICENSE`). The compliance notes in `SPEC.md` are engineering notes, not legal advice.
+
+
+## Outbox: the one place a message leaves the system
+
+A question reaching practitioners, an answer arriving, a confirmed time, a received payment and a late answer
+each write a row to the `outbox` table in the same transaction as the fact (`src/outbox.mjs`). A runner sends
+the pending rows and marks each `sent`, or back to `pending` with the error until five attempts, then `failed`.
+`/admin/outbox` shows every row (address by domain only), and the questions past their 48 hours.
+
+- **Timer and by hand.** The server sweeps and delivers every 60 seconds. `node scripts/sweep.mjs` does the same
+  once and prints the counts and the newest rows (use `GEMBA_ENV_FILE=/dev/null` on a machine whose `.env` holds
+  a model key); the operator console has a "Run the sweep now" button. A second process alongside the server is
+  safe: rows are claimed with a compare-and-set.
+- **The 48-hour promise.** A routed question with no answer past `due_at` is flagged once (`breach_at`, a `breach`
+  event), the operator is told, and the asker is told it is late and offered a re-route to other practitioners
+  or a paid session. A question is free, so there is nothing to refund.
+- **Transport hook.** `createApp({ transport })` takes `async (msg) => {}` with `msg = { id, kind, to, subject, body, from, raw }`
+  and resolves when the message is out: a Zalo ZNS or SMTP relay plugs in here. None is shipped, because there is no vendor account.
+- **Addresses.** Only a plain email address is sent to. A phone number in the contact box is recorded as `failed:
+  no email address on file`, so the operator sees the promise and can phone the person.
+- **Paid sessions.** Once the practitioner has confirmed a time with a meeting link and the booking is paid, the
+  booking page shows "Join the session" and an "Add to calendar" `.ics` (`/b/<ref>/session.ics`).
