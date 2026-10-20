@@ -72,7 +72,8 @@ curl -s -o /dev/null -c "$JAR" -w '   POST /signup → %{http_code}\n' -X POST "
 grep -q "gemba_session" "$JAR" && echo "   session cookie set → yes" || echo "   session cookie set → NO"
 curl -s -b "$JAR" "$BASE/account" | grep -oE "Signed in as Smoke Asker|$EMAIL" | sort -u | sed 's/^/     /'
 # The same cookie must mean nothing after signing out: revocation, not forgetting.
-curl -s -o /dev/null -b "$JAR" -c "$JAR" -X POST "$BASE/signout"
+CSRF=$(curl -s -b "$JAR" "$BASE/account" | sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' | head -1)
+curl -s -o /dev/null -b "$JAR" -c "$JAR" -X POST "$BASE/signout" --data-urlencode "csrf=$CSRF"
 curl -s -o /dev/null -b "$JAR" -w '   GET /account after sign-out → %{http_code}\n' "$BASE/account"
 rm -f "$JAR"
 

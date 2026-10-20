@@ -60,7 +60,19 @@ const cookieOf = (res) => (res.headers.getSetCookie?.() ?? [res.headers.get('set
   .filter(Boolean)
   .join('; ');
 
-function post(path, data = {}, cookie = '') {
+// A client following the protocol: a signed-in POST carries the session's CSRF token, read from the page
+// the way a browser would (the hidden field the server injects into every post form).
+const csrfCache = new Map();
+async function csrfOf(cookie) {
+  if (!csrfCache.has(cookie)) {
+    const html = await (await fetch(`${base}/account`, { redirect: 'manual', headers: { cookie } })).text();
+    csrfCache.set(cookie, /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? '');
+  }
+  return csrfCache.get(cookie);
+}
+
+async function post(path, data = {}, cookie = '') {
+  if (cookie && data.csrf === undefined) { const csrf = await csrfOf(cookie); if (csrf) data = { ...data, csrf }; }
   return fetch(`${base}${path}`, {
     method: 'POST',
     redirect: 'manual',
@@ -73,7 +85,7 @@ function post(path, data = {}, cookie = '') {
 
 test('auth: a password verifies against its own hash, and only its own', async () => {
   const hash = await hashPassword('a long enough sentence');
-  assert.match(hash, /^scrypt\$16384\$8\$1\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/, 'the parameters travel with the hash');
+  assert.match(hash, /^scrypt\$131072\$8\$1\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/, 'the parameters travel with the hash');
   assert.equal(await verifyPassword('a long enough sentence', hash), true);
   assert.equal(await verifyPassword('a longer enough sentence', hash), false);
 });

@@ -63,7 +63,19 @@ const cookieOf = (res) =>
 
 const form = (data) => new URLSearchParams(data).toString();
 
+// A client following the protocol: a signed-in POST carries the session's CSRF token, read from the page
+// the way a browser would (the hidden field the server injects into every post form).
+const csrfCache = new Map();
+async function csrfOf(cookie) {
+  if (!csrfCache.has(cookie)) {
+    const html = await (await fetch(`${base}/account`, { redirect: 'manual', headers: { cookie } })).text();
+    csrfCache.set(cookie, /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? '');
+  }
+  return csrfCache.get(cookie);
+}
+
 async function post(path, data = {}, cookie = '') {
+  if (cookie && data.csrf === undefined) { const csrf = await csrfOf(cookie); if (csrf) data = { ...data, csrf }; }
   return fetch(base + path, {
     method: 'POST', redirect: 'manual',
     headers: { 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },

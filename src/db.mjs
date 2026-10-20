@@ -172,6 +172,8 @@ export function migrate(db) {
   // Accounts: a question or a booking can belong to a signed-in person. Nullable on purpose —
   // everything asked before accounts existed stays valid and keeps its display name.
   addColumn('questions', 'user_id', 'user_id integer references users(id)');
+  // The CSRF token a session's forms carry. '' on rows that predate it; csrfFor() fills them on first use.
+  addColumn('sessions', 'csrf', "csrf text not null default ''");
   addColumn('questions', 'ai_missing', "ai_missing text not null default ''");
   // sha256 of the one-time claim a guest's browser holds; '' once claimed, and for questions asked before it existed.
   addColumn('questions', 'claim_hash', "claim_hash text not null default ''");
@@ -526,14 +528,30 @@ export function expertStatement(db, expertId) {
 }
 
 export function createSession(db, { id, userId, expiresAt, userAgent = '' }) {
-  db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent) values (?, ?, ?, ?, ?)').run(
+  db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent, csrf) values (?, ?, ?, ?, ?, ?)').run(
     id,
     userId,
     nowIso(),
     expiresAt,
-    String(userAgent).slice(0, 200)
+    String(userAgent).slice(0, 200),
+    randomBytes(24).toString('base64url')
   );
   return id;
+}
+
+/** The CSRF token for a session, minted on first use for a row that predates the column. '' for no session. */
+export function csrfFor(db, sessionId) {
+  if (!sessionId) return '';
+  const row = db.prepare('select csrf from sessions where id = ?').get(String(sessionId));
+  if (!row) return '';
+  if (row.csrf) return row.csrf;
+  const token = randomBytes(24).toString('base64url');
+  db.prepare('update sessions set csrf = ? where id = ?').run(token, String(sessionId));
+  return token;
+}
+
+export function setPasswordHash(db, userId, hash) {
+  return db.prepare('update users set password_hash = ? where id = ?').run(hash, userId).changes;
 }
 
 /** The user behind a session id, or null. Expired rows are deleted on sight, so the table cannot

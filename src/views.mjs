@@ -512,6 +512,16 @@ const NAV = [
   ['/how-it-works', 'How it works', 'rules']
 ];
 
+/**
+ * Give every POST form a hidden CSRF field. It is a plain input, so it works with JavaScript off.
+ * Only `method="post"` forms get one: a GET form must never carry the token into a URL.
+ */
+export function withCsrf(html, token) {
+  if (!token) return html;
+  const field = `<input type="hidden" name="csrf" value="${esc(token)}">`;
+  return html.replace(/<form\b[^>]*\bmethod="post"[^>]*>/gi, (tag) => `${tag}\n  ${field}`);
+}
+
 /** Put the reader's text-size preference on <html>; only the two known sizes are ever emitted. */
 export function withTextSize(html, size) {
   return size === 'large' || size === 'xl' ? html.replace('<html lang="en">', `<html lang="en" data-text="${size}">`) : html;
@@ -1735,7 +1745,7 @@ export function adminLoginPage({ email = '', error = '' } = {}) {
   });
 }
 
-export function adminOverviewPage({ admin, stats, settings, events = [], flash = '' }) {
+export function adminOverviewPage({ admin, stats, settings, events = [], flash = '', qtLink = '', qtFromEnv = false }) {
   const cards = [
     ['Notes', stats.notes, `${stats.experts} practitioner profiles`],
     ['Questions', stats.questions, `${stats.thin} the library could not cover`],
@@ -1762,6 +1772,16 @@ export function adminOverviewPage({ admin, stats, settings, events = [], flash =
     body: `
 <section class="tight"><div class="wrap">
   <div class="grid four">${cards}</div>
+</div></section>
+<section class="tight"><div class="wrap">
+  <h2>The /qt link</h2>
+  <div class="card">
+    <p class="small muted" style="margin-top:0">The bookmarked console at <span class="mono">/qt/&lt;token&gt;</span> is read from <span class="mono">admin.token</span> in the data directory. Rotating it makes the old link stop working at once.</p>
+    ${qtLink ? `<p class="notice ok" role="status">New link: <a class="mono" href="${esc(qtLink)}">${esc(qtLink)}</a> — copy it now; it is not shown again here.</p>` : ''}
+    ${qtFromEnv
+      ? '<p class="small muted" style="margin-bottom:0">The token is set in the environment (GEMBA_ADMIN_TOKEN) — change it there.</p>'
+      : '<form method="post" action="/admin/qt-link/rotate"><button class="btn alt sm" type="submit">Rotate the /qt link</button></form>'}
+  </div>
 </div></section>
 <section class="tight"><div class="wrap">
   <h2>What it charges</h2>

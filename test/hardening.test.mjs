@@ -618,3 +618,236 @@ test('SIGTERM stops the real process in under 3 s with the WAL checkpointed', as
     child.kill('SIGKILL');
   }
 });
+
+// --- #39: CSRF, scrypt, sessions, the /qt link ------------------------------------
+
+import { statSync as statOf, readFileSync as readFileSync2 } from 'node:fs';
+import { withCsrf } from '../src/views.mjs';
+import { needsRehash } from '../src/auth.mjs';
+
+const PW = 'a-long-enough-password';
+async function signedIn(s, { email = 'csrf@plant.vn', role = 'asker' } = {}) {
+  createUser(s.app.db, { email, name: 'Csrf', role, password_hash: await hashPassword(PW) });
+  const res = await post(s.base, role === 'admin' ? '/admin/login' : '/signin', { email, password: PW });
+  assert.equal(res.status, 303);
+  const cookie = cookieOf(res);
+  const html = await (await fetch(`${s.base}/account`, { headers: { cookie } })).text();
+  return { cookie, csrf: /name="csrf" value="([^"]+)"/.exec(html)?.[1] };
+}
+const seedExpert = (s) => upsertExpert(s.app.db, { slug: 'csrf-e', name: 'Csrf E', headline: 'h', topics: ['tpm'], years: 5, rate_vnd: 600000, token: 'tok-csrf' });
+const bookData = { expert: 'csrf-e', minutes: '45', starts_at: '2030-06-03T09:00', asker: 'A', contact: 'a@b.vn', topic: 'tpm' };
+
+test('a signed-in POST without the CSRF token is 403 with a way back, and changes nothing', async () => {
+  const s = await start(roomy);
+  try {
+    seedExpert(s);
+    const { cookie, csrf } = await signedIn(s);
+    assert.ok(csrf, 'the account page carries a token');
+    const bare = await post(s.base, '/book', bookData, cookie);
+    assert.equal(bare.status, 403);
+    const page = await bare.text();
+    assert.match(page, /<a [^>]*href=/);
+    assert.match(page, /Nothing was changed/);
+    assert.equal(s.app.db.prepare('select count(*) n from bookings').get().n, 0, 'no booking row');
+    const wrong = await post(s.base, '/book', { ...bookData, csrf: 'x'.repeat(csrf.length) }, cookie);
+    assert.equal(wrong.status, 403);
+    const ok = await post(s.base, '/book', { ...bookData, csrf }, cookie);
+    assert.equal(ok.status, 303);
+    assert.equal(s.app.db.prepare('select count(*) n from bookings').get().n, 1);
+    assert.equal(s.app.db.prepare("select count(*) n from events where kind = 'csrf_refused'").get().n, 2);
+  } finally {
+    s.stop();
+  }
+});
+
+test('a guest can still ask, and JSON from a bot needs no token but a text/plain POST does', async () => {
+  const s = await start(roomy);
+  try {
+    const guest = await post(s.base, '/ask', { q: 'why does the line stop at the sealer?' });
+    assert.equal(guest.status, 303, 'no session, no token needed');
+    const { cookie } = await signedIn(s);
+    const json = await fetch(`${s.base}/api/ask`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ question: 'why does the sealer jam?' }) });
+    assert.equal(json.status, 200);
+    const plain = await fetch(`${s.base}/api/ask`, { method: 'POST', headers: { 'content-type': 'text/plain', cookie }, body: 'q=why+does+the+sealer+jam' });
+    assert.equal(plain.status, 403, 'text/plain is parsed as a form, so it is a form post');
+  } finally {
+    s.stop();
+  }
+});
+
+test('every post form carries the token and no get form does', async () => {
+  const s = await start(roomy);
+  try {
+    const { cookie } = await signedIn(s, { email: 'ops-csrf@plant.vn', role: 'admin' });
+    for (const path of ['/account', '/admin', '/admin/accounts', '/admin/experts', '/admin/settings']) {
+      const html = await (await fetch(s.base + path, { headers: { cookie } })).text();
+      const forms = [...html.matchAll(/<form\b[^>]*>[\s\S]*?(?=<form\b|<\/body>)/gi)];
+      assert.ok(forms.length > 0, path);
+      for (const f of forms) {
+        const isPost = /method="post"/i.test(f[0].match(/<form\b[^>]*>/i)[0]);
+        const block = f[0].split(/<\/form>/i)[0];
+        assert.equal(/name="csrf"/.test(block), isPost, `${path}: ${f[0].match(/<form\b[^>]*>/i)[0]}`);
+      }
+    }
+    const search = await (await fetch(`${s.base}/admin/accounts`, { headers: { cookie } })).text();
+    assert.match(search, /<form[^>]*method="get"/i, 'the admin search form is a GET form');
+  } finally {
+    s.stop();
+  }
+});
+
+test('withCsrf: one input per post form, none in a get form, attributes in any order', () => {
+  const html = '<form method="post" action="/a"></form><form class="x" action="/b" method="post" id="y"></form><form method="get" action="/s"></form>';
+  const out = withCsrf(html, 'tok"en');
+  assert.equal(out.match(/name="csrf"/g).length, 2);
+  assert.ok(out.includes('value="tok&quot;en"'));
+  assert.ok(out.indexOf('<form method="get" action="/s">') > 0 && !/<form method="get" action="\/s">\s*<input/.test(out));
+  assert.equal(withCsrf(html, ''), html, 'no session, no field');
+});
+
+test('a new hash is scrypt N=2^17, and an older hash is upgraded at the next sign-in', async () => {
+  const hash = await hashPassword('some password here');
+  assert.match(hash, /^scrypt\$131072\$8\$1\$/);
+  assert.equal(needsRehash(hash), false);
+  const s = await start(roomy);
+  try {
+    // a 16384-cost hash, as every account made before this change holds
+    const { scrypt, randomBytes } = await import('node:crypto');
+    const salt = randomBytes(16);
+    const key = await new Promise((res, rej) => scrypt('legacy-password-1', salt, 32, { N: 16384, r: 8, p: 1 }, (e, k) => (e ? rej(e) : res(k))));
+    const legacy = `scrypt$16384$8$1$${salt.toString('base64url')}$${key.toString('base64url')}`;
+    assert.equal(needsRehash(legacy), true);
+    createUser(s.app.db, { email: 'legacy@plant.vn', name: 'Legacy', password_hash: legacy });
+    const res = await post(s.base, '/signin', { email: 'legacy@plant.vn', password: 'legacy-password-1' });
+    assert.equal(res.status, 303);
+    const stored = s.app.db.prepare('select password_hash from users where email = ?').get('legacy@plant.vn').password_hash;
+    assert.match(stored, /^scrypt\$131072\$8\$1\$/);
+    assert.equal((await post(s.base, '/signin', { email: 'legacy@plant.vn', password: 'legacy-password-1' })).status, 303, 'and it still works');
+  } finally {
+    s.stop();
+  }
+});
+
+test('signing in with a session cookie already held replaces that session', async () => {
+  const s = await start(roomy);
+  try {
+    const first = await signedIn(s, { email: 'rot@plant.vn' });
+    const oldId = /gemba_session=([^;]+)/.exec(first.cookie)[1];
+    // a stale session is signed out of at the form, so post with the token it carries
+    const res = await post(s.base, '/signin', { email: 'rot@plant.vn', password: PW, csrf: first.csrf }, first.cookie);
+    assert.equal(res.status, 303);
+    assert.equal(s.app.db.prepare('select count(*) n from sessions where id = ?').get(oldId).n, 0, 'the old session row is gone');
+    assert.notEqual(/gemba_session=([^;]+)/.exec(cookieOf(res))[1], oldId);
+  } finally {
+    s.stop();
+  }
+});
+
+test('a role change ends the target\'s sessions', async () => {
+  const s = await start(roomy);
+  try {
+    const op = await signedIn(s, { email: 'boss@plant.vn', role: 'admin' });
+    const victim = await signedIn(s, { email: 'target@plant.vn' });
+    const id = s.app.db.prepare('select id from users where email = ?').get('target@plant.vn').id;
+    assert.equal(s.app.db.prepare('select count(*) n from sessions where user_id = ?').get(id).n, 1);
+    const res = await post(s.base, `/admin/accounts/${id}/role`, { role: 'admin', csrf: op.csrf }, op.cookie);
+    assert.equal(res.status, 303);
+    assert.equal(s.app.db.prepare('select count(*) n from sessions where user_id = ?').get(id).n, 0);
+    assert.match(s.app.db.prepare("select detail from events where kind = 'account' order by id desc").get().detail, /sessions_ended=1/);
+    assert.ok(victim.cookie);
+  } finally {
+    s.stop();
+  }
+});
+
+test('the /qt link: a wrong token of the same length is 404, a confirm names the link as the actor', async () => {
+  const s = await start({ adminToken: 'abcdefghij', ...roomy });
+  try {
+    assert.equal((await fetch(`${s.base}/qt/abcdefghik`)).status, 404);
+    assert.equal((await fetch(`${s.base}/qt/abcdefghij`)).status, 200);
+    seedExpert(s);
+    const booked = await post(s.base, '/book', bookData);
+    const ref = booked.headers.get('location').split('/').pop();
+    s.app.db.prepare("update bookings set status = 'awaiting_payment' where ref = ?").run(ref);
+    const res = await post(s.base, '/qt/abcdefghij/confirm', { ref });
+    assert.equal(res.status, 303);
+    assert.match(s.app.db.prepare("select detail from events where ref = ? order by id desc").get(ref).detail, /actor=qt-link/);
+  } finally {
+    s.stop();
+  }
+});
+
+test('the admin token file is created 0600, and an existing 0644 one is tightened', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gemba-tok-'));
+  const saved = process.env.GEMBA_ENV_FILE;
+  const cwd = process.cwd();
+  process.env.GEMBA_ENV_FILE = '/dev/null';
+  process.chdir(dir);
+  try {
+    const cfg = loadConfig({ GEMBA_DATA_DIR: dir });
+    assert.equal(statOf(join(dir, 'admin.token')).mode & 0o777, 0o600);
+    assert.ok(cfg.adminToken.length >= 32);
+    writeFileSync(join(dir, 'admin.token'), 'old-token-aaaa', { mode: 0o644 });
+    assert.equal(loadConfig({ GEMBA_DATA_DIR: dir }).adminToken, 'old-token-aaaa');
+    assert.equal(statOf(join(dir, 'admin.token')).mode & 0o777, 0o600);
+  } finally {
+    process.chdir(cwd);
+    if (saved === undefined) delete process.env.GEMBA_ENV_FILE; else process.env.GEMBA_ENV_FILE = saved;
+  }
+});
+
+test('rotating the /qt link kills the old link, and is refused when the env owns the token', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gemba-rot-'));
+  writeFileSync(join(dir, 'admin.token'), 'first-token-value');
+  const s = await start({ adminToken: 'first-token-value', adminTokenFile: join(dir, 'admin.token'), dataDir: dir, ...roomy });
+  try {
+    const op = await signedIn(s, { email: 'rotator@plant.vn', role: 'admin' });
+    assert.equal((await fetch(`${s.base}/qt/first-token-value`)).status, 200);
+    const res = await post(s.base, '/admin/qt-link/rotate', { csrf: op.csrf }, op.cookie);
+    assert.equal(res.status, 303);
+    assert.equal((await fetch(`${s.base}/qt/first-token-value`)).status, 404, 'the old link is dead');
+    const fresh = s.app.config.adminToken;
+    assert.notEqual(fresh, 'first-token-value');
+    assert.equal((await fetch(`${s.base}/qt/${fresh}`)).status, 200, 'the new one works');
+    assert.equal(readFileSync2(join(dir, 'admin.token'), 'utf8'), fresh);
+    assert.equal(statOf(join(dir, 'admin.token')).mode & 0o777, 0o600);
+    assert.match(s.app.db.prepare("select detail from events where kind = 'admin' order by id desc").get().detail, /actor=rotator@plant.vn qt link rotated/);
+    // no session, no rotation
+    assert.equal((await post(s.base, '/admin/qt-link/rotate', {})).status, 303);
+    assert.equal(s.app.config.adminToken, fresh);
+  } finally {
+    s.stop();
+  }
+  const env = await start({ adminToken: 'from-env-token', adminTokenFromEnv: true, ...roomy });
+  try {
+    const op = await signedIn(env, { email: 'rotator2@plant.vn', role: 'admin' });
+    await post(env.base, '/admin/qt-link/rotate', { csrf: op.csrf }, op.cookie);
+    assert.equal(env.app.config.adminToken, 'from-env-token');
+    const page = await (await fetch(`${env.base}/admin`, { headers: { cookie: op.cookie } })).text();
+    assert.match(page, /change it there/);
+  } finally {
+    env.stop();
+  }
+});
+
+test('over HTTPS the session cookie is __Host- prefixed, and sign-out clears both names', async () => {
+  const s = await start(roomy);
+  try {
+    createUser(s.app.db, { email: 'host@plant.vn', name: 'Host', password_hash: await hashPassword(PW) });
+    const res = await fetch(`${s.base}/signin`, { method: 'POST', redirect: 'manual', headers: { ...FORM, 'x-forwarded-proto': 'https' }, body: enc({ email: 'host@plant.vn', password: PW }) });
+    const set = res.headers.get('set-cookie');
+    assert.match(set, /^__Host-gemba_session=[^;]+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+; Secure$/);
+    assert.ok(!/Domain=/i.test(set));
+    const cookie = set.split(';')[0];
+    const page = await (await fetch(`${s.base}/account`, { headers: { cookie, 'x-forwarded-proto': 'https' } })).text();
+    assert.match(page, /Signed in as/);
+    const csrf = /name="csrf" value="([^"]+)"/.exec(page)[1];
+    const out = await fetch(`${s.base}/signout`, { method: 'POST', redirect: 'manual', headers: { ...FORM, cookie, 'x-forwarded-proto': 'https' }, body: enc({ csrf }) });
+    const cleared = out.headers.getSetCookie().join('\n');
+    assert.match(cleared, /__Host-gemba_session=;/);
+    assert.match(cleared, /(^|\n)gemba_session=;/);
+  } finally {
+    s.stop();
+  }
+});
+

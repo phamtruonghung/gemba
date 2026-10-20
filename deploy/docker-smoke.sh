@@ -82,7 +82,9 @@ curl -s -o /dev/null -c "$JAR" "${AUTH[@]}" -w '   POST /signup → %{http_code}
   --data-urlencode "password=a sentence of ten characters"
 grep -q gemba_session "$JAR" && echo "   session cookie → set" || echo "   session cookie → MISSING"
 curl -s -b "$JAR" "${AUTH[@]}" "http://127.0.0.1:$PORT/account" | grep -oE "Signed in as Container Asker" | head -1 | sed 's/^/   /'
-curl -s -o /dev/null -b "$JAR" -c "$JAR" "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/signout"
+# A session-carrying POST needs the session's CSRF token, which the page puts in every post form.
+CSRF="$(curl -s -b "$JAR" "${AUTH[@]}" "http://127.0.0.1:$PORT/account" | sed -n 's/.*name="csrf" value="\([^"]*\)".*/\1/p' | head -1)"
+curl -s -o /dev/null -b "$JAR" -c "$JAR" "${AUTH[@]}" -X POST "http://127.0.0.1:$PORT/signout" --data-urlencode "csrf=$CSRF"
 code_after="$(curl -s -o /dev/null -b "$JAR" "${AUTH[@]}" -w '%{http_code}' "http://127.0.0.1:$PORT/account")"
 echo "   GET /account after sign-out → $code_after (303 = the session was revoked)"
 rm -f "$JAR"

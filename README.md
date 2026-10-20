@@ -24,7 +24,7 @@ question into revenue.
 
 ## Two doors for the operator, and why
 
-`/qt/<token>` is the link the installer prints: what the instance is doing, and the two booking
+`/qt/<token>` is the operator link (the token is in `<data>/admin.token`, mode 600; the installer says where, and `/admin` can rotate it): what the instance is doing, and the two booking
 transitions (*payment received*, *session done*). It needs no sign-in, so it is the quick
 reconciliation link — and nothing more.
 
@@ -159,7 +159,7 @@ implemented. The contract is in `SPEC.md` section 3 and enforced by `test/llm.te
 | `GEMBA_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
 | `GEMBA_DB` | `<data>/gemba.db` | database path |
 | `GEMBA_HOST_PORT` | `8090` | host-side port in `docker-compose.yml`; the container always listens on 8090 internally |
-| `GEMBA_ADMIN_TOKEN` | generated into `<data>/admin.token` | operator console token (`/qt/<token>`) |
+| `GEMBA_ADMIN_TOKEN` | generated into `<data>/admin.token` | operator console token (`/qt/<token>`); never printed to a log. Rotate it from `/admin`, unless it is set here |
 | `GEMBA_LLM_KEY` | — | API key for the answer model; absent ⇒ labelled extractive mode |
 | `GEMBA_LLM_BASE_URL` | OpenCode (`/zen/go/v1`) | OpenAI-compatible chat-completions base URL |
 | `GEMBA_LLM_MODEL` | `deepseek-v4.1-flash` | model id, derived from the gateway when unset (`deepseek/...` for OpenRouter) |

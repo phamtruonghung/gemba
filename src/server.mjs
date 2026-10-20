@@ -2,7 +2,7 @@
 // Zero dependencies: node:http + node:sqlite.
 
 import http from 'node:http';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from 'node:fs';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 
 import * as dbm from './db.mjs';
@@ -18,7 +18,7 @@ import * as views from './views.mjs';
 import { cachePolicy, buildServiceWorker, MANIFEST, PUBLIC_DIR } from './pwa.mjs';
 import { serveStatic } from './static.mjs';
 import { createLimiter, DEFAULT_LIMITS } from './ratelimit.mjs';
-import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookie, newSessionId, sessionExpiry, hashPassword, verifyPassword, checkEmail, checkPassword, checkName, SESSION_COOKIE } from './auth.mjs';
+import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookies, newSessionId, sessionExpiry, hashPassword, verifyPassword, needsRehash, Busy, checkEmail, checkPassword, checkName, sessionIdFrom } from './auth.mjs';
 
 const ROUTE_DUE_HOURS = 48;
 const TEXT_COOKIE = 'gemba_text';
@@ -118,10 +118,12 @@ export function loadConfig(env = process.env) {
   const tokenFile = `${dataDir}/admin.token`;
   let adminToken = merged.GEMBA_ADMIN_TOKEN;
   if (!adminToken) {
-    if (existsSync(tokenFile)) adminToken = readFileSync(tokenFile, 'utf8').trim();
-    else {
-      adminToken = randomBytes(9).toString('hex');
-      writeFileSync(tokenFile, adminToken);
+    if (existsSync(tokenFile)) {
+      adminToken = readFileSync(tokenFile, 'utf8').trim();
+      try { chmodSync(tokenFile, 0o600); } catch { /* not ours to change; the read worked */ }
+    } else {
+      adminToken = randomBytes(24).toString('base64url');
+      writeFileSync(tokenFile, adminToken, { mode: 0o600 });
     }
   }
   return {
@@ -130,6 +132,8 @@ export function loadConfig(env = process.env) {
     dbPath: merged.GEMBA_DB || `${dataDir}/gemba.db`,
     dataDir,
     adminToken,
+    adminTokenFile: tokenFile,
+    adminTokenFromEnv: Boolean(merged.GEMBA_ADMIN_TOKEN),
     // Optional front gate. Set GEMBA_USER + GEMBA_PASS before publishing this to a public
     // hostname: the ask form calls a paid model, so an open instance is an open bill.
     user: merged.GEMBA_USER || '',
@@ -259,7 +263,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const textSize = ['normal', 'large', 'xl'].includes(cookies[TEXT_COOKIE]) ? cookies[TEXT_COOKIE] : 'normal';
     const send = (code, html, headers = {}) => {
       res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', ...headers });
-      res.end(typeof html === 'string' ? views.withTextSize(html, textSize) : html);
+      // A signed-in person's forms carry their session's CSRF token. Notes are the one signed-in page a
+      // worker may cache, so they are left without it (their only forms set a preference cookie).
+      const tokened = typeof html === 'string' && account && cachePolicy(path, method) !== 'swr' ? views.withCsrf(html, dbm.csrfFor(db, sessionId)) : html;
+      res.end(typeof tokened === 'string' ? views.withTextSize(tokened, textSize) : tokened);
     };
     // Absolute URL of this request's page, for the share block. x-forwarded-proto is honoured the way
     // the session cookie honours it; the Host header is used only if it looks like a host.
@@ -267,7 +274,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     const origin = `${isSecureRequest(req) ? 'https' : 'http'}://${/^[A-Za-z0-9.:\-\[\]]{1,255}$/.test(hostHeader) ? hostHeader : 'localhost'}`;
     // The session cookie is read once per request; `user` is the public shape (never the hash), and
     // every page that shows a nav needs it.
-    const sessionId = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? '';
+    const sessionId = sessionIdFrom(cookies);
     const account = dbm.sessionUser(db, sessionId);
     const user = dbm.publicUser(account);
     // Central cache rule for the service worker (src/pwa.mjs). The worker cannot see Set-Cookie, so
@@ -365,6 +372,22 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       return res.end(views.unauthorizedPage());
     }
 
+    // --- CSRF: a POST that carries a session must carry that session's token ---------------------
+    // The token is a hidden form field (no JavaScript involved). A guest has no session, so a guest can
+    // still ask. JSON is exempt: a browser cannot send application/json cross-site without a CORS
+    // preflight, and this server never answers one; anything else is parsed as a form and is checked.
+    // The two preference posts only set a cookie that names a text size or a place in a note.
+    const csrfExempt = path === '/prefs/text' || /^\/notes\/[^/]+\/place$/.test(path);
+    if (method === 'POST' && account && !csrfExempt && !String(req.headers['content-type'] ?? '').includes('application/json')) {
+      if (!sameSecret(form.csrf ?? '', dbm.csrfFor(db, sessionId))) {
+        dbm.logEvent(db, 'csrf_refused', '', `${path} user=${account.id}`);
+        return send(403, views.errorPage({
+          code: 403, message: 'This form expired or came from another page.', user,
+          lead: 'Nothing was changed.', retry: safeNext(refererPath())
+        }));
+      }
+    }
+
     // --- installable-app files: manifest, worker, offline page, icons ------
     if ((path === '/manifest.webmanifest' || path === '/sw.js') && (method === 'GET' || method === 'HEAD')) {
       const isSw = path === '/sw.js';
@@ -457,6 +480,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     // --- accounts ----------------------------------------------------------
     // Signing in "to keep" a question claims it only for the browser that asked it, or for the account
     // whose email the asker gave. A ref alone, which anyone holding the link has, claims nothing.
+    // A password that verified against a cheaper scrypt cost is re-hashed at today's cost, once.
+    const upgradeHash = async (found, password) => {
+      if (needsRehash(found.password_hash)) dbm.setPasswordHash(db, found.id, await hashPassword(password));
+    };
     const claimKept = (ref, who) => {
       const q = dbm.questionByRef(db, ref);
       if (!q || q.user_id) return false;
@@ -500,7 +527,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           user
         }));
       }
+      await upgradeHash(found, password);
       const id = newSessionId();
+      dbm.deleteSession(db, sessionId); // a session id is never reused across a sign-in
       dbm.createSession(db, { id, userId: found.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
       dbm.touchUser(db, found.id);
       dbm.logEvent(db, 'signin', '', `user=${found.id}`);
@@ -543,7 +572,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     }
     if (path === '/signout' && method === 'POST') {
       if (sessionId) dbm.deleteSession(db, sessionId);
-      res.writeHead(303, { location: '/', 'set-cookie': clearedSessionCookie({ secure: isSecureRequest(req) }) });
+      res.writeHead(303, { location: '/', 'set-cookie': clearedSessionCookies({ secure: isSecureRequest(req) }) });
       return res.end();
     }
     if (path === '/account') {
@@ -580,7 +609,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           dbm.logEvent(db, 'admin_login_refused', '', `user=${found.id} reason=locked`);
           return send(403, views.adminLoginPage({ email, error: 'That account is locked.' }));
         }
+        await upgradeHash(found, password);
         const id = newSessionId();
+        dbm.deleteSession(db, sessionId);
         dbm.createSession(db, { id, userId: found.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
         dbm.touchUser(db, found.id);
         dbm.logEvent(db, 'admin_login', '', `actor=${found.email}`);
@@ -592,19 +623,32 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (path === '/admin/logout' && method === 'POST') {
       if (account) dbm.logEvent(db, 'admin_logout', '', `actor=${account.email}`);
       if (sessionId) dbm.deleteSession(db, sessionId);
-      res.writeHead(303, { location: '/admin/login', 'set-cookie': clearedSessionCookie({ secure: isSecureRequest(req) }) });
+      res.writeHead(303, { location: '/admin/login', 'set-cookie': clearedSessionCookies({ secure: isSecureRequest(req) }) });
       return res.end();
     }
     if (path === '/admin' || path.startsWith('/admin/')) {
       if (!account || account.role !== 'admin') return redirect(`/admin/login?next=${encodeURIComponent(path)}`);
       const actor = account.email;
+      if (path === '/admin/qt-link/rotate' && method === 'POST') {
+        if (config.adminTokenFromEnv) return redirect('/admin?qt=env');
+        const next = randomBytes(24).toString('base64url');
+        const file = config.adminTokenFile ?? `${config.dataDir}/admin.token`;
+        writeFileSync(`${file}.new`, next, { mode: 0o600 });
+        renameSync(`${file}.new`, file);
+        config.adminToken = next;
+        dbm.logEvent(db, 'admin', 'qt-link', `actor=${actor} qt link rotated`);
+        return redirect('/admin?qt=rotated');
+      }
       if (path === '/admin') {
         return send(200, views.adminOverviewPage({
+          qtLink: url.searchParams.get('qt') === 'rotated' ? `/qt/${config.adminToken}` : '',
+          qtFromEnv: config.adminTokenFromEnv,
           admin: account,
           stats: dbm.stats(db),
           settings: loadSettings(db),
           events: dbm.recentEvents(db, { limit: 20 }),
-          flash: url.searchParams.get('saved') === '1' ? 'Saved.' : ''
+          flash: url.searchParams.get('saved') === '1' ? 'Saved.'
+            : url.searchParams.get('qt') === 'env' ? 'The /qt token is set in the environment (GEMBA_ADMIN_TOKEN) — change it there.' : ''
         }));
       }
       if (path === '/admin/settings') {
@@ -811,8 +855,12 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
           if (role === 'expert' && !dbm.expertByUser(db, target.id)) {
             return fail(400, 'An expert account needs a practitioner row — invite them from the practitioners page instead.');
           }
-          dbm.setUserRole(db, target.id, role);
-          dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} role ${target.role}->${role} for=${target.email}`);
+          // A session minted under the old role must not outlive it.
+          dbm.tx(db, () => {
+            dbm.setUserRole(db, target.id, role);
+            const ended = dbm.deleteSessionsForUser(db, target.id);
+            dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} role ${target.role}->${role} for=${target.email} sessions_ended=${ended}`);
+          });
           return redirect('/admin/accounts?role=1');
         }
         if (action === 'signout') {
@@ -1295,15 +1343,15 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
     if (aMatch) {
       const token = decodeURIComponent(aMatch[1]);
       const sub = aMatch[2] ?? '';
-      if (token !== config.adminToken) return fail(404, 'No such page.');
+      if (!sameSecret(token, config.adminToken)) return fail(404, 'No such page.');
       if (sub === '/confirm' && method === 'POST') {
         const ref = String(form.ref ?? '');
         const b = dbm.bookingByRef(db, ref);
-        const r = b?.status === 'requested' ? { ok: false, error: NOT_CONFIRMED } : dbm.transitionBooking(db, ref, 'paid', { actor: 'operator' });
+        const r = b?.status === 'requested' ? { ok: false, error: NOT_CONFIRMED } : dbm.transitionBooking(db, ref, 'paid', { actor: 'qt-link' });
         return redirect(r.ok ? `/qt/${token}` : `/qt/${token}?err=${encodeURIComponent(r.error)}`);
       }
       if (sub === '/complete' && method === 'POST') {
-        const r = dbm.transitionBooking(db, String(form.ref ?? ''), 'completed', { actor: 'operator' });
+        const r = dbm.transitionBooking(db, String(form.ref ?? ''), 'completed', { actor: 'qt-link' });
         return redirect(r.ok ? `/qt/${token}` : `/qt/${token}?err=${encodeURIComponent(r.error)}`);
       }
       return send(200, views.adminPage({
@@ -1373,7 +1421,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules() }
       // original error was never printed. A 500 handler that can kill the server is worse than no
       // 500 handler. Nothing of the error reaches the visitor: they get a reference, the log gets the stack.
       const id = randomBytes(4).toString('hex');
-      const busy = err?.errcode === 5 || err?.errcode === 6 || /database is locked/i.test(String(err?.message));
+      const busy = err instanceof Busy || err?.errcode === 5 || err?.errcode === 6 || /database is locked/i.test(String(err?.message));
       const bad = err instanceof URIError || err?.code === 'ERR_INVALID_URL';
       if (!bad && !busy) console.error(`unhandled error ${id}:`, String(err?.stack ?? err?.message ?? err));
       if (!res.headersSent) {
@@ -1453,7 +1501,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(`  notes indexed: ${app.index().n}`);
     console.log(`  AI tier: ${app.config.llm.enabled ? `model ${app.config.llm.model}` : 'no API key — extractive fallback only'}`);
     console.log(`  bank: ${bankBin && bankAccount ? `${bankBin}/${bankAccount}` : 'NOT configured — booking pages show no QR'}`);
-    console.log(`  admin: /qt/${app.config.adminToken}`);
+    console.log(`  admin: /qt/<token> — read it from ${app.config.adminTokenFile} (mode 600), or rotate it at /admin`);
   });
   // docker stop and systemd send SIGTERM; without a handler the process dies with the WAL unfolded.
   for (const signal of ['SIGTERM', 'SIGINT']) {

@@ -283,12 +283,13 @@ say "8. legacy directories"
 # the instance above has been verified healthy. Nothing is removed before that probe passes.
 bash "$SRC_DIR/deploy/migrate-rename.sh" --cleanup
 
-TOKEN="$(sed -n 's/^GEMBA_ADMIN_TOKEN=//p' "$ENV_DIR/gemba.env")"
-if [ -z "$TOKEN" ]; then TOKEN="$(cat "$DATA_DIR/admin.token" 2>/dev/null || true)"; fi
+# The operator link is a secret: say where it lives rather than printing it into a terminal, a CI log or
+# a screen share. It can be rotated from /admin.
+if grep -q '^GEMBA_ADMIN_TOKEN=.' "$ENV_DIR/gemba.env"; then TOKEN_FILE="$ENV_DIR/gemba.env (GEMBA_ADMIN_TOKEN)"; else TOKEN_FILE="$DATA_DIR/admin.token"; fi
 cat <<EOF
 
 Installed. Reachable on http://$(hostname -I | awk '{print $1}'):$PORT
-  operator console: /qt/$TOKEN
+  operator console: /qt/<token>, with the token in $TOKEN_FILE (mode 600); rotate it at /admin
   expert desks:     /c/demo-hung-7f3a91, /c/demo-lan-2c8d40, /c/demo-dung-91be55
 Logs: journalctl -u gemba -f
 EOF
