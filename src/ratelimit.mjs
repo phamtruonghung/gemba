@@ -1,36 +1,32 @@
-// src/ratelimit.mjs — in-memory token buckets. No Redis, no middleware, no dependency.
+// src/ratelimit.mjs — in-memory sliding-window limits. No Redis, no middleware, no dependency.
 //
-// A bucket holds up to `capacity` tokens and earns them back evenly over `perMs`. The keys are chosen by
-// whoever is knocking (an address, an email), so the map is bounded: past `maxKeys` the oldest go.
+// For each key we remember when its last `capacity` allowed takes happened; a take is refused while
+// `capacity` of them are less than `perMs` old. The keys are chosen by whoever is knocking (an address,
+// an email), so the map is bounded: past `maxKeys` the least recently used go. `now` is injectable so
+// tests can move the clock.
 
-export function createBuckets({ capacity, perMs, maxKeys = 10_000 }) {
-  const refill = capacity / perMs;
-  const buckets = new Map();
+export function createBuckets({ capacity, perMs, maxKeys = 10_000, now = () => Date.now() }) {
+  const windows = new Map();
   return {
-    /** Spend one token for `key`: `{ ok: true }`, or `{ ok: false, retryAfter }` in whole seconds. */
-    take(key, now = Date.now()) {
-      let b = buckets.get(key);
-      if (b) {
-        b.tokens = Math.min(capacity, b.tokens + (now - b.at) * refill);
-        b.at = now;
-        buckets.delete(key); // re-insert so the Map's order is least-recently-used first
-      } else {
-        b = { tokens: capacity, at: now };
-      }
-      buckets.set(key, b);
-      if (buckets.size > maxKeys) {
-        for (const k of buckets.keys()) {
-          if (buckets.size <= maxKeys) break;
-          buckets.delete(k);
+    /** Spend one take for `key`: `{ ok: true }`, or `{ ok: false, retryAfter }` in whole seconds. */
+    take(key, at = now()) {
+      // a take exactly `perMs` old has left the window
+      const stamps = (windows.get(key) ?? []).filter((ts) => at - ts < perMs);
+      windows.delete(key); // re-insert so the Map's order is least-recently-used first
+      windows.set(key, stamps);
+      if (windows.size > maxKeys) {
+        for (const k of windows.keys()) {
+          if (windows.size <= maxKeys) break;
+          windows.delete(k);
         }
       }
-      if (b.tokens >= 1) {
-        b.tokens -= 1;
-        return { ok: true, retryAfter: 0 };
+      if (stamps.length >= capacity) {
+        return { ok: false, retryAfter: Math.max(1, Math.ceil((stamps[0] + perMs - at) / 1000)) };
       }
-      return { ok: false, retryAfter: Math.max(1, Math.ceil((1 - b.tokens) / refill / 1000)) };
+      stamps.push(at);
+      return { ok: true, retryAfter: 0 };
     },
-    size: () => buckets.size
+    size: () => windows.size
   };
 }
 
@@ -46,17 +42,17 @@ export const DEFAULT_LIMITS = {
   signupIp: { capacity: 5, perMs: MIN }
 };
 
-/** One bucket set per rule; `check(rule, key)` is `{ ok, retryAfter }`. */
-export function createLimiter(limits = DEFAULT_LIMITS) {
-  const sets = Object.fromEntries(Object.entries(limits).map(([name, spec]) => [name, createBuckets(spec)]));
+/** One window set per rule; `check(rule, key)` is `{ ok, retryAfter }`. */
+export function createLimiter(limits = DEFAULT_LIMITS, { now = () => Date.now() } = {}) {
+  const sets = Object.fromEntries(Object.entries(limits).map(([name, spec]) => [name, createBuckets({ now, ...spec })]));
   return {
-    check(rule, key) {
-      return sets[rule] ? sets[rule].take(String(key)) : { ok: true, retryAfter: 0 };
+    check(rule, key, at = now()) {
+      return sets[rule] ? sets[rule].take(String(key), at) : { ok: true, retryAfter: 0 };
     },
     /** Several rules at once; the first refusal wins. */
-    checkAll(pairs) {
+    checkAll(pairs, at = now()) {
       for (const [rule, key] of pairs) {
-        const r = this.check(rule, key);
+        const r = this.check(rule, key, at);
         if (!r.ok) return r;
       }
       return { ok: true, retryAfter: 0 };
