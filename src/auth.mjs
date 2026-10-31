@@ -26,6 +26,11 @@ export const HOST_SESSION_COOKIE = '__Host-gemba_session';
 /** The session id a request carries, preferring the `__Host-` cookie. */
 export const sessionIdFrom = (cookies) => cookies[HOST_SESSION_COOKIE] ?? cookies[SESSION_COOKIE] ?? '';
 export const SESSION_DAYS = 30;
+// Idle limits: a session with no request for this long is refused and its row deleted. The 30-day
+// expires_at above stays the hard ceiling; an idle limit can only shorten a session, never extend it.
+export const SESSION_IDLE_MINUTES = 720; // every role but admin: 12 hours
+export const SESSION_ADMIN_IDLE_MINUTES = 60; // role = 'admin' (the operator console): 1 hour
+export const SESSION_TOUCH_MS = 60_000; // last_seen_at is rewritten at most this often per session
 
 // Cost parameters. N is the CPU/memory cost (2^17 = 131072, the OWASP floor for r=8, p=1), r the block
 // size, p the parallelism. One derivation holds about 128 MiB, which is more than Node's default

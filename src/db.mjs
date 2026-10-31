@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { checkEmail } from './auth.mjs';
+import { checkEmail, SESSION_IDLE_MINUTES, SESSION_ADMIN_IDLE_MINUTES, SESSION_TOUCH_MS } from './auth.mjs';
 
 export const SCHEMA = `
 create table if not exists experts (
@@ -194,6 +194,8 @@ export function migrate(db) {
   addColumn('questions', 'user_id', 'user_id integer references users(id)');
   // The CSRF token a session's forms carry. '' on rows that predate it; csrfFor() fills them on first use.
   addColumn('sessions', 'csrf', "csrf text not null default ''");
+  // When a session last made a request (idle limit). NULL on rows that predate it; stamped on their first request.
+  addColumn('sessions', 'last_seen_at', 'last_seen_at text');
   addColumn('questions', 'ai_missing', "ai_missing text not null default ''");
   // sha256 of the one-time claim a guest's browser holds; '' once claimed, and for questions asked before it existed.
   addColumn('questions', 'claim_hash', "claim_hash text not null default ''");
@@ -555,13 +557,14 @@ export function expertStatement(db, expertId) {
 }
 
 export function createSession(db, { id, userId, expiresAt, userAgent = '' }) {
-  db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent, csrf) values (?, ?, ?, ?, ?, ?)').run(
+  db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent, csrf, last_seen_at) values (?, ?, ?, ?, ?, ?, ?)').run(
     id,
     userId,
     nowIso(),
     expiresAt,
     String(userAgent).slice(0, 200),
-    randomBytes(24).toString('base64url')
+    randomBytes(24).toString('base64url'),
+    nowIso() // signing in is presence
   );
   return id;
 }
@@ -583,7 +586,7 @@ export function setPasswordHash(db, userId, hash) {
 
 /** The user behind a session id, or null. Expired rows are deleted on sight, so the table cannot
  *  grow without bound on an instance nobody signs out of. */
-export function sessionUser(db, id) {
+export function sessionUser(db, id, { idleMs, adminIdleMs } = {}) {
   if (!id) return null;
   const row = db.prepare('select * from sessions where id = ?').get(String(id));
   if (!row) return null;
@@ -591,7 +594,26 @@ export function sessionUser(db, id) {
     db.prepare('delete from sessions where id = ?').run(row.id);
     return null;
   }
-  return userById(db, row.user_id) ?? null;
+  const user = userById(db, row.user_id) ?? null;
+  if (!user) return null;
+  // The limit follows the user's role as it is now: someone promoted to admin inherits the shorter
+  // limit on their next request, because the role is read here on every request.
+  const limit = user.role === 'admin'
+    ? (adminIdleMs ?? SESSION_ADMIN_IDLE_MINUTES * 60_000)
+    : (idleMs ?? SESSION_IDLE_MINUTES * 60_000);
+  const now = Date.now();
+  // An unparseable last_seen_at counts as absent: a corrupt timestamp is not evidence of idleness.
+  const seen = row.last_seen_at ? Date.parse(row.last_seen_at) : NaN;
+  if (Number.isFinite(seen) && now - seen > limit) {
+    db.prepare('delete from sessions where id = ?').run(row.id);
+    return null;
+  }
+  // Write rate: no per-request write. Every request already reads this row; one extra write per live
+  // session per minute is the whole cost of presence.
+  if (!Number.isFinite(seen) || now - seen >= SESSION_TOUCH_MS) {
+    db.prepare('update sessions set last_seen_at = ? where id = ?').run(nowIso(), row.id);
+  }
+  return user;
 }
 
 export function deleteSession(db, id) {

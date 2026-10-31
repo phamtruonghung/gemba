@@ -336,8 +336,9 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
   - Multi-statement writes run in `tx()` (`begin immediate` … `commit`, rollback on a throw). One
     invitation makes one user: the invite is claimed inside the same transaction that creates the user.
 - `users` — email (unique, lowercased), name, `password_hash` (`scrypt`, salted), created/last seen;
-- `sessions` — session id (32 random bytes), user, expiry, user agent; a session is a row, so signing
-  out revokes it;
+- `sessions` — session id (32 random bytes), user, expiry, `last_seen_at`, user agent; a session is a
+  row, so signing out revokes it. A session idle past its limit (12 h; 1 h for `role = 'admin'`) is refused and deleted;
+  the 30-day absolute expiry is the ceiling;
 - `events` — an append-only log of what the system did, so a dispute has a record.
 
 `questions.user_id` and `bookings.user_id` are added by an idempotent migration inside `openDb`, so an

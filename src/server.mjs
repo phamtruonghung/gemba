@@ -21,7 +21,7 @@ import { cachePolicy, buildServiceWorker, MANIFEST, PUBLIC_DIR } from './pwa.mjs
 import { serveStatic } from './static.mjs';
 import * as outbox from './outbox.mjs';
 import { createLimiter, DEFAULT_LIMITS } from './ratelimit.mjs';
-import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookies, newSessionId, sessionExpiry, hashPassword, verifyPassword, needsRehash, Busy, checkEmail, checkPassword, checkName, sessionIdFrom } from './auth.mjs';
+import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookies, newSessionId, sessionExpiry, hashPassword, verifyPassword, needsRehash, Busy, checkEmail, checkPassword, checkName, sessionIdFrom, SESSION_IDLE_MINUTES, SESSION_ADMIN_IDLE_MINUTES } from './auth.mjs';
 
 const ROUTE_DUE_HOURS = 48;
 const TEXT_COOKIE = 'gemba_text';
@@ -108,6 +108,8 @@ function readEnvFile(path) {
   return out;
 }
 
+const positive = (v, fallback) => (Number(v) > 0 && Number.isFinite(Number(v)) ? Number(v) : fallback);
+
 export function loadConfig(env = process.env) {
   // Extra env files, mostly for this author's host: GEMBA_ENV_FILE, then the Hermes profile, then
   // the working directory. None of them are required — a container or a systemd unit passes its own.
@@ -151,6 +153,9 @@ export function loadConfig(env = process.env) {
     // Outbound mail (src/outbox.mjs). The origin goes into every link a message carries, so a real
     // deployment sets GEMBA_PUBLIC_URL; the transport is 'sendmail', 'file' or unset (nothing is sent).
     publicUrl: (merged.GEMBA_PUBLIC_URL || '').replace(/\/+$/, ''),
+    // Idle limits for sessions (src/auth.mjs has the defaults); non-numeric or non-positive falls back to them.
+    sessionIdleMinutes: positive(merged.GEMBA_SESSION_IDLE_MINUTES, SESSION_IDLE_MINUTES),
+    sessionAdminIdleMinutes: positive(merged.GEMBA_SESSION_ADMIN_IDLE_MINUTES, SESSION_ADMIN_IDLE_MINUTES),
     mailTransport: ['sendmail', 'file'].includes(merged.GEMBA_MAIL_TRANSPORT) ? merged.GEMBA_MAIL_TRANSPORT : '',
     sendmailPath: merged.GEMBA_SENDMAIL || '',
     mailFrom: merged.GEMBA_MAIL_FROM || 'Gemba <gemba@localhost>',
@@ -348,7 +353,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     // The session cookie is read once per request; `user` is the public shape (never the hash), and
     // every page that shows a nav needs it.
     const sessionId = sessionIdFrom(cookies);
-    const account = dbm.sessionUser(db, sessionId);
+    const account = dbm.sessionUser(db, sessionId, {
+      idleMs: config.sessionIdleMinutes * 60_000 || undefined,
+      adminIdleMs: config.sessionAdminIdleMinutes * 60_000 || undefined
+    });
     const user = dbm.publicUser(account);
     // Central cache rule for the service worker (src/pwa.mjs). The worker cannot see Set-Cookie, so
     // every response that sets one, every response on a never-cache path, and every page rendered for a
