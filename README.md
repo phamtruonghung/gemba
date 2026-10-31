@@ -169,6 +169,8 @@ implemented. The contract is in `SPEC.md` section 3 and enforced by `test/llm.te
 | `GEMBA_HOST` | `0.0.0.0` | bind address |
 | `GEMBA_USER` / `GEMBA_PASS` | — | HTTP basic auth in front of everything except `/healthz` (set both or neither: the server refuses to start with one); **set this before publishing the instance to any hostname** |
 | `GEMBA_TRUST_PROXY` | — | `1` behind the Cloudflare tunnel: rate limits are charged to `cf-connecting-ip` (else `x-forwarded-for`) instead of the socket, which is always `127.0.0.1` there. Leave unset on a direct bind, where those headers are forgeable. Limits: 10 asks/min per address, 60/h per identity; 5 sign-ins/min per address, 20/h per email; 5 sign-ups/min. Bodies over 64 KiB (512 KiB for a practitioner's note) answer 413 |
+| `GEMBA_SESSION_IDLE_MINUTES` | `720` | a session with no request for this long (12 h) is refused and its row deleted. The absolute 30-day `expires_at` stays the ceiling; this can only shorten a session. Non-numeric or non-positive ⇒ the default |
+| `GEMBA_SESSION_ADMIN_IDLE_MINUTES` | `60` | the same for an operator (`role = 'admin'`), 1 h. The role is read on every request, so a promotion takes effect on the person's next request. Non-numeric or non-positive ⇒ the default |
 | `GEMBA_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
 | `GEMBA_DB` | `<data>/gemba.db` | database path |
 | `GEMBA_GATE_RULES` | `<data>/gate.rules.json` | a deployment's additions to the gate (employer names in `block_terms`, more customer names, patterns). Absent ⇒ the built-in rules, which name no employer; present but malformed ⇒ the server refuses to start |
@@ -214,7 +216,9 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 
 An asker can create an account (name, email, password) and sign in. The session cookie is an
 **opaque random id** with a row in `sessions` — not a signed token — so signing out *revokes* it
-server-side rather than trusting the client to forget. Passwords are hashed with `scrypt` at
+server-side rather than trusting the client to forget. A session also ends after a stretch of no
+requests (12 hours; 1 hour for an operator), well inside its 30 days; presence costs one write a
+minute. Passwords are hashed with `scrypt` at
 cost `N=2^17`, `r=8`, `p=1`, salts are per-account, verification is constant-time, and the hash
 never leaves the database. Password policy is length only (10+ characters, up to 200): composition
 rules push people towards `Passw0rd!` and NIST has said to drop them.
@@ -290,7 +294,7 @@ states the three money shapes, a recommendation, and the questions. These are en
 
 ## Tests, and what they caught
 
-357 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+362 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
 (a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:
