@@ -6,7 +6,7 @@
 // can inject HTML into the page, whoever wrote it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderMarkdown } from '../src/markdown.mjs';
+import { renderInline, renderMarkdown } from '../src/markdown.mjs';
 
 const NOTE = `# 5 Why — how to ask
 
@@ -94,4 +94,80 @@ test('a horizontal rule, a fenced block and hard-wrapped prose all read correctl
   assert.match(html, /<hr>/);
   assert.match(html, /<pre><code>node src\/server\.mjs\n<\/code><\/pre>/);
   assert.match(html, /<p>A sentence that wraps across two lines\.<\/p>/, 'a wrapped line is one paragraph');
+});
+
+// A link that a browser would read as another host is not a site path, so it is never an anchor.
+test('a protocol-relative or backslash link stays plain text', () => {
+  for (const [md, payload] of [['[x](//evil.example)', '//evil.example'], ['[x](/\\evil.example)', '/\\evil.example']]) {
+    const html = renderMarkdown(md);
+    assert.ok(!html.includes('<a '), `no anchor for ${md}`);
+    assert.ok(html.includes('x'), 'the label stays');
+    assert.ok(html.includes(payload), 'the payload stays as text');
+  }
+});
+
+// Emphasis markers inside a URL are part of the URL, not markup to build around it.
+test('emphasis inside an href cannot put a tag into the attribute', () => {
+  const html = renderInline('[a](http://ok/**b**)');
+  const href = /href="([^"]*)"/.exec(html)[1];
+  assert.ok(!/[<>]/.test(href));
+  assert.ok(!html.includes('<strong>'));
+});
+
+test('an underscore in an href cannot open an em that crosses the anchor', () => {
+  const html = renderInline('[a _b](/(_x)');
+  assert.ok(!html.includes('<em>'));
+  assert.ok(!/[<>]/.test(/href="([^"]*)"/.exec(html)[1]));
+});
+
+test('a plain https link and a site path render as anchors', () => {
+  assert.equal(renderInline('[x](https://ok.example)'), '<a href="https://ok.example" rel="noopener">x</a>');
+  assert.equal(renderInline('[x](/notes/how-open-work-is-managed)'), '<a href="/notes/how-open-work-is-managed">x</a>');
+});
+
+test('javascript:, data: and vbscript: links never become anchors', () => {
+  for (const u of ['javascript:alert(1)', 'data:text/html,x', 'vbscript:x']) {
+    assert.ok(!renderInline(`[x](${u})`).includes('<a '), u);
+  }
+});
+
+test('a wiki slug with a quote is escaped in the href', () => {
+  const html = renderInline('[[we"ird]]', new Map([['we"ird', 'Odd note']]));
+  assert.ok(html.includes('href="/notes/we&quot;ird"'));
+  assert.equal(html, '<a href="/notes/we&quot;ird">Odd note</a>');
+});
+
+test('a code span is literal', () => {
+  assert.equal(renderInline('`a**b**`'), '<code>a**b**</code>');
+});
+
+// Guards for what parking pieces behind placeholders could break.
+test('a forged placeholder cannot resurrect or duplicate a piece', () => {
+  const html = renderInline('\u00000\u0000 [x](/a)');
+  assert.ok(!html.includes('\u0000'));
+  assert.equal(html, '0 <a href="/a">x</a>');
+});
+
+test('pieces nest and combine: code in a label, bold in a label, a link inside bold', () => {
+  assert.equal(renderInline('[`c`](/a)'), '<a href="/a"><code>c</code></a>');
+  assert.equal(renderInline('[**b**](/x)'), '<a href="/x"><strong>b</strong></a>');
+  assert.equal(renderInline('**[x](/a)**'), '<strong><a href="/a">x</a></strong>');
+});
+
+test('an href is escaped once, and an href holding a code span is refused', () => {
+  assert.equal(renderInline('[x](/a?b=1&c=2)'), '<a href="/a?b=1&amp;c=2">x</a>');
+  assert.ok(!renderInline('[x](/a`b`c)').includes('<a '));
+});
+
+test('markup in a label or a code span stays escaped, and $& survives literally', () => {
+  assert.equal(renderInline('[<b>](/a)'), '<a href="/a">&lt;b&gt;</a>');
+  assert.equal(renderInline('`<b>`'), '<code>&lt;b&gt;</code>');
+  assert.equal(renderInline('`$&`'), '<code>$&amp;</code>');
+  assert.equal(renderInline('[$&](/a)'), '<a href="/a">$&amp;</a>');
+});
+
+test('a link whose href holds a quote is refused and the quote is escaped', () => {
+  const html = renderInline('[x](/a"b)');
+  assert.ok(!html.includes('<a '));
+  assert.ok(html.includes('&quot;') && !html.includes('"'));
 });

@@ -290,7 +290,7 @@ states the three money shapes, a recommendation, and the questions. These are en
 
 ## Tests, and what they caught
 
-345 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+357 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
 (a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:
