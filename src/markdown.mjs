@@ -17,27 +17,41 @@
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ESCAPES[c]);
 
-const HREF_OK = /^(https?:\/\/|\/)[^\s]*$/;
+// Site paths and http(s) only. `//host` and `/\host` are read by browsers as another host (the same rule as
+// safeNext in server.mjs, kept local because that module starts a server).
+const HREF_OK = /^(https?:\/\/|\/(?![/\\]))[^\s"<>`\\\u0000-\u001f\u007f-\u009f]*$/;
 
 // The vault's own notes refer to each other as `[[how-open-work-is-managed]]`. That is a real
 // reference, so it should read as one: a link to the note when the library holds it, and the plain
 // name when it does not — never the double brackets, which are a wiki's syntax, not a sentence.
 function wikiLink(slug, links) {
   const target = links && (links.get(slug) ?? links.get(slug.replace(/^(vault|demo)-/, '')));
-  if (target) return `<a href="/notes/${slug}">${esc(target)}</a>`;
+  if (target) return `<a href="/notes/${esc(slug)}">${esc(target)}</a>`;
   return `<span class="ref">${esc(slug)}</span>`;
 }
 
+// The `<` exclusion in italic keeps it from ever spanning a tag that bold just produced.
+const emphasis = (t) =>
+  t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[\s(*])[*_]([^*_\n<]+)[*_]/g, '$1<em>$2</em>');
+
+// Every tag and attribute is built from the raw text, escaped exactly once, and parked behind a
+// placeholder while the rest is escaped and given emphasis; the parked pieces go back in at the end.
 export function renderInline(text, links = null) {
-  let t = esc(text);
-  t = t.replace(/\[\[([^\]]+)\]\]/g, (_, slug) => wikiLink(slug.trim(), links));
-  // Code spans first: their contents are literal, so emphasis inside them must not be interpreted.
-  t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`);
+  const held = [];
+  const hold = (html) => `\u0000${held.push(html) - 1}\u0000`;
+  // Strip first, so a placeholder cannot be forged by the text itself.
+  let t = String(text).replace(/\u0000/g, '');
+  // Code spans first: their contents are literal, so nothing inside them is interpreted.
+  t = t.replace(/`([^`]+)`/g, (_, code) => hold(`<code>${esc(code)}</code>`));
+  t = t.replace(/\[\[([^\]]+)\]\]/g, (_, slug) => hold(wikiLink(slug.trim(), links)));
   t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, label, href) =>
-    HREF_OK.test(href) ? `<a href="${href}"${/^https?:/.test(href) ? ' rel="noopener"' : ''}>${label}</a>` : whole,
+    HREF_OK.test(href)
+      ? hold(`<a href="${esc(href)}"${/^https?:/.test(href) ? ' rel="noopener"' : ''}>${emphasis(esc(label))}</a>`)
+      : whole,
   );
-  t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  t = t.replace(/(^|[\s(*])[*_]([^*_\n]+)[*_]/g, '$1<em>$2</em>');
+  t = emphasis(esc(t));
+  // A label can contain a parked piece, so restore until none is left.
+  while (t.includes('\u0000')) t = t.replace(/\u0000(\d+)\u0000/g, (_, i) => held[Number(i)]);
   return t;
 }
 
