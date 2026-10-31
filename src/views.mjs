@@ -25,6 +25,7 @@
 import { createHash } from 'node:crypto';
 import { formatVnd, MIN_MINUTES, MAX_MINUTES, PLATFORM_TAKE_PCT, quote } from './pricing.mjs';
 import { ATTESTATION_TEXT } from './gate.mjs';
+import { NONCE_PLACEHOLDER } from './hardening.mjs';
 import { SCRIPT } from './interview.mjs';
 import { formatLocal } from './when.mjs';
 import { t } from './i18n.mjs';
@@ -637,7 +638,7 @@ ${head}
     <span class="row tight-gap"><span>Prototype (v0.1): sample experts, no real transactions yet.</span><span>MIT licensed.</span></span>
   </div>
 </div></footer>
-<script>
+<script nonce="${NONCE_PLACEHOLDER}">
 // Progressive enhancement, and the only script in the product. The answer is a model call and takes
 // seconds; a form that sits still for that long reads as broken, and a second click on the same button
 // posts the question twice. So: on submit, say what is happening and lock the button. Without

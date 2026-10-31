@@ -16,6 +16,7 @@ import { questionAt, draftNoteFromInterview, slugify, SCRIPT } from './interview
 import { loadSettings, checkSettings, saveSettings, SETTING_KEYS } from './settings.mjs';
 import { checkExpert, checkInvite, checkInviteAcceptance, checkMeetingUrl } from './experts.mjs';
 import * as views from './views.mjs';
+import { securityHeaders, stampNonce, nonceFor, randomNonce } from './hardening.mjs';
 import { cachePolicy, buildServiceWorker, MANIFEST, PUBLIC_DIR } from './pwa.mjs';
 import { serveStatic } from './static.mjs';
 import * as outbox from './outbox.mjs';
@@ -296,6 +297,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     return { question: updated, routed };
   }
 
+  // Keys the derived CSP nonce (src/hardening.mjs): unguessable before the response, stable for the same page.
+  const nonceSecret = randomBytes(32);
+
   async function handle(req, res, body) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname.replace(/\/+$/, '') || '/';
@@ -306,11 +310,18 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     // place is "<note slug>#<heading id>". Both are validated when read, never trusted.
     const cookies = parseCookies(req.headers.cookie);
     const textSize = ['normal', 'large', 'xl'].includes(cookies[TEXT_COOKIE]) ? cookies[TEXT_COOKIE] : 'normal';
+    // Last transform before the bytes: stamp the page's script nonce and tell the header wrapper which one.
+    const stamp = (html) => {
+      if (typeof html !== 'string') return html;
+      const nonce = nonceFor(nonceSecret, html);
+      res.gembaNonce = nonce;
+      return stampNonce(html, nonce);
+    };
     const send = (code, html, headers = {}) => {
       // A signed-in person's forms carry their session's CSRF token. Notes are the one signed-in page a
       // worker may cache, so they are left without it (their only forms set a preference cookie).
       const tokened = typeof html === 'string' && account && cachePolicy(path, method) !== 'swr' ? views.withCsrf(html, dbm.csrfFor(db, sessionId)) : html;
-      const page = typeof tokened === 'string' ? views.withTextSize(tokened, textSize) : tokened;
+      const page = typeof tokened === 'string' ? stamp(views.withTextSize(tokened, textSize)) : tokened;
       // A guest's page is compressed and revalidated with an ETag (the phone user on a weak signal is a guest).
       // A signed-in page is neither: it carries a CSRF token beside text the asker typed, which is what BREACH
       // reads out of a compressed length, and it is `private, no-store` anyway.
@@ -429,12 +440,13 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     // source, the icons are static art, and /offline renders the signed-out frame with no data.
     const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|app\.[0-9a-f]{12}\.css|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
     if (!gateExempt && !account && !basicAuthOk(req.headers.authorization, config)) {
+      const page = stamp(views.unauthorizedPage()); // before writeHead: the header wrapper reads the nonce
       res.writeHead(401, {
         'www-authenticate': 'Basic realm="gemba", charset="UTF-8"',
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store'
       });
-      return res.end(views.unauthorizedPage());
+      return res.end(page);
     }
 
     // --- CSRF: a POST that carries a session must carry that session's token ---------------------
@@ -1509,6 +1521,20 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
 
   const timeouts = { ...DEFAULT_TIMEOUTS, ...(config.timeouts ?? {}) };
   const server = http.createServer(timeouts, async (req, res) => {
+    // Every response gets the security headers, whichever code path writes it (pages, 401, 413, 500, files).
+    // A header the caller already set wins, so static.mjs's nosniff is not sent twice.
+    const secure = isSecureRequest(req);
+    const rawWriteHead = res.writeHead;
+    res.writeHead = function (code, reason, headers) {
+      if (typeof reason !== 'string') { headers = reason; reason = undefined; }
+      const given = new Set(Object.keys(headers ?? {}).map((k) => k.toLowerCase()));
+      const add = {};
+      for (const [k, v] of Object.entries(securityHeaders({ nonce: res.gembaNonce ?? randomNonce(), secure }))) {
+        if (!given.has(k) && !res.hasHeader(k)) add[k] = v;
+      }
+      const merged = { ...add, ...(headers ?? {}) };
+      return reason === undefined ? rawWriteHead.call(this, code, merged) : rawWriteHead.call(this, code, reason, merged);
+    };
     try {
       let raw = '';
       const method = req.method ?? 'GET';

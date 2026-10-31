@@ -8,6 +8,7 @@
 import { createHash } from 'node:crypto';
 import { realpathSync, statSync, readFileSync } from 'node:fs';
 import { resolve, sep, extname } from 'node:path';
+import { NOSNIFF } from './hardening.mjs';
 
 export const CONTENT_TYPES = {
   '.png': 'image/png',
@@ -59,7 +60,7 @@ export function serveStatic(req, res, { root, rawPath }) {
     'cache-control': 'public, max-age=86400',
     etag,
     'last-modified': mtime.toUTCString(),
-    'x-content-type-options': 'nosniff'
+    ...NOSNIFF
   };
   const inm = req.headers['if-none-match'];
   if (inm && inm.split(',').map((s) => s.trim().replace(/^W\//, '')).some((t) => t === etag || t === '*')) {

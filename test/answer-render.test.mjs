@@ -25,7 +25,7 @@ after(() => app.server.close());
 
 const page = async (ref) => {
   const html = await (await fetch(`${base}/q/${ref}`)).text();
-  return html.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/<script>[\s\S]*?<\/script>/g, '');
+  return html.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/<script[^>]*>[\s\S]*?<\/script>/g, '');
 };
 const refusal = (html) => /<div class="refusal">([\s\S]*?)<\/div>\s*(?=<div class="actionbar"|<div class="card"|$)/.exec(html)?.[1] ?? html;
 
