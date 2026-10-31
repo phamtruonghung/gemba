@@ -303,7 +303,7 @@ test('no raw state token reaches an asker\'s or practitioner\'s page', async () 
   const paths = ['/', '/library', '/experts', `/c/${EXPERT_TOKEN}`, ...refs, ...bookings];
   const pages = await Promise.all(paths.map((p) => fetch(`${base}${p}`).then((r) => r.text())));
   for (const [i, html] of pages.entries()) {
-    const body = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script>[\s\S]*?<\/script>/, '');
+    const body = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script[^>]*>[\s\S]*?<\/script>/, '');
     for (const word of ['>open<', '>routed<', '>answered<', '>published<', '>blocked<', '>requested<', '>awaiting_payment<', '>paid<', '>completed<', 'INSUFFICIENT_DATA', 'extractive', 'llm-']) {
       assert.ok(!body.includes(word), `${paths[i]} leaks the raw state token ${word}`);
     }
