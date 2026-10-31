@@ -874,6 +874,10 @@ export function noteBySlug(db, slug) {
   return db.prepare('select * from notes where slug = ?').get(slug);
 }
 
+export function noteById(db, id) {
+  return db.prepare('select * from notes where id = ?').get(id);
+}
+
 export function notesForExpert(db, expertId) {
   return db.prepare('select * from notes where expert_id = ? order by id desc').all(expertId);
 }
@@ -1171,6 +1175,8 @@ export function interviewById(db, id) {
 export function advanceInterview(db, id, answer) {
   const it = interviewById(db, id);
   if (!it) return null;
+  // A session that has already filed its note is finished: re-posting an answer must not advance it.
+  if (it.status !== 'in_progress') return it;
   const answers = JSON.parse(it.answers || '[]');
   answers.push(answer);
   const step = it.step + 1;

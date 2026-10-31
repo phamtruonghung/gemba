@@ -1440,6 +1440,14 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
           const id = Number(form.id);
           const it = dbm.interviewById(db, id);
           if (!it || it.expert_id !== expert.id) return fail(404, 'That interview session is not valid.');
+          // Finished interview: a re-post (back + resubmit, a retried request, a scripted POST) must not
+          // file a second draft. Send the practitioner to the note this session already produced.
+          if (it.status !== 'in_progress') {
+            const filed = it.note_id ? dbm.noteById(db, it.note_id) : null;
+            if (!filed) return redirect(`/c/${expert.token}`);
+            if (filed.status === 'published') return redirect(`/notes/${encodeURIComponent(filed.slug)}`);
+            return redirect(`/c/${expert.token}/draft?slug=${encodeURIComponent(filed.slug)}`);
+          }
           const advanced = dbm.advanceInterview(db, id, String(form.answer ?? '').trim());
           if (advanced.step >= SCRIPT.length) {
             const answers = JSON.parse(advanced.answers);

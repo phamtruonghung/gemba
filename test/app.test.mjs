@@ -215,6 +215,70 @@ test('the AI-moderated interview turns eight answers into a draft the expert att
   assert.match(corpus, /Field notes: The most repeated problem/, 'the interview note is in the corpus, titled after the problem');
 });
 
+async function runInterview(answers) {
+  const html = await (await fetch(`${base}/c/${EXPERT_TOKEN}/interview`)).text();
+  const id = /name="id" value="(\d+)"/.exec(html)[1];
+  let last;
+  for (const answer of answers) {
+    last = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer });
+    assert.equal(last.status, 303);
+  }
+  assert.match(last.headers.get('location'), /\/draft\?slug=/);
+  return { id, slug: new URL(last.headers.get('location'), base).searchParams.get('slug') };
+}
+
+const noteCount = () => app.db.prepare('select count(*) n from notes').get().n;
+const healthNotes = async () => (await (await fetch(`${base}/healthz`)).json()).notes;
+
+test('a ninth interview answer after the published note is filed sends the practitioner to that note, not a second draft', async () => {
+  const { id, slug } = await runInterview([
+    'Alpha: I have worked the paint line for fifteen years, mostly on changeovers.',
+    'Alpha: the most repeated problem is colour drift after a changeover on the paint line.',
+    'Alpha: the first sign is a faint stripe on the first panels out of the oven.',
+    'Alpha: the root cause is residue in the hose; verify it by flushing into a white cup.',
+    'Alpha: the fix is to flush the hose, tell the team leader, log the stripe, then restart the line.',
+    'Alpha: a newcomer repaints the panels instead of flushing the hose first.',
+    'Alpha: the standard is to flush before the first panel after any changeover.',
+    'Alpha: this works on the paint line, not on the powder coating line.'
+  ]);
+  const review = await (await fetch(`${base}/c/${EXPERT_TOKEN}/draft?slug=${encodeURIComponent(slug)}`)).text();
+  const done = await post(`/c/${EXPERT_TOKEN}/draft`, { slug, title: 'Field notes: Alpha colour drift', body: decodeHtml(/<textarea id="draft-body"[^>]*>([\s\S]*?)<\/textarea>/.exec(review)[1]), attested: '1', action: 'publish' });
+  assert.equal(done.status, 200);
+  assert.match(await done.text(), /Note published/);
+
+  const countBefore = noteCount();
+  const healthBefore = await healthNotes();
+  const libraryBefore = await (await fetch(`${base}/library`)).text();
+
+  const ninth = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer: 'Alpha: one more thing nobody asked about.' });
+  assert.equal(ninth.status, 303);
+  assert.equal(ninth.headers.get('location'), `/notes/${slug}`);
+  assert.doesNotMatch(ninth.headers.get('location'), /draft\?slug=|-2/);
+  assert.equal(noteCount(), countBefore);
+  assert.equal(await healthNotes(), healthBefore);
+  const libraryAfter = await (await fetch(`${base}/library`)).text();
+  assert.equal(libraryAfter, libraryBefore);
+  assert.equal(libraryAfter.split('Field notes: Alpha colour drift').length, libraryBefore.split('Field notes: Alpha colour drift').length, 'no duplicated title');
+});
+
+test('a ninth interview answer while the draft is still unpublished sends the practitioner back to that same draft', async () => {
+  const { id, slug } = await runInterview([
+    'Beta: I have run the packing bench for ten years, mostly on export orders.',
+    'Beta: the most repeated problem is a carton sealed with the wrong label on the packing bench.',
+    'Beta: the first sign is a label whose barcode does not match the carton size.',
+    'Beta: the root cause is a label roll swapped at shift change; verify it against the roll tag.',
+    'Beta: the fix is to stop the bench, pull the cartons, tell the team leader, log it, then relabel.',
+    'Beta: a newcomer peels the label off instead of pulling the whole carton.',
+    'Beta: the standard is to check the roll tag at every shift change.',
+    'Beta: this works on the packing bench, not on the pallet wrapper.'
+  ]);
+  const countBefore = noteCount();
+  const ninth = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer: 'Beta: an afterthought that must not file anything.' });
+  assert.equal(ninth.status, 303);
+  assert.equal(ninth.headers.get('location'), `/c/${EXPERT_TOKEN}/draft?slug=${encodeURIComponent(slug)}`);
+  assert.equal(noteCount(), countBefore);
+});
+
 function decodeHtml(s) {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 }
