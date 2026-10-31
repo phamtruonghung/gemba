@@ -1448,8 +1448,11 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
             if (filed.status === 'published') return redirect(`/notes/${encodeURIComponent(filed.slug)}`);
             return redirect(`/c/${expert.token}/draft?slug=${encodeURIComponent(filed.slug)}`);
           }
-          const advanced = dbm.advanceInterview(db, id, String(form.answer ?? '').trim());
-          if (advanced.step >= SCRIPT.length) {
+          // Advance, file the draft and close the session in ONE transaction: if any step fails the
+          // session stays exactly as it was, so a retry cannot advance past the end and file a "-2" twin.
+          const filedSlug = dbm.tx(db, () => {
+            const advanced = dbm.advanceInterview(db, id, String(form.answer ?? '').trim());
+            if (advanced.step < SCRIPT.length) return null;
             const answers = JSON.parse(advanced.answers);
             // The title comes from the problem the expert described (question 2), not from the
             // topic slug: a corpus of notes all called "Field notes: tpm" is unusable.
@@ -1472,9 +1475,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
             });
             dbm.finishInterview(db, id, noteId);
             dbm.logEvent(db, 'interview_done', slug, `draft verdict=${report.verdict}`);
-            return redirect(`/c/${expert.token}/draft?slug=${encodeURIComponent(slug)}`);
-          }
-          return redirect(`/c/${expert.token}/interview?id=${id}`);
+            return slug;
+          });
+          if (!filedSlug) return redirect(`/c/${expert.token}/interview?id=${id}`);
+          return redirect(`/c/${expert.token}/draft?slug=${encodeURIComponent(filedSlug)}`);
         }
         const idParam = Number(url.searchParams.get('id'));
         let it = idParam ? dbm.interviewById(db, idParam) : null;

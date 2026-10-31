@@ -247,6 +247,7 @@ test('a ninth interview answer after the published note is filed sends the pract
   assert.match(await done.text(), /Note published/);
 
   const countBefore = noteCount();
+  const deskBefore = await (await fetch(`${base}/c/${EXPERT_TOKEN}`)).text();
   const healthBefore = await healthNotes();
   const libraryBefore = await (await fetch(`${base}/library`)).text();
 
@@ -259,6 +260,8 @@ test('a ninth interview answer after the published note is filed sends the pract
   const libraryAfter = await (await fetch(`${base}/library`)).text();
   assert.equal(libraryAfter, libraryBefore);
   assert.equal(libraryAfter.split('Field notes: Alpha colour drift').length, libraryBefore.split('Field notes: Alpha colour drift').length, 'no duplicated title');
+  const deskAfter = await (await fetch(`${base}/c/${EXPERT_TOKEN}`)).text();
+  assertDeskUnchanged(deskBefore, deskAfter, 'Field notes: Alpha colour drift');
 });
 
 test('a ninth interview answer while the draft is still unpublished sends the practitioner back to that same draft', async () => {
@@ -272,12 +275,65 @@ test('a ninth interview answer while the draft is still unpublished sends the pr
     'Beta: the standard is to check the roll tag at every shift change.',
     'Beta: this works on the packing bench, not on the pallet wrapper.'
   ]);
+  const title = decodeHtml(/<input id="draft-title"[^>]*value="([^"]*)"/.exec(await (await fetch(`${base}/c/${EXPERT_TOKEN}/draft?slug=${encodeURIComponent(slug)}`)).text())[1]);
   const countBefore = noteCount();
+  const deskBefore = await (await fetch(`${base}/c/${EXPERT_TOKEN}`)).text();
   const ninth = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer: 'Beta: an afterthought that must not file anything.' });
   assert.equal(ninth.status, 303);
   assert.equal(ninth.headers.get('location'), `/c/${EXPERT_TOKEN}/draft?slug=${encodeURIComponent(slug)}`);
   assert.equal(noteCount(), countBefore);
+  const deskAfter = await (await fetch(`${base}/c/${EXPERT_TOKEN}`)).text();
+  assertDeskUnchanged(deskBefore, deskAfter, title);
 });
+
+test('a failure while filing the finished interview leaves no note behind, and the retry files exactly one', async () => {
+  const html = await (await fetch(`${base}/c/${EXPERT_TOKEN}/interview`)).text();
+  const id = /name="id" value="(\d+)"/.exec(html)[1];
+  const answers = [
+    'Gamma: I have run the spray booth for twelve years, mostly on lacquer batches.',
+    'Gamma: the most repeated problem is orange peel on lacquered doors from the spray booth.',
+    'Gamma: the first sign is a dull, dimpled surface on the first doors out of the booth.',
+    'Gamma: the root cause is a clogged nozzle; verify it by spraying a test card first.',
+    'Gamma: the fix is to swap the nozzle, tell the team leader, log the doors, then restart the booth.',
+    'Gamma: a newcomer sands the doors instead of swapping the nozzle first.',
+    'Gamma: the standard is to spray a test card before the first door of every batch.',
+    'Gamma: this works on the spray booth, not on the dip tank.'
+  ];
+  for (const answer of answers.slice(0, 7)) {
+    assert.equal((await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer })).status, 303);
+  }
+  const interviewNotes = () => app.db.prepare("select count(*) n from notes where origin = 'interview'").get().n;
+  const countBefore = noteCount();
+  const interviewBefore = interviewNotes();
+  app.db.exec("create trigger fail_finish before update on interviews when new.status = 'done' begin select raise(abort, 'injected'); end;");
+  try {
+    const res = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer: answers[7] });
+    assert.equal(res.status, 500);
+    assert.equal(noteCount(), countBefore, 'a half-filed note survived the failure');
+    assert.equal(interviewNotes(), interviewBefore);
+    const row = app.db.prepare('select step, status, note_id from interviews where id = ?').get(id);
+    assert.equal(row.step, 7);
+    assert.equal(row.status, 'in_progress');
+    assert.equal(row.note_id, null);
+  } finally {
+    app.db.exec('drop trigger if exists fail_finish');
+  }
+  const retry = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer: answers[7] });
+  assert.equal(retry.status, 303);
+  const slug = new URL(retry.headers.get('location'), base).searchParams.get('slug');
+  assert.equal(retry.headers.get('location'), `/c/${EXPERT_TOKEN}/draft?slug=${encodeURIComponent(slug)}`);
+  assert.doesNotMatch(slug, /-2$/);
+  assert.equal(noteCount(), countBefore + 1);
+  assert.equal(interviewNotes(), interviewBefore + 1);
+  assert.equal(app.db.prepare('select count(*) n from notes where slug = ?').get(slug).n, 1);
+});
+
+function assertDeskUnchanged(deskBefore, deskAfter, title) {
+  const count = (html) => /My notes \((\d+)\)/.exec(html)[1];
+  assert.equal(count(deskAfter), count(deskBefore), "a stray draft appeared in the practitioner's own list");
+  assert.equal(deskAfter.split(title).length, 2);
+  assert.equal(deskAfter.split(title).length, deskBefore.split(title).length);
+}
 
 function decodeHtml(s) {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
