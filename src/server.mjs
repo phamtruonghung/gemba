@@ -185,7 +185,7 @@ const pricingFor = (db) => {
 };
 const NOT_CONFIRMED = 'The practitioner has not confirmed the time yet; no payment was requested.';
 
-export function createApp({ dbPath, config = loadConfig(), rules = loadRules(readRulesFile(config.gateRulesPath)), transport = null, sweepEveryMs = 0 } = {}) {
+export function createApp({ dbPath, config = loadConfig(), rules = loadRules(readRulesFile(config.gateRulesPath)), transport = null, sweepEveryMs = 0, now = Date.now } = {}) {
   // The configured path wins. GEMBA_DB / GEMBA_DATA_DIR are what the README, the systemd unit, the
   // installer and the container volume all describe, so the running app has to open *that* file.
   // (It used to default to a relative 'data/gemba.db', which silently ignored the configuration:
@@ -413,15 +413,15 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
       }
     };
     const tooManySignups = () => {
-      const r = limiter.check('signupIp', ip);
+      const r = limiter.check('signupIp', ip, now());
       return r.ok ? null : tooMany(r, { kind: 'signup' });
     };
     const askLimit = (api) => {
-      const r = limiter.checkAll([['askIp', ip], ['askIdentity', account ? `user:${account.id}` : `ip:${ip}`]]);
+      const r = limiter.checkAll([['askIp', ip], ['askIdentity', account ? `user:${account.id}` : `ip:${ip}`]], now());
       return r.ok ? null : tooMany(r, { api, kind: 'ask' });
     };
     const signinLimit = (email) => {
-      const r = limiter.checkAll([['signinIp', ip], ['signinEmail', String(email).trim().toLowerCase()]]);
+      const r = limiter.checkAll([['signinIp', ip], ['signinEmail', String(email).trim().toLowerCase()]], now());
       return r.ok ? null : tooMany(r, { kind: 'signin' });
     };
 
@@ -1520,21 +1520,8 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${code}</title><body style="font-family:system-ui;max-width:32rem;margin:15vh auto;padding:0 1rem"><h1>${code} — ${text}</h1><p><a href="/">Back to the start</a></p></body>`;
 
   const timeouts = { ...DEFAULT_TIMEOUTS, ...(config.timeouts ?? {}) };
-  const server = http.createServer(timeouts, async (req, res) => {
-    // Every response gets the security headers, whichever code path writes it (pages, 401, 413, 500, files).
-    // A header the caller already set wins, so static.mjs's nosniff is not sent twice.
-    const secure = isSecureRequest(req);
-    const rawWriteHead = res.writeHead;
-    res.writeHead = function (code, reason, headers) {
-      if (typeof reason !== 'string') { headers = reason; reason = undefined; }
-      const given = new Set(Object.keys(headers ?? {}).map((k) => k.toLowerCase()));
-      const add = {};
-      for (const [k, v] of Object.entries(securityHeaders({ nonce: res.gembaNonce ?? randomNonce(), secure }))) {
-        if (!given.has(k) && !res.hasHeader(k)) add[k] = v;
-      }
-      const merged = { ...add, ...(headers ?? {}) };
-      return reason === undefined ? rawWriteHead.call(this, code, merged) : rawWriteHead.call(this, code, reason, merged);
-    };
+  const onRequest = async (req, res) => {
+    installSecurityHeaders(req, res);
     try {
       let raw = '';
       const method = req.method ?? 'GET';
@@ -1583,6 +1570,36 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
         res.end();
       }
     }
+  };
+  // A helper, not inline in onRequest: the checkContinue 413 answers without ever entering onRequest.
+  // Every response gets the security headers, whichever code path writes it (pages, 401, 413, 500, files).
+  // A header the caller already set wins, so static.mjs's nosniff is not sent twice.
+  function installSecurityHeaders(req, res) {
+    const secure = isSecureRequest(req);
+    const rawWriteHead = res.writeHead;
+    res.writeHead = function (code, reason, headers) {
+      if (typeof reason !== 'string') { headers = reason; reason = undefined; }
+      const given = new Set(Object.keys(headers ?? {}).map((k) => k.toLowerCase()));
+      const add = {};
+      for (const [k, v] of Object.entries(securityHeaders({ nonce: res.gembaNonce ?? randomNonce(), secure }))) {
+        if (!given.has(k) && !res.hasHeader(k)) add[k] = v;
+      }
+      const merged = { ...add, ...(headers ?? {}) };
+      return reason === undefined ? rawWriteHead.call(this, code, merged) : rawWriteHead.call(this, code, reason, merged);
+    };
+  }
+  const server = http.createServer(timeouts, onRequest);
+  server.on('checkContinue', (req, res) => {
+    installSecurityHeaders(req, res);
+    const path = (req.url ?? '/').split('?')[0].replace(/\/+$/, '') || '/';
+    const declared = Number(req.headers['content-length']);
+    if ((req.method ?? 'GET') === 'POST' && Number.isFinite(declared) && declared > bodyCapFor(path)) {
+      // Same answer as the readBody ceiling: refuse before inviting a single byte.
+      res.writeHead(413, { 'content-type': 'text/html; charset=utf-8', connection: 'close' });
+      return res.end(STATIC_PAGE(413, 'that request is too large'), () => req.destroy());
+    }
+    res.writeContinue();
+    onRequest(req, res);
   });
   server.maxRequestsPerSocket = 100;
 

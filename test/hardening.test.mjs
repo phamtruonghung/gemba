@@ -851,3 +851,157 @@ test('over HTTPS the session cookie is __Host- prefixed, and sign-out clears bot
   }
 });
 
+
+// --- sliding window and Expect: 100-continue ---------------------------------
+
+import { createBuckets, createLimiter } from '../src/ratelimit.mjs';
+
+test('the window slides: ten per minute, spaced or not, and a take perMs old has left', () => {
+  const b = createBuckets({ capacity: 10, perMs: 60_000 });
+  const t0 = 1_000_000;
+  for (let i = 0; i < 10; i += 1) assert.deepEqual(b.take('k', t0 + i * 5_000), { ok: true, retryAfter: 0 });
+  assert.deepEqual(b.take('k', t0 + 50_000), { ok: false, retryAfter: 10 });
+  assert.equal(b.take('k', t0 + 59_999).ok, false);
+  assert.equal(b.take('k', t0 + 60_000).ok, true, 'the first take is exactly perMs old: gone');
+  assert.equal(b.take('k', t0 + 60_001).ok, false, 'the second is still inside, and the refused take stored nothing');
+  assert.equal(b.take('k', t0 + 65_000).ok, true);
+});
+
+test('500 takes at one instant allow exactly capacity, and capacity are free again after perMs', () => {
+  const b = createBuckets({ capacity: 10, perMs: 60_000 });
+  let allowed = 0;
+  for (let i = 0; i < 500; i += 1) if (b.take('k', 5_000).ok) allowed += 1;
+  assert.equal(allowed, 10);
+  allowed = 0;
+  for (let i = 0; i < 500; i += 1) if (b.take('k', 65_000).ok) allowed += 1;
+  assert.equal(allowed, 10, 'refused takes left nothing behind to crowd the next window');
+});
+
+test('maxKeys still evicts the least recently used key', () => {
+  const b = createBuckets({ capacity: 1, perMs: 60_000, maxKeys: 3 });
+  for (const k of ['a', 'b', 'c', 'd', 'e']) b.take(k, 1);
+  assert.equal(b.size(), 3);
+});
+
+test('the limiter honours a caller timestamp and an injected clock', () => {
+  let t = 10_000;
+  const l = createLimiter({ r: { capacity: 2, perMs: 1_000 } }, { now: () => t });
+  assert.equal(l.check('r', 1).ok, true);
+  assert.equal(l.check('r', 1).ok, true);
+  assert.equal(l.check('r', 1).ok, false);
+  t += 1_000;
+  assert.equal(l.check('r', 1).ok, true, 'the injected clock moved');
+  assert.equal(l.check('r', 2, 10_000).ok, true);
+  assert.equal(l.check('r', 2, 10_000).ok, true);
+  assert.equal(l.check('r', 2, 10_000).ok, false, 'the caller timestamp is honoured');
+  assert.equal(l.check('r', 2, 11_000).ok, true);
+  assert.equal(l.checkAll([['r', 3], ['r', 4]], 20_000).ok, true);
+  assert.equal(l.checkAll([['r', 3], ['r', 3], ['r', 5]], 20_000).ok, false, 'the pairs share the given time');
+  assert.equal(createLimiter().check('nope', 'x').ok, true);
+  assert.equal(createLimiter({ r: { capacity: 1, perMs: 1_000 } }).check('r', 'x').ok, true, 'no clock given: Date.now');
+});
+
+async function startClocked(clock) {
+  const app = createApp({ dbPath: ':memory:', rules: loadRules(), config: baseConfig(), now: () => clock.t });
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
+  return { app, base: `http://127.0.0.1:${app.server.address().port}`, port: app.server.address().port, stop: () => app.server.close() };
+}
+const JSONH = { 'content-type': 'application/json' };
+
+test('asks at 5 s spacing: the eleventh inside the minute is 429; at 6 s spacing twelve all pass', async () => {
+  const clock = { t: 1_750_000_000_000 };
+  const s = await startClocked(clock);
+  try {
+    const t0 = clock.t;
+    const ask = (i) => fetch(`${s.base}/api/ask`, { method: 'POST', headers: JSONH, body: JSON.stringify({ question: `why does the line stop number ${i}?` }) });
+    for (let i = 0; i < 10; i += 1) {
+      clock.t = t0 + i * 5_000;
+      assert.equal((await ask(i)).status, 200, `ask ${i}`);
+    }
+    clock.t = t0 + 50_000;
+    const res = await ask(10);
+    assert.equal(res.status, 429);
+    assert.ok(Number(res.headers.get('retry-after')) >= 1);
+    assert.deepEqual(await res.json(), { error: 'rate limited' });
+  } finally {
+    s.stop();
+  }
+  const clock2 = { t: 1_750_000_000_000 };
+  const s2 = await startClocked(clock2);
+  try {
+    for (let i = 0; i < 12; i += 1) {
+      clock2.t = 1_750_000_000_000 + i * 6_000;
+      const res = await fetch(`${s2.base}/api/ask`, { method: 'POST', headers: JSONH, body: JSON.stringify({ question: `why does the line stop number ${i}?` }) });
+      assert.equal(res.status, 200, `ask ${i}`);
+    }
+  } finally {
+    s2.stop();
+  }
+});
+
+test('five failed sign-ins at 5 s spacing: the sixth inside the minute is 429', async () => {
+  const clock = { t: 1_750_000_000_000 };
+  const s = await startClocked(clock);
+  try {
+    const t0 = clock.t;
+    const attempt = () => fetch(`${s.base}/signin`, { method: 'POST', headers: FORM, body: enc({ email: 'nobody@plant.vn', password: 'wrong-password-1' }), redirect: 'manual' });
+    for (let i = 0; i < 5; i += 1) {
+      clock.t = t0 + i * 5_000;
+      assert.equal((await attempt()).status, 401);
+    }
+    clock.t = t0 + 25_000;
+    const res = await attempt();
+    assert.equal(res.status, 429);
+    assert.ok(Number(res.headers.get('retry-after')) >= 1);
+    clock.t = t0 + 60_000; // the first attempt has left the window, and the server read that off its clock
+    assert.equal((await attempt()).status, 401);
+  } finally {
+    s.stop();
+  }
+});
+
+/** Send headers with `Expect: 100-continue`, then (only if invited) the body. Never hangs: it gives up after 3 s. */
+function expectRequest({ port, path, body, declared = Buffer.byteLength(body) }) {
+  return new Promise((resolve) => {
+    let continues = 0;
+    const out = { continues: 0, status: null, headers: null };
+    const done = () => { clearTimeout(timer); req.destroy(); resolve({ ...out, continues }); };
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path, headers: { ...JSONH, expect: '100-continue', 'content-length': declared } }, (res) => {
+      out.status = res.statusCode;
+      out.headers = res.headers;
+      res.resume();
+      res.on('end', done);
+    });
+    const timer = setTimeout(done, 3_000);
+    req.on('continue', () => { continues += 1; req.end(body); });
+    req.on('error', () => {});
+    req.flushHeaders();
+  });
+}
+
+test('Expect: 100-continue with an oversize declared length is 413 with no continue', async () => {
+  const s = await start();
+  try {
+    const r = await expectRequest({ port: s.port, path: '/api/ask', body: '{}', declared: 1024 * 1024 });
+    assert.equal(r.continues, 0);
+    assert.equal(r.status, 413);
+    assert.equal(r.headers.connection, 'close');
+    assert.equal((await fetch(`${s.base}/healthz`)).status, 200);
+    // control: the same declared length without Expect
+    const plain = await rawRequest({ port: s.port, path: '/api/ask', headers: { ...JSONH, 'content-length': String(1024 * 1024) }, chunks: ['{}'] });
+    assert.equal(plain.status, 413);
+  } finally {
+    s.stop();
+  }
+});
+
+test('Expect: 100-continue with a small JSON body gets one continue and then the answer', async () => {
+  const s = await start();
+  try {
+    const r = await expectRequest({ port: s.port, path: '/api/ask', body: JSON.stringify({ question: 'why does the line stop?' }) });
+    assert.equal(r.continues, 1);
+    assert.equal(r.status, 200);
+  } finally {
+    s.stop();
+  }
+});

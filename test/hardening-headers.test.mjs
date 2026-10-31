@@ -183,3 +183,34 @@ test('request text that echoes the placeholder never becomes the nonce', async (
     assert.equal(scriptNonce(html), nonce);
   } finally { s.stop(); }
 });
+
+/** Send headers with `Expect: 100-continue`; give up after 3 s. Counts any continue the server offers. */
+function expectRequest({ port, path, declared }) {
+  return new Promise((resolve) => {
+    const out = { continues: 0, status: null, headers: null };
+    const done = () => { clearTimeout(timer); req.destroy(); resolve(out); };
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path, headers: { 'content-type': 'application/json', expect: '100-continue', 'content-length': declared } }, (res) => {
+      out.status = res.statusCode;
+      out.headers = res.headers;
+      res.resume();
+      res.on('end', done);
+    });
+    const timer = setTimeout(done, 3_000);
+    req.on('continue', () => { out.continues += 1; req.end('{}'); });
+    req.on('error', () => {});
+    req.flushHeaders();
+  });
+}
+
+// The seam between #49 (headers on every response) and #50 (checkContinue answers a 413 without entering the request handler).
+test('a 413 refused at Expect: 100-continue still carries the security headers', async () => {
+  const s = await start();
+  try {
+    const r = await expectRequest({ port: s.port, path: '/ask', declared: 1024 * 1024 });
+    assert.equal(r.continues, 0);
+    assert.equal(r.status, 413);
+    assert.equal(r.headers['x-content-type-options'], 'nosniff');
+    assert.equal(r.headers['x-frame-options'], 'DENY');
+    for (const h of FIXED) assert.ok(r.headers[h], h);
+  } finally { s.stop(); }
+});
