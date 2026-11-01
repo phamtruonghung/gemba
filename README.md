@@ -191,7 +191,7 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 
 | Route | What it does |
 |---|---|
-| `GET /healthz` | liveness + corpus size + the gateway's verdict on the AI tier: `none` (no key), `configured` (the gateway accepted it), `rejected` (401/403 — the key is dead), `unreachable` (no verdict: network, timeout or 5xx); probed at most once a minute |
+| `GET /healthz` | liveness + corpus size + the gateway's verdict on the AI tier: `none` (no key), `configured` (the gateway accepted it), `rejected` (401/403 — the key is dead), `unreachable` (no verdict: network, timeout or any other non-2xx — 5xx, 429, 404, a redirect); probed at most once a minute, so the answer can be up to a minute old, and the first read after a quiet spell is the previous tier (the refresh happens behind the request) |
 | `GET/POST /signup`, `GET/POST /signin`, `POST /signout` | create an account, sign in, sign out |
 | `GET/POST /invite/:token` | a practitioner sets their own password from an invitation (single use, seven days) |
 | `GET /desk` | the desk of the signed-in practitioner (the account door, next to `/c/<token>`) |
