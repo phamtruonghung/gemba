@@ -1155,10 +1155,13 @@ export function transitionBooking(db, ref, to, { fields = {}, actor = '', note =
 }
 
 export function bookingsFor(db, { expertId, status }) {
-  if (expertId && status) return db.prepare('select * from bookings where expert_id = ? and status = ? order by starts_at').all(expertId, status);
-  if (expertId) return db.prepare('select * from bookings where expert_id = ? order by starts_at').all(expertId);
-  if (status) return db.prepare('select * from bookings where status = ? order by created_at').all(status);
-  return db.prepare('select * from bookings order by id desc').all();
+  // The practitioner's name rides along (as bookingsForUser does): `bookings` holds only expert_id, and the
+  // operator console renders expert_name. Left join, so a booking never drops out of a list for want of a profile.
+  const head = 'select b.*, e.name as expert_name from bookings b left join experts e on e.id = b.expert_id';
+  if (expertId && status) return db.prepare(`${head} where b.expert_id = ? and b.status = ? order by b.starts_at`).all(expertId, status);
+  if (expertId) return db.prepare(`${head} where b.expert_id = ? order by b.starts_at`).all(expertId);
+  if (status) return db.prepare(`${head} where b.status = ? order by b.created_at`).all(status);
+  return db.prepare(`${head} order by b.id desc`).all();
 }
 
 // --- interviews ------------------------------------------------------------

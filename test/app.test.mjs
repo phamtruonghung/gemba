@@ -380,6 +380,7 @@ test('money: a booking is priced in VND, split, and never marked paid by the sys
   // The platform operator confirms against the bank statement; the system alone never does.
   const adminBefore = await (await fetch(`${base}/qt/${ADMIN}`)).text();
   assert.match(adminBefore, new RegExp(ref));
+  assert.match(adminBefore, new RegExp(`<tr><td class="mono">${ref}</td><td>Hung</td>`), 'the reconcile row names the practitioner');
   const confirm = await post(`/qt/${ADMIN}/confirm`, { ref });
   assert.equal(confirm.status, 303);
   const paid = await (await fetch(`${base}/b/${ref}`)).text();
