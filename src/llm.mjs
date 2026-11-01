@@ -292,6 +292,85 @@ export const MODES = [
   'llm-error' // network failure or timeout (:<error name>): extractive fallback
 ];
 
+// --- the AI tier's health: does the gateway accept the key? --------------------------------------
+//
+// `/healthz` used to answer this from `llm.enabled`, which is key *presence*: an expired key still
+// reported `configured` while every answer silently fell back to extractive quoting. The tier is now
+// the gateway's own answer to a credential check, cached, so the public path stays cheap and fast.
+
+/** Every value `/healthz` may report for the AI tier. `none`/`configured` keep their old meaning. */
+export const LLM_TIERS = ['none', 'configured', 'rejected', 'unreachable'];
+
+/** At most one probe per minute per process: `/healthz` is unauthenticated and must not amplify. */
+export const PROBE_TTL_MS = 60_000;
+/** A probe never holds the readiness path open as long as an answer may. */
+export const PROBE_TIMEOUT_MS = 4000;
+
+// The cheapest credential check each gateway offers (measured 2026-11-01): the OpenCode gateway answers
+// `GET /models` 401 "Invalid credential" for a dead key and 200 for a live one, at zero completion
+// tokens. OpenRouter answers `GET /key` 401/200 the same way, while its `/models` is public and answers
+// 200 with no credential at all, so it cannot be used. Any other OpenAI-compatible base gets the
+// cheapest real call: one completion token.
+const PROBES = [
+  { match: 'opencode.ai', path: '/models' },
+  { match: 'openrouter.ai', path: '/key' }
+];
+const PROBE_PROMPT = 'ping';
+
+/** The request a probe sends: a credential check where the gateway has one, else a 1-token call. */
+export function probeRequest(cfg) {
+  const base = String(cfg.base ?? '').replace(/\/$/, '');
+  const gateway = PROBES.find((p) => base.includes(p.match));
+  const headers = { authorization: `Bearer ${cfg.key}` };
+  if (gateway) return { url: `${base}${gateway.path}`, init: { method: 'GET', headers } };
+  return {
+    url: `${base}/chat/completions`,
+    init: {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json', ...(cfg.session ? { 'x-opencode-session': cfg.session } : {}) },
+      body: JSON.stringify({ model: cfg.model, max_tokens: 1, temperature: 0, messages: [{ role: 'user', content: PROBE_PROMPT }] })
+    }
+  };
+}
+
+/** One round trip: the gateway accepted the credential, refused it, or gave no verdict. */
+async function probeOnce(cfg, fetchImpl, timeoutMs) {
+  try {
+    const { url, init } = probeRequest(cfg);
+    const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    // Release the body without reading it: nothing the gateway says is ever parsed, logged or echoed.
+    try { await res.body?.cancel?.(); } catch { /* already released */ }
+    if (res.status === 401 || res.status === 403) return 'rejected';
+    return res.ok ? 'configured' : 'unreachable';
+  } catch {
+    return 'unreachable';
+  }
+}
+
+/**
+ * A cached tier probe for `/healthz`: one gateway call per `ttlMs` at most, shared by every request in
+ * flight. A stale tier is answered at once and refreshed behind the request, so a gateway that has
+ * stopped answering can never make the readiness path wait.
+ */
+export function createTierProbe({ ttlMs = PROBE_TTL_MS, timeoutMs = PROBE_TIMEOUT_MS, now = Date.now } = {}) {
+  let cached = null; // { at, tier }
+  let inFlight = null;
+  const refresh = (cfg, fetchImpl) => {
+    if (!inFlight) {
+      inFlight = probeOnce(cfg, fetchImpl, Math.min(timeoutMs, Number(cfg.timeoutMs) || timeoutMs))
+        .then((tier) => { cached = { at: now(), tier }; return tier; })
+        .finally(() => { inFlight = null; });
+    }
+    return inFlight;
+  };
+  return function tier(cfg, fetchImpl = fetch) {
+    if (!cfg?.enabled) return Promise.resolve('none');
+    if (!cached) return refresh(cfg, fetchImpl);
+    if (now() - cached.at >= ttlMs) refresh(cfg, fetchImpl); // stale: answer now, refresh behind
+    return Promise.resolve(cached.tier);
+  };
+}
+
 /**
  * Ask the corpus. Always returns an answer object with `mode` telling the truth about how it was
  * produced (see MODES). `citations` are note ids in order of first appearance in `answer`, whose

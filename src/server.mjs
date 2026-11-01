@@ -9,7 +9,7 @@ import { gzipSync } from 'node:zlib';
 import * as dbm from './db.mjs';
 import { checkNote, decidePublication, loadRules, readRulesFile } from './gate.mjs';
 import { buildIndex, search, coverage, questionLang } from './retrieval.mjs';
-import { askFromCorpus, llmConfig } from './llm.mjs';
+import { askFromCorpus, llmConfig, createTierProbe } from './llm.mjs';
 import { quote, formatVnd, MIN_MINUTES, transferInstruction, suggestRateVnd } from './pricing.mjs';
 import { parseLocal } from './when.mjs';
 import { questionAt, draftNoteFromInterview, slugify, SCRIPT } from './interview.mjs';
@@ -190,7 +190,7 @@ const pricingFor = (db) => {
 };
 const NOT_CONFIRMED = 'The practitioner has not confirmed the time yet; no payment was requested.';
 
-export function createApp({ dbPath, config = loadConfig(), rules = loadRules(readRulesFile(config.gateRulesPath)), transport = null, sweepEveryMs = 0, now = Date.now } = {}) {
+export function createApp({ dbPath, config = loadConfig(), rules = loadRules(readRulesFile(config.gateRulesPath)), transport = null, sweepEveryMs = 0, now = Date.now, fetchImpl = fetch } = {}) {
   // The configured path wins. GEMBA_DB / GEMBA_DATA_DIR are what the README, the systemd unit, the
   // installer and the container volume all describe, so the running app has to open *that* file.
   // (It used to default to a relative 'data/gemba.db', which silently ignored the configuration:
@@ -199,6 +199,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
   // ':memory:' explicitly; createApp({ dbPath }) still overrides for them.
   const db = dbm.openDb(dbPath ?? config.dbPath);
   const limiter = createLimiter(config.limits ?? DEFAULT_LIMITS);
+  const llmTier = createTierProbe({ now });
   let index = buildIndex(dbm.publishedNotes(db));
   // The worker's source and version are fixed at start: the version hashes the template, views.mjs and
   // public/, so a deploy that changes any of them gives clients a new cache name and drops the old ones.
@@ -434,7 +435,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     };
 
     // --- health (the only path that answers without the front gate) --------
-    if (path === '/healthz') return sendJson(200, { ok: true, notes: index.n, llm: config.llm.enabled ? 'configured' : 'none' });
+    if (path === '/healthz') return sendJson(200, { ok: true, notes: index.n, llm: await llmTier(config.llm, fetchImpl) });
 
     // --- front gate: optional HTTP basic auth ------------------------------
     // The gate exists for the *anonymous* surface: a public tunnel where every question spends a model

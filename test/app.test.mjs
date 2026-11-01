@@ -460,3 +460,54 @@ test('the app opens the database the configuration names, not a file next to the
   assert.equal(app.index().n, 0, 'a fresh configured database starts with an empty corpus');
   app.db.close?.();
 });
+
+async function healthzApp(status, calls) {
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return { status, ok: status >= 200 && status < 300 };
+  };
+  const a = createApp({
+    dbPath: ':memory:',
+    rules: loadRules(),
+    fetchImpl,
+    config: {
+      ...app.config,
+      llm: { enabled: true, base: 'https://opencode.ai/zen/go/v1', model: 'deepseek-v4.1-flash', key: 'k-test', timeoutMs: 1000, session: '' }
+    }
+  });
+  await new Promise((r) => a.server.listen(0, '127.0.0.1', r));
+  return { a, b: `http://127.0.0.1:${a.server.address().port}` };
+}
+
+test("healthz reports the gateway's verdict on the key, not its presence", async () => {
+  for (const [status, want] of [[401, 'rejected'], [200, 'configured']]) {
+    const calls = [];
+    const { a, b } = await healthzApp(status, calls);
+    try {
+      const res = await fetch(`${b}/healthz`);
+      const body = await res.json();
+      assert.equal(res.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.llm, want);
+      assert.equal(body.db, undefined);
+      assert.equal(calls.length, 1);
+      assert.ok(calls[0].url.endsWith('/models'));
+    } finally {
+      a.server.close();
+      a.shutdown();
+    }
+  }
+});
+
+test('healthz asks the gateway once for a burst of requests', async () => {
+  const calls = [];
+  const { a, b } = await healthzApp(200, calls);
+  try {
+    const bodies = await Promise.all(Array.from({ length: 5 }, async () => (await fetch(`${b}/healthz`)).json()));
+    assert.equal(calls.length, 1);
+    for (const body of bodies) assert.equal(body.llm, 'configured');
+  } finally {
+    a.server.close();
+    a.shutdown();
+  }
+});
