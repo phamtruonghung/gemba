@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { askFromCorpus, buildPrompt, plantTypeEnum, retryDelayMs, RETRY_CAP_MS } from '../src/llm.mjs';
+import { askFromCorpus, buildPrompt, plantTypeEnum, retryDelayMs, RETRY_CAP_MS, createTierProbe, probeRequest, LLM_TIERS, PROBE_TTL_MS } from '../src/llm.mjs';
 import { checkNote, loadRules } from '../src/gate.mjs';
 import { questionPage, modeLabel, highlightPassage } from '../src/views.mjs';
 
@@ -345,4 +345,84 @@ test('an English question sends exactly the prompt it always did; a Vietnamese o
   const vi = buildPrompt({ question: 'khi nào thay khuôn', hits, lang: 'vi' });
   assert.ok(vi.system.includes('Write answer_en in English') && vi.system.includes('Vietnamese'));
   assert.ok(vi.user.includes('"answer_en"'));
+});
+
+const PROBE_CFG = { enabled: true, base: 'https://opencode.ai/zen/go/v1', model: 'deepseek-v4.1-flash', key: 'k-test', timeoutMs: 1000, session: '' };
+
+function probeStub(behave) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return behave();
+  };
+  return { calls, fetchImpl };
+}
+
+test('probe: a live credential is configured, a dead one rejected, a broken gateway unreachable', async () => {
+  const cases = [
+    [() => ({ status: 200, ok: true }), 'configured'],
+    [() => ({ status: 401, ok: false }), 'rejected'],
+    [() => ({ status: 403, ok: false }), 'rejected'],
+    [() => ({ status: 500, ok: false }), 'unreachable'],
+    [() => { throw new TypeError('fetch failed'); }, 'unreachable'],
+    [() => { throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); }, 'unreachable']
+  ];
+  for (const [behave, want] of cases) {
+    const { calls, fetchImpl } = probeStub(behave);
+    const got = await createTierProbe()(PROBE_CFG, fetchImpl);
+    assert.equal(got, want);
+    assert.ok(LLM_TIERS.includes(got));
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('probe: the cheapest credential check is used where the gateway has one', () => {
+  const oc = probeRequest(PROBE_CFG);
+  assert.equal(oc.url, 'https://opencode.ai/zen/go/v1/models');
+  assert.equal(oc.init.method, 'GET');
+  const or = probeRequest({ ...PROBE_CFG, base: 'https://openrouter.ai/api/v1' });
+  assert.equal(or.url, 'https://openrouter.ai/api/v1/key');
+  assert.equal(or.init.method, 'GET');
+  const other = probeRequest({ ...PROBE_CFG, base: 'https://llm.example.test/v1/' });
+  assert.equal(other.url, 'https://llm.example.test/v1/chat/completions');
+  assert.equal(other.init.method, 'POST');
+  const body = JSON.parse(other.init.body);
+  assert.equal(body.max_tokens, 1);
+  assert.equal(body.model, 'deepseek-v4.1-flash');
+  assert.equal(other.init.headers.authorization, 'Bearer k-test');
+  assert.ok(!String(other.init.body).includes('k-test'));
+});
+
+test('probe: N requests inside the window make exactly one gateway call', async () => {
+  let clock = 1000;
+  const { calls, fetchImpl } = probeStub(() => ({ status: 200, ok: true }));
+  const tier = createTierProbe({ now: () => clock });
+  const got = [];
+  for (let i = 0; i < 5; i += 1) got.push(await tier(PROBE_CFG, fetchImpl));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(got, Array(5).fill('configured'));
+});
+
+test('probe: a burst of concurrent requests shares one call, and a stale tier refreshes behind the answer', async () => {
+  let clock = 1000;
+  let status = 200;
+  const { calls, fetchImpl } = probeStub(() => ({ status, ok: status < 300 }));
+  const tier = createTierProbe({ now: () => clock });
+  const burst = await Promise.all(Array.from({ length: 5 }, () => tier(PROBE_CFG, fetchImpl)));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(burst, Array(5).fill('configured'));
+
+  clock += PROBE_TTL_MS + 1;
+  status = 401;
+  assert.equal(await tier(PROBE_CFG, fetchImpl), 'configured', 'the stale tier is answered at once');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 2);
+  assert.equal(await tier(PROBE_CFG, fetchImpl), 'rejected', 'the refreshed tier is reported afterwards');
+  assert.equal(calls.length, 2);
+});
+
+test('probe: no key means no call at all', async () => {
+  const { calls, fetchImpl } = probeStub(() => ({ status: 200, ok: true }));
+  assert.equal(await createTierProbe()({ ...PROBE_CFG, enabled: false, key: '' }, fetchImpl), 'none');
+  assert.equal(calls.length, 0);
 });
