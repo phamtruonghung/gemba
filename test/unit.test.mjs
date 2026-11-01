@@ -9,7 +9,7 @@ import { buildIndex, search, coverage, tokenize, fold } from '../src/retrieval.m
 import { quote, priceFor, split, roundVnd, formatVnd, transferInstruction, PLATFORM_TAKE_RATE, MIN_MINUTES } from '../src/pricing.mjs';
 import { buildPrompt, askFromCorpus, NO_DATA_MARKER, llmConfig } from '../src/llm.mjs';
 import { SCRIPT, draftNoteFromInterview, slugify } from '../src/interview.mjs';
-import { openDb, upsertNote, pruneSeedNotes, publishedNotes } from '../src/db.mjs';
+import { openDb, upsertNote, pruneSeedNotes, publishedNotes, upsertExpert, createBookingOnce, bookingsFor } from '../src/db.mjs';
 
 const CRAFT = `# The machine stops mid-shift
 
@@ -320,4 +320,35 @@ test('llm: the OpenCode gateway gets its session header, and other gateways do n
     fetchImpl: fakeFetch
   });
   assert.equal('x-opencode-session' in calls[0].headers, false, 'OpenRouter must not receive the header');
+});
+
+test('booking: every way of listing bookings names the practitioner', () => {
+  const db = openDb(':memory:');
+  const hung = upsertExpert(db, { slug: 'hung-x', name: 'Hung', token: 'tok-hung-x' });
+  const lan = upsertExpert(db, { slug: 'lan-x', name: 'Lan', token: 'tok-lan-x' });
+  const book = (expert_id, starts_at) =>
+    createBookingOnce(db, { expert_id, asker: 'A', contact: 'a@example.com', starts_at, minutes: 45, price_vnd: 1, fee_vnd: 0, payout_vnd: 1 }).booking;
+  const first = book(hung, '2030-10-20 09:00');
+  const second = book(hung, '2030-10-20 07:00');
+  const other = book(lan, '2030-10-20 08:00');
+  db.prepare("update bookings set status = 'cancelled' where ref = ?").run(second.ref);
+
+  const refs = (rows) => rows.map((r) => r.ref);
+  const named = (rows) => rows.every((r) => r.expert_name === (r.expert_id === hung ? 'Hung' : 'Lan'));
+
+  const both = bookingsFor(db, { expertId: hung, status: 'requested' });
+  assert.deepEqual(refs(both), [first.ref], 'expert and status filter together');
+  assert.ok(named(both) && both[0].expert_name === 'Hung');
+
+  const byExpert = bookingsFor(db, { expertId: hung });
+  assert.deepEqual(refs(byExpert), [second.ref, first.ref], 'one practitioner\'s bookings, by start time');
+  assert.ok(named(byExpert) && byExpert[0].expert_name === 'Hung');
+
+  const byStatus = bookingsFor(db, { status: 'requested' });
+  assert.deepEqual(refs(byStatus).sort(), [first.ref, other.ref].sort(), 'the cancelled booking is filtered out');
+  assert.ok(named(byStatus) && byStatus.length === 2);
+
+  const all = bookingsFor(db, {});
+  assert.deepEqual(refs(all), [other.ref, second.ref, first.ref], 'newest first');
+  assert.ok(named(all));
 });
