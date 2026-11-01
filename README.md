@@ -191,7 +191,7 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 
 | Route | What it does |
 |---|---|
-| `GET /healthz` | liveness + corpus size + the gateway's verdict on the AI tier: `none` (no key), `configured` (the gateway accepted it), `rejected` (401/403 — the key is dead), `unreachable` (no verdict: network, timeout or 5xx); probed at most once a minute |
+| `GET /healthz` | liveness + corpus size + the gateway's verdict on the AI tier: `none` (no key), `configured` (the gateway accepted it), `rejected` (401/403 — the key is dead), `unreachable` (no verdict: network, timeout or any other non-2xx — 5xx, 429, 404, a redirect); probed at most once a minute, so the answer can be up to a minute old, and the first read after a quiet spell is the previous tier (the refresh happens behind the request) |
 | `GET/POST /signup`, `GET/POST /signin`, `POST /signout` | create an account, sign in, sign out |
 | `GET/POST /invite/:token` | a practitioner sets their own password from an invitation (single use, seven days) |
 | `GET /desk` | the desk of the signed-in practitioner (the account door, next to `/c/<token>`) |
@@ -294,7 +294,7 @@ states the three money shapes, a recommendation, and the questions. These are en
 
 ## Tests, and what they caught
 
-372 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+373 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
 (a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:

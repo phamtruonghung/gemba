@@ -322,11 +322,14 @@ export function probeRequest(cfg) {
   const base = String(cfg.base ?? '').replace(/\/$/, '');
   const gateway = PROBES.find((p) => base.includes(p.match));
   const headers = { authorization: `Bearer ${cfg.key}` };
-  if (gateway) return { url: `${base}${gateway.path}`, init: { method: 'GET', headers } };
+  // A 3xx is not a verdict: following a cross-origin hop drops `authorization`, so a landing page answering
+  // 200 would be read as `configured` while nothing validated the key. Surface the redirect instead.
+  if (gateway) return { url: `${base}${gateway.path}`, init: { method: 'GET', headers, redirect: 'manual' } };
   return {
     url: `${base}/chat/completions`,
     init: {
       method: 'POST',
+      redirect: 'manual',
       headers: { ...headers, 'content-type': 'application/json', ...(cfg.session ? { 'x-opencode-session': cfg.session } : {}) },
       body: JSON.stringify({ model: cfg.model, max_tokens: 1, temperature: 0, messages: [{ role: 'user', content: PROBE_PROMPT }] })
     }

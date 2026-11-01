@@ -391,6 +391,18 @@ test('probe: the cheapest credential check is used where the gateway has one', (
   assert.equal(body.model, 'deepseek-v4.1-flash');
   assert.equal(other.init.headers.authorization, 'Bearer k-test');
   assert.ok(!String(other.init.body).includes('k-test'));
+  assert.equal(oc.init.redirect, 'manual');
+  assert.equal(or.init.redirect, 'manual');
+  assert.equal(other.init.redirect, 'manual');
+});
+
+test('probe: a redirect is no verdict on the credential, not a healthy gateway', async () => {
+  for (const status of [302, 307]) {
+    const { calls, fetchImpl } = probeStub(() => ({ status, ok: false }));
+    assert.equal(await createTierProbe()(PROBE_CFG, fetchImpl), 'unreachable');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.redirect, 'manual');
+  }
 });
 
 test('probe: N requests inside the window make exactly one gateway call', async () => {
