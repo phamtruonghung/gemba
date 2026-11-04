@@ -87,10 +87,9 @@ test('empty citations on an ok answer: refused, and hits[0] is not attached', as
   assert.ok(!out.citations.includes(11));
 });
 
-test('a citations list with no marker in the text is also uncited', async () => {
-  const out = await ask(async () => json({ answer: 'Replace the die when the burr grows past the gauge mark.', citations: [1], coverage: 'ok', missing: '' }));
-  refused(out, 'llm-uncited');
-});
+// A citations list with no markers in the prose used to be refused outright. It is a measured shape
+// (CT150 2026-11-04: 1 ask in 20) and the list is a usable attribution, so it is now checked against
+// exactly the passages it names — see the two tests under "ungrounded" for both halves of the rule.
 
 test('truncated JSON falls back to the extractive answer with the finish reason in the mode', async () => {
   const out = await ask(async () => reply('{"answer":"Replace the die when the bu', 'length'));
@@ -199,6 +198,57 @@ test('a number that is in the cited passage passes; one that is only in another 
 test('a sentence the cited passage never said is refused as ungrounded', async () => {
   const out = await ask(async () => json({ answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [1].', citations: [1], coverage: 'ok', missing: '' }));
   refused(out, 'llm-ungrounded');
+});
+
+// t_1b49a634: on CT150 three asks in eleven withheld an answer note 17 plainly gives. Both shapes below
+// came out of the model as a *fragment*, and neither asserted anything a passage could contradict.
+test('a sentence the model split at "e.g." is one claim, and a grounded one does not withhold the answer', async () => {
+  const out = await ask(async () => json({
+    answer: 'Passage [1] lists the checks in order, e.g. the die face is wiped and the guide pillars are lubricated before the first stroke.',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  assert.equal(out.mode, 'llm', 'a fragment left by an abbreviation is not a claim of its own');
+  assert.deepEqual(out.citations, [11]);
+});
+
+test('a sentence the model stopped mid-marker does not withhold a grounded answer', async () => {
+  const out = await ask(async () => json({
+    answer: 'Replace the die when the burr grows past the gauge mark [1]. The crew decision and the estimator say who acts [',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  assert.equal(out.mode, 'llm', 'a sentence the model never finished carries no checkable claim');
+  assert.deepEqual(out.citations, [11]);
+  assert.doesNotMatch(out.answer, /\[\s*$/, 'the marker it never closed is not shown to the reader');
+});
+
+test('a claim the passage does not make is still refused once its marker is closed', async () => {
+  // The same trailing sentence from the test above, with the marker the model failed to write.
+  const out = await ask(async () => json({
+    answer: 'Replace the die when the burr grows past the gauge mark [1]. The crew decision and the estimator say who acts [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+});
+
+test('a citation list without markers in the text attributes the answer instead of withholding it', async () => {
+  // Measured on CT150 2026-11-04: one ask in twenty came back with `citations: [1]` and no [1] in the
+  // prose, and was withheld as uncited although every sentence was in the passage it named.
+  const out = await ask(async () => json({ answer: 'Replace the die when the burr grows past the gauge mark.', citations: [1], coverage: 'ok', missing: '' }));
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [11]);
+  assert.deepEqual(out.cites.map((c) => c.n), [1]);
+  assert.ok(out.cites[0].snippet.length > 20);
+  assert.equal(out.answer, 'Replace the die when the burr grows past the gauge mark.');
+});
+
+test('a marker-less answer is still refused when what it says is not in the passage it names', async () => {
+  const out = await ask(async () => json({ answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly.', citations: [1], coverage: 'ok', missing: '' }));
+  refused(out, 'llm-ungrounded');
+});
+
+test('a marker-less answer that names no citation at all is still uncited', async () => {
+  const out = await ask(async () => json({ answer: 'Replace the die when the burr grows past the gauge mark.', citations: [], coverage: 'ok', missing: '' }));
+  refused(out, 'llm-uncited');
 });
 
 test('a plant_type injection attempt never reaches the prompt', () => {

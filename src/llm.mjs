@@ -5,7 +5,7 @@
 // practitioners have published and hands the rest to a human, which is the only honest way
 // to sell an AI tier over a free general model.
 
-import { extractiveAnswer, contentTokens, fold } from './retrieval.mjs';
+import { extractiveAnswer, contentTokens, fold, inflections } from './retrieval.mjs';
 
 // The gateway and the model id are one decision, not two: they must match, or the call 404s on a
 // model the gateway does not serve. The OpenCode gateway (OpenAI-compatible, the same one this
@@ -180,11 +180,28 @@ const markersIn = (text) => [...String(text).matchAll(MARKER)].map((m) => Number
 const plain = (s) => String(s).replace(/\[\[([^\]]+)\]\]/g, '$1').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/[*_`]/g, '').replace(/^[#>\-\s]+/, '').replace(/^\d+[.)]\s+/, '').replace(/\s+/g, ' ').trim();
 
 function sentencesOf(text) {
-  return String(text)
-    .split(/\n+/)
-    .flatMap((line) => line.split(/(?<=[.!?])\s+/))
-    .map(plain)
-    .filter(Boolean);
+  return sentenceSplit(text).map(plain).filter(Boolean);
+}
+
+// A sentence ends on . ! or ? — unless the mark is part of an abbreviation. Splitting "… in its list,
+// e.g. slow running" left "…, e.g." as a sentence of its own: a fragment that asserts nothing, still
+// counted as a claim, and it withheld the whole answer when it shared too little with a passage.
+const ABBREVIATION = /(?:^|\s)(?:e\.g|i\.e|etc|vs|cf|approx|no|fig|al|resp|st)\.$/i;
+
+function sentenceSplit(text) {
+  const out = [];
+  for (const line of String(text).split(/\n+/)) {
+    let start = 0;
+    for (const m of line.matchAll(/[.!?](?=\s)/g)) {
+      const end = m.index + 1;
+      if (ABBREVIATION.test(line.slice(start, end))) continue;
+      out.push(line.slice(start, end));
+      start = end;
+      while (line[start] === ' ' || line[start] === '\t') start += 1;
+    }
+    out.push(line.slice(start));
+  }
+  return out.map((s) => s.trim()).filter(Boolean);
 }
 
 // A sentence of the answer has to be mostly made of words the cited passage also uses. Half is
@@ -195,15 +212,31 @@ export const EN_FALLBACK_NOTE_VI = 'Bản tiếng Việt không qua kiểm tra; 
 // Sentences with fewer content words than this ("Do it now.") carry no claim to check.
 const MIN_CLAIM_TOKENS = 3;
 
-function ungroundedSentence(answer, byNumber) {
-  for (const raw of String(answer).split(/\n+/).flatMap((l) => l.split(/(?<=[.!?])\s+/))) {
+// The model sometimes stops inside a marker ("…, the split points to who acts ["). The sentence it was
+// writing never landed — markersIn finds no number, and there is no complete claim to weigh against a
+// passage — so the tail is skipped rather than read as an unsupported claim. Measured on CT150
+// 2026-11-04: two asks in eleven withheld a correct answer this way.
+const OPEN_MARKER_TAIL = /\[[\d\s]*$/;
+
+/** A marker the model opened and never closed can never resolve: drop it before the reader sees it. */
+const stripOpenMarker = (text) => String(text).replace(/[ \t]*\[[\d \t]*$/gm, '');
+
+/**
+ * A sentence is grounded when most of its content words are words of the passage it cites. Inflections
+ * of a word count as the word ("points" ~ "point"), because a terse paraphrase that reuses the passage's
+ * vocabulary in another form is still a paraphrase — and a three-word sentence failed on one inflection.
+ */
+function ungroundedSentence(answer, byNumber, attributed = null) {
+  const pool0 = attributed?.length ? attributed : null;
+  for (const raw of sentenceSplit(answer)) {
+    if (OPEN_MARKER_TAIL.test(raw)) continue;
     const own = [...new Set(markersIn(raw))].filter((n) => byNumber.has(n));
     const tokens = [...new Set(contentTokens(raw.replace(MARKER, ' ')).filter((t) => !/^\d+$/.test(t)))];
     if (tokens.length < MIN_CLAIM_TOKENS) continue;
-    const pool = own.length ? own : [...byNumber.keys()];
+    const pool = own.length ? own : (pool0 ?? [...byNumber.keys()]);
     const best = Math.max(...pool.map((n) => {
-      const have = byNumber.get(n).tokens;
-      return tokens.filter((t) => have.has(t)).length;
+      const { tokens: have, forms } = byNumber.get(n);
+      return tokens.filter((t) => forms.has(t) || inflections(t).some((v) => have.has(v))).length;
     }));
     if (best / tokens.length < GROUNDED_SHARE) return plain(raw);
   }
@@ -227,7 +260,7 @@ function unsupportedNumber(answer, passages) {
 
 /** The cited sentence: the sentence of the passage that shares most words with the answer's sentence. */
 function snippetFor(passage, answer, n) {
-  const claim = new Set(contentTokens(String(answer).split(/\n+/).flatMap((l) => l.split(/(?<=[.!?])\s+/)).filter((s) => markersIn(s).includes(n)).join(' ') || answer));
+  const claim = new Set(contentTokens(sentenceSplit(answer).filter((s) => markersIn(s).includes(n)).join(' ') || answer));
   const sentences = sentencesOf(passage.body).filter((s) => s.length > 20);
   if (!sentences.length) return plain(passage.body).slice(0, 240);
   const score = (s) => contentTokens(s).filter((t) => claim.has(t)).length;
@@ -470,7 +503,10 @@ export async function askFromCorpus({ question, hits, plantType = '', lang = 'en
   });
 
   const claimed = Array.isArray(parsed.citations) ? parsed.citations.map(Number) : [];
-  const byNumber = new Map(sent.map((p) => [p.n, { ...p, tokens: new Set(contentTokens(`${p.title} ${p.body}`)) }]));
+  const byNumber = new Map(sent.map((p) => {
+    const tokens = new Set(contentTokens(`${p.title} ${p.body}`));
+    return [p.n, { ...p, tokens, forms: new Set([...tokens].flatMap((t) => [t, ...inflections(t)])) }];
+  }));
   const modelMissing = typeof parsed.missing === 'string' ? parsed.missing.trim() : '';
 
   if (String(parsed.coverage) === 'thin') return refuse('llm', modelMissing || coverageVerdict?.why || 'The note library does not cover this question.');
@@ -480,21 +516,29 @@ export async function askFromCorpus({ question, hits, plantType = '', lang = 'en
   const outside = [...claimed, ...inText].some((n) => !Number.isInteger(n) || !byNumber.has(n));
   const strayMarker = inText.some((n) => !claimed.includes(n));
   if (outside || strayMarker) return refuse('llm-bad-citation', 'The draft answer cited a passage that was not provided, so it was withheld.');
-  if (!inText.length) return refuse('llm-uncited', 'The draft answer cited no passage, so it was withheld.');
+  // A draft may name its passages in `citations` and leave the markers out of the prose (measured on
+  // CT150 2026-11-04: one ask in twenty). The list is then the attribution, and every check below runs
+  // against exactly those passages — narrower than the all-passages pool — so nothing unsupported gets
+  // through. A draft that cites nothing at all is still withheld.
+  const attributed = inText.length ? [...new Set(inText)] : [...new Set(claimed)];
+  if (!attributed.length) return refuse('llm-uncited', 'The draft answer cited no passage, so it was withheld.');
 
-  const cited = [...new Set(inText)].map((n) => byNumber.get(n));
+  const cited = attributed.map((n) => byNumber.get(n));
   const figure = unsupportedNumber(parsed.answer, cited);
   if (figure) return refuse('llm-unsupported-figure', `The draft answer gave the figure "${figure}", which is in none of the passages it cites, so it was withheld.`);
-  const loose = ungroundedSentence(parsed.answer, byNumber);
+  const loose = ungroundedSentence(parsed.answer, byNumber, inText.length ? null : attributed);
   if (loose) return refuse('llm-ungrounded', `The draft answer said "${loose.slice(0, 120)}", which the passage it cites does not support, so it was withheld.`);
 
-  const { text: renumbered, map } = renumber(parsed.answer, inText);
-  const cites = [...map.entries()].map(([old, n]) => ({ n, id: byNumber.get(old).id, snippet: snippetFor(byNumber.get(old), parsed.answer, old) }));
+  const { text: renumbered, map } = renumber(stripOpenMarker(parsed.answer), inText);
+  const cites = inText.length
+    ? [...map.entries()].map(([old, n]) => ({ n, id: byNumber.get(old).id, snippet: snippetFor(byNumber.get(old), parsed.answer, old) }))
+    : attributed.map((old, i) => ({ n: i + 1, id: byNumber.get(old).id, snippet: snippetFor(byNumber.get(old), parsed.answer, old) }));
   const result = { answer: renumbered, citations: cites.map((c) => c.id), cites, coverage: 'ok', mode: 'llm', model: cfg.model, missing: '' };
   if (!vi) return result;
 
   // Parity: the Vietnamese carries exactly the markers of the English, and no figure that is in no cited passage.
-  const sameMarkers = JSON.stringify([...markersIn(viAnswer)].sort((a, b) => a - b)) === JSON.stringify([...inText].sort((a, b) => a - b));
+  // An English half with no markers at all has no attribution to check the Vietnamese against, so it falls back.
+  const sameMarkers = inText.length > 0 && JSON.stringify([...markersIn(viAnswer)].sort((a, b) => a - b)) === JSON.stringify([...inText].sort((a, b) => a - b));
   if (viAnswer.trim() && sameMarkers && !unsupportedNumber(viAnswer, cited)) {
     return { ...result, answer: renumber(viAnswer, inText).text };
   }
