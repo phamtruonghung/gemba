@@ -269,6 +269,48 @@ test('a run that does not start at 1 is still figures', async () => {
   refused(out, 'llm-unsupported-figure');
 });
 
+const FIVE_STEP = '# 5S\n## Five steps, in this exact order\n\n1. Sort: pull everything not used out of the area.\n2. Set in order: one place per thing.\n3. Shine: cleaning is inspection.\n4. Standardise: turn the first three steps into a habit with an owner and a time inside the shift.\n5. Sustain: audit it.\n\nThe trap is running 5S as a periodic clean-up campaign.\n';
+const fiveStep = [{ note: { id: 14, slug: 'five-s', title: '5S', topic: '5s', body: FIVE_STEP }, score: 3 }];
+const askFiveStep = (answer, hits = fiveStep) => askFromCorpus({ question: 'what are the five steps of 5S', hits, coverageVerdict: ok, cfg, sleep: noSleep, fetchImpl: async () => json({ answer, citations: [1], coverage: 'ok', missing: '' }) });
+
+test('a range of the passage\'s own ordinals after "steps" in an inline "1. … 4." list is ordinals, not a figure', async () => {
+  const out = await askFiveStep('From [1], in this order: 1. Sort: pull everything not used out of the area. 2. Set in order: one place per thing. 3. Shine: cleaning is inspection. 4. Standardise: turn steps 1–3 into a habit with an owner and a time inside the shift. The trap is running 5S as a periodic clean-up campaign. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('a "1) … steps 1–3 … 5S" answer citing a five-step note is ordinals, not a figure', async () => {
+  const out = await askFiveStep('Straight from the passage, in this exact order: 1) Sort: pull everything not used out of the area. 2) Set in order: one place per thing. 3) Shine: cleaning is inspection. 4) Standardise: turn steps 1–3 into a habit with an owner and a time inside the shift. 5) Sustain: audit it. The trap is running 5S as a periodic clean-up campaign. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('an ordinal range spelled "1 to 3", "1 - 3" or "1 through 3" is ordinals, not a figure', async () => {
+  for (const range of ['steps 1 to 3', 'steps 1 - 3', 'Steps 1 through 3', 'steps 1—3']) {
+    const out = await askFiveStep(`Standardise: turn ${range} into a habit with an owner and a time inside the shift [1].`);
+    assert.equal(out.mode, 'llm', range);
+    assert.deepEqual(out.citations, [14], range);
+  }
+});
+
+test('a range with no ordinal noun is still a figure, even where the passage numbers 2 and 3', async () => {
+  const out = await askFiveStep('Standardise: we cut the batch by 2–3 and re-measured [1].');
+  refused(out, 'llm-unsupported-figure');
+});
+
+test('a range with an endpoint outside the passage\'s ordinals is still a figure', async () => {
+  for (const range of ['steps 1–9', 'steps 2–7']) {
+    const out = await askFiveStep(`Standardise: turn ${range} into a habit with an owner and a time inside the shift [1].`);
+    refused(out, 'llm-unsupported-figure');
+  }
+});
+
+test('"steps 1–3" is a figure when the cited note numbers nothing', async () => {
+  const flat = [{ note: { id: 21, slug: 'habit', title: 'Habit', topic: 'tpm', body: 'Turn the cleaning routine into a habit with an owner and a time inside the shift.' }, score: 3 }];
+  const out = await askFiveStep('Turn steps 1–3 into a habit with an owner and a time inside the shift [1].', flat);
+  refused(out, 'llm-unsupported-figure');
+});
+
 test('a sentence the cited passage never said is refused as ungrounded', async () => {
   const out = await ask(async () => json({ answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [1].', citations: [1], coverage: 'ok', missing: '' }));
   refused(out, 'llm-ungrounded');

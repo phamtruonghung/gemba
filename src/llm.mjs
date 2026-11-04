@@ -356,13 +356,28 @@ function withoutOrdinals(text, ordinals) {
   return out + text.slice(last);
 }
 
+// A range of the passage's own ordinals ("turn steps 1–3 into a habit") names list items, not a quantity.
+// Rule: after an ordinal noun (step, point, item, stage, phase), "a–b" (en/em dash, hyphen, "to", "through")
+// with a < b, both 1–2 digits and BOTH in the cited passage's ordinals, is stripped before the figure scan —
+// the same set the marker strip uses, so the text scanned is the text stripped (measured 2026-11-04: a draft
+// citing a 1.…5. note was withheld as "1" for "steps 1–3"). The noun gate exists because a bare "2–3" can be a
+// measured value ("cut the batch by 2–3"); an endpoint outside the run ("steps 1–9") stays a figure, and a
+// passage with no ordinals strips nothing. Accepted residue: "steps 1–3" meant as a quantity is let through
+// when the passage numbers 1..3.
+const ORDINAL_RANGE = /\b(steps?|points?|items?|stages?|phases?)(\s+)(\d{1,2})(?:\s*[–—-]\s*|\s+(?:to|through)\s+)(\d{1,2})(?!\d)/gi;
+
+function withoutOrdinalRanges(text, ordinals) {
+  if (!ordinals || !ordinals.size) return text;
+  return String(text).replace(ORDINAL_RANGE, (whole, noun, _gap, lo, hi) => (Number(lo) < Number(hi) && ordinals.has(Number(lo)) && ordinals.has(Number(hi)) ? noun : whole));
+}
+
 // "10,000", "10.000", "2,5", "37%": digits with their separators; the unit does not matter, the value does.
 // withoutOrdinals() runs before the line-start strip: stripping line starts first left a list whose first
 // marker is inline ("… in this order: 1. Sort\n2. Set …\n3. Shine …") with a run of one, so its "1." was
 // read as a figure. The strip still catches a line-start marker the ordinal run did not consume.
 function numbersIn(text, ordinals) {
   const out = [];
-  for (const m of withoutOrdinals(String(text).replace(MARKER, ' '), ordinals).replace(/^\s*\d+[.)]\s+/gm, '').matchAll(/\d+(?:[.,]\d+)*/g)) {
+  for (const m of withoutOrdinals(withoutOrdinalRanges(String(text).replace(MARKER, ' '), ordinals), ordinals).replace(/^\s*\d+[.)]\s+/gm, '').matchAll(/\d+(?:[.,]\d+)*/g)) {
     const raw = m[0];
     out.push({ raw, key: /^\d{1,3}([.,]\d{3})+$/.test(raw) ? raw.replace(/[.,]/g, '') : raw.replace(',', '.') });
   }
