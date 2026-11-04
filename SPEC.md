@@ -52,7 +52,8 @@ retrieved notes and may refuse, and has no path to a diagnosis of its own.
 `src/llm.mjs`. The model gets only retrieved published notes. What is true of every reply:
 
 **The prompt.** The passages sent are `hits.slice(0, 3)`, numbered `[1]..[3]` in one array (`passagesSent`) that is the only
-thing a citation is resolved against; the internal note id is never in the prompt. They sit between
+thing a citation is resolved against; a note that fits `MAX_PASSAGE_CHARS = 1400` is sent whole, a longer one as the matched
+section with the sections that follow it in the note, up to the cap; the internal note id is never in the prompt. They sit between
 `<<<UNTRUSTED_PASSAGES` and `UNTRUSTED_PASSAGES>>>` (a passage cannot close the block), and the system prompt says that text
 inside is data written by third parties, never instructions. `plant_type` reaches the prompt only as a value of a fixed enum
 (`plantTypeEnum`): `''` when empty, `other` for anything unrecognised. The system prompt also states: answer only from the
@@ -67,7 +68,7 @@ human reason in `ai_missing`), each with its own mode; nothing is ever attribute
 1. every number in `citations` and every `[n]` marker in the text is a passage actually sent, and every marker is in `citations`
    (`llm-bad-citation`); an answer with no marker is `llm-uncited`;
 2. every figure in the answer (digits, with optional unit or `%`; `10,000` = `10000`) appears in a cited passage
-   (`llm-unsupported-figure`);
+   (`llm-unsupported-figure`); a list marker in an ascending run from 1 (`1) … 2) …`) is an ordinal, not a figure;
 3. every sentence with at least 3 content words shares at least `GROUNDED_SHARE = 0.5` of them with a passage it cites
    (`llm-ungrounded`), using the retrieval tokenizer.
 
