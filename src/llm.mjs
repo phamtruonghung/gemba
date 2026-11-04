@@ -191,9 +191,10 @@ function sentencesOf(text) {
 // The pieces either side of an abbreviation are graded separately rather than glued back into one
 // unit: gluing let a fabricated clause ride on a supported one's words ("… at every shift change, e.g.
 // paint the fence blue and call the vendor about invoices [1].", refused before the fix). A piece that
-// stops on an abbreviation is treated as data in ungroundedSentence, with the words after it weighed
-// on their own against the citation the fragment carried.
-const ABBREVIATION = /(?:^|\s)(?:e\.g|i\.e|etc|vs|cf|approx|no|fig|al|resp|st)\.$/i;
+// stops on an abbreviation is treated as data in ungroundedSentence — but only when a later piece
+// carries the claim forward. `etc` and `no` are not in this set: they end ordinary sentences ("…, etc.",
+// "the answer is no."), so a piece that stops on one is a complete claim and is weighed like any other.
+const ABBREVIATION = /(?:^|\s)(?:e\.g|i\.e|vs|cf|approx|fig|al|resp|st)\.$/i;
 
 function sentenceSplit(text) {
   const out = [];
@@ -236,8 +237,11 @@ const stripOpenMarker = (text) => String(text).replace(/[ \t]*\[[\d \t]*$/gm, ''
  */
 function ungroundedSentence(answer, byNumber, attributed = null) {
   const pool0 = attributed?.length ? attributed : null;
+  const pieces = sentenceSplit(answer);
   let lastCited = null;
-  for (const raw of sentenceSplit(answer)) {
+  for (let i = 0; i < pieces.length; i += 1) {
+    const raw = pieces[i];
+    const followed = i < pieces.length - 1;
     const openTail = OPEN_MARKER_TAIL.test(raw);
     const text = raw.replace(OPEN_MARKER_TAIL, '');
     const own = [...new Set(markersIn(text))].filter((n) => byNumber.has(n));
@@ -252,11 +256,16 @@ function ungroundedSentence(answer, byNumber, attributed = null) {
       return tokens.filter((t) => forms.has(t) || inflections(t).some((v) => have.has(v))).length;
     }));
     // A piece that stops on an abbreviation is the front half of a sentence whose claim and citation
-    // are in the next piece ("… matching loss names in its list, e.g." + "the die face is wiped [1].").
-    // Grading it alone withheld correct answers, so it is data — unless not one of its words is in the
-    // passage it names: that is an invented clause carrying its own marker, not the front of one, and
-    // it is still weighed and refused.
-    if (ABBREVIATION.test(text) && best > 0) continue;
+    // are in the next piece ("… matching loss names in its list, e.g." + "the die face is wiped [1]").
+    // Grading it alone withheld correct answers, so it is data — but only when (a) a later piece really
+    // follows, so a claim that ends the answer is weighed like any other (and `etc`/`no` are not in the
+    // set at all, since they complete a sentence), and (b) at least one of its words is in the pool it
+    // is checked against (its own marker's passage; otherwise the `citations` list when the prose has
+    // none, otherwise every sent passage). A front half with no lexical contact with that pool is an
+    // invented clause carrying its own marker, not a fragment, and is still weighed and refused.
+    // Accepted residue: a fabricated clause *before* a mark whose tail is in the pool looks exactly like
+    // a real fragment here and shows.
+    if (followed && ABBREVIATION.test(text) && best > 0) continue;
     if (best / tokens.length < GROUNDED_SHARE) return plain(text);
   }
   return '';
