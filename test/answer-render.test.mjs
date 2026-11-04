@@ -2,6 +2,7 @@
 // in the panel, and the status label for a refused `open` question never claims an answer.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { request as httpRequest } from 'node:http';
 
 import { createApp } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
@@ -23,11 +24,30 @@ before(async () => {
 });
 after(() => app.server.close());
 
-const page = async (ref) => {
-  const html = await (await fetch(`${base}/q/${ref}`)).text();
-  return html.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/<script[^>]*>[\s\S]*?<\/script>/g, '');
+const strip = (html) => html.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/<script[^>]*>[\s\S]*?<\/script>/g, '');
+const page = async (ref) => strip(await (await fetch(`${base}/q/${ref}`)).text());
+// The share block embeds this request's own origin, percent-encoded, so the Host decides what the page
+// carries. `page` is a plain fetch; `pageAs` pins the Host when a test needs a fixed origin.
+const pageAs = (ref, host) => new Promise((resolve, reject) => {
+  const req = httpRequest(
+    { host: '127.0.0.1', port: app.server.address().port, path: `/q/${ref}`, headers: { host } },
+    (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve(strip(body)));
+    }
+  );
+  req.on('error', reject);
+  req.end();
+});
+// The refusal panel, never the whole page: the share block embeds the origin, so a port ending in 11 puts
+// `11%` on the page through no fault of the render. A missing panel throws instead of widening to the page.
+const refusal = (html) => {
+  const panel = /<div class="refusal">([\s\S]*?)<\/div>\s*(?=<div class="actionbar"|<div class="card"|$)/.exec(html)?.[1];
+  assert.ok(panel, 'the page carries the refusal panel this test asserts against');
+  return panel;
 };
-const refusal = (html) => /<div class="refusal">([\s\S]*?)<\/div>\s*(?=<div class="actionbar"|<div class="card"|$)/.exec(html)?.[1] ?? html;
 
 test('a refused question (extractive fallback) shows no marker and no scoring sentence', async () => {
   const res = await fetch(`${base}/api/ask`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: 'How do I recruit office staff' }) });
@@ -56,9 +76,15 @@ test('a refused question with a model answer prints only the missing-reason in t
 
 test('without a stored reason the panel uses a plain fixed sentence', async () => {
   const q = insertQuestion(app.db, { text: 'Old row', ai_answer: 'INSUFFICIENT_DATA\nnope (the closest note covers only 11% of the question\'s key terms)', ai_coverage: 'thin' });
-  const html = await page(q.ref);
-  assert.match(html, /No note in the library answers this question closely enough to cite\./);
-  assert.doesNotMatch(html, /INSUFFICIENT_DATA|11%/);
+  // A fixed origin whose port ends in 11: the share block encodes it as `127.0.0.1%3A35811%2F`, so the page
+  // really does contain `11%` while the panel must not. Every check of the marker and the scoring sentence is
+  // therefore scoped to the panel, or to phrases a port cannot produce.
+  const html = await pageAs(q.ref, '127.0.0.1:35811');
+  assert.match(html, /127\.0\.0\.1%3A35811%2F/, 'the share block carries the origin, port included');
+  assert.match(refusal(html), /No note in the library answers this question closely enough to cite\./);
+  assert.doesNotMatch(refusal(html), /INSUFFICIENT_DATA|11%/);
+  assert.doesNotMatch(html, /INSUFFICIENT_DATA/);
+  assert.doesNotMatch(html, /key terms|closest note covers only/);
 });
 
 test('the open status label is honest about a refusal', () => {
