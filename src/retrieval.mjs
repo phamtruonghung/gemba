@@ -103,7 +103,22 @@ function stem(t) {
 export function inflections(t) {
   if (!/^[a-z]+$/.test(t) || t.length <= 3) return [];
   const out = [];
-  const base = (b) => { out.push(b); if (/(.)\1$/.test(b)) out.push(b.slice(0, -1)); out.push(`${b}e`); };
+  // The stem of an -ing/-ed word is spelled two ways: a suffix swallowed the stem's final e ("caring" is
+  // care, "rated" is rate) or it doubled the stem's consonant ("stopping" is stop, "running" is run).
+  // A bare three-letter stem is ambiguous by spelling alone, and emitting it put an ordinary word
+  // ("car" from caring, "rat" from rating, "hat" from hating) into a passage's form set, where a
+  // fabricated draft using that word then cleared the grounding share (t_cb787b0b). So a short stem is
+  // only the +e reading; a doubled final consonant — the case the suffix itself proves — keeps its bare
+  // form, as does every stem of four or more characters ("pointing" -> point).
+  const base = (b) => {
+    if (/(.)\1$/.test(b)) {
+      out.push(b); // "adding" -> add; a doubled vowel is the stem itself ("seeing" -> see)
+      if (!/[aeiou]$/.test(b)) out.push(b.slice(0, -1)); // "stopping" -> stop, "running" -> run
+      return;
+    }
+    if (b.length >= 4) out.push(b); // "pointing" -> point, "writing" -> writ
+    out.push(`${b}e`); // the e the suffix swallowed: care, rate, write
+  };
   if (t.endsWith('ing') && t.length > 5) base(t.slice(0, -3));
   if (t.endsWith('ied')) out.push(`${t.slice(0, -3)}y`);
   else if (t.endsWith('ed') && t.length > 4) base(t.slice(0, -2));

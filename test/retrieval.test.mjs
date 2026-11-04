@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { openDb, publishedNotes } from '../src/db.mjs';
 import { loadRules } from '../src/gate.mjs';
 import { seedDatabase } from '../src/seed-corpus.mjs';
-import { buildIndex, search, coverage, tokenize, indexTerms, chunkBody, queryUnits } from '../src/retrieval.mjs';
+import { buildIndex, search, coverage, tokenize, indexTerms, chunkBody, queryUnits, inflections } from '../src/retrieval.mjs';
 import { askFromCorpus, passagesSent } from '../src/llm.mjs';
 
 const db = openDb(':memory:');
@@ -109,6 +109,30 @@ test('chunking splits a note at its ## headings and every chunk carries its head
   const chunks = chunkBody('# T\nintro\n## One\naaa\n## Two\nbbb ccc\n');
   assert.deepEqual(chunks.map((c) => c.heading), ['T', 'One', 'Two']);
   assert.ok(chunks.every((c) => c.text.length));
+});
+
+// t_cb787b0b: the stem of an -ing/-ed word is the +e reading when the bare stem is an ordinary short
+// word of its own — "caring" is care, not car. Emitting the truncation put car/rat/hat into a passage's
+// form set, where a fabricated draft using one of them cleared the AI tier's grounding share.
+test('inflections: a short stem is the +e reading, never the truncated word', () => {
+  for (const [word, want, not] of [
+    ['caring', 'care', 'car'],
+    ['rated', 'rate', 'rat'],
+    ['hating', 'hate', 'hat'],
+    ['coping', 'cope', 'cop']
+  ]) {
+    const forms = inflections(word);
+    assert.ok(forms.includes(want), `${word} -> ${want} (got ${forms.join(', ')})`);
+    assert.ok(!forms.includes(not), `${word} must not -> ${not}`);
+  }
+  // A doubled final consonant is the case the suffix itself proves, and these short stems must survive.
+  for (const [word, want] of [['running', 'run'], ['stopping', 'stop'], ['adding', 'add'], ['seeing', 'see']]) {
+    assert.ok(inflections(word).includes(want), `${word} -> ${want}`);
+  }
+  // So must every stem of four or more characters, and every plural.
+  for (const [word, want] of [['points', 'point'], ['sets', 'set'], ['writing', 'write'], ['housing', 'house']]) {
+    assert.ok(inflections(word).includes(want), `${word} -> ${want}`);
+  }
 });
 
 test('the margin rule, when switched on, refuses two near-tied notes; off by default', () => {
