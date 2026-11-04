@@ -230,6 +230,9 @@ const OPEN_MARKER_TAIL = /[ \t]*\[[\d \t]*$/;
 /** A marker the model opened and never closed can never resolve: drop it before the reader sees it. */
 const stripOpenMarker = (text) => String(text).replace(/[ \t]*\[[\d \t]*$/gm, '');
 
+/** A later piece only carries a fragment's claim forward when it is a claim itself: `[1].` or `Do it` is not. */
+const carriesClaim = (s) => contentTokens(String(s).replace(MARKER, ' ')).filter((t) => !/^\d+$/.test(t)).length >= MIN_CLAIM_TOKENS;
+
 /**
  * A sentence is grounded when most of its content words are words of the passage it cites. Inflections
  * of a word count as the word ("points" ~ "point"), because a terse paraphrase that reuses the passage's
@@ -241,7 +244,8 @@ function ungroundedSentence(answer, byNumber, attributed = null) {
   let lastCited = null;
   for (let i = 0; i < pieces.length; i += 1) {
     const raw = pieces[i];
-    const followed = i < pieces.length - 1;
+    // A piece that follows but asserts nothing (a bare marker, "Do it") cannot carry the claim forward.
+    const followed = pieces.slice(i + 1).some(carriesClaim);
     const openTail = OPEN_MARKER_TAIL.test(raw);
     const text = raw.replace(OPEN_MARKER_TAIL, '');
     const own = [...new Set(markersIn(text))].filter((n) => byNumber.has(n));
@@ -258,8 +262,9 @@ function ungroundedSentence(answer, byNumber, attributed = null) {
     // A piece that stops on an abbreviation is the front half of a sentence whose claim and citation
     // are in the next piece ("… matching loss names in its list, e.g." + "the die face is wiped [1]").
     // Grading it alone withheld correct answers, so it is data — but only when (a) a later piece really
-    // follows, so a claim that ends the answer is weighed like any other (and `etc`/`no` are not in the
-    // set at all, since they complete a sentence), and (b) at least one of its words is in the pool it
+    // carries the claim forward, i.e. is itself a claim and not a bare marker or "Do it" (so a claim that
+    // ends the answer is weighed like any other, and `etc`/`no` are not in the set at all, since they
+    // complete a sentence), and (b) at least one of its words is in the pool it
     // is checked against (its own marker's passage; otherwise the `citations` list when the prose has
     // none, otherwise every sent passage). A front half with no lexical contact with that pool is an
     // invented clause carrying its own marker, not a fragment, and is still weighed and refused.
