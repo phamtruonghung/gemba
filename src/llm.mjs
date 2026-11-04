@@ -5,7 +5,7 @@
 // practitioners have published and hands the rest to a human, which is the only honest way
 // to sell an AI tier over a free general model.
 
-import { extractiveAnswer, contentTokens, fold, inflections } from './retrieval.mjs';
+import { extractiveAnswer, contentTokens, fold, inflections, chunkBody } from './retrieval.mjs';
 
 // The gateway and the model id are one decision, not two: they must match, or the call 404s on a
 // model the gateway does not serve. The OpenCode gateway (OpenAI-compatible, the same one this
@@ -91,25 +91,40 @@ export function cutAtBoundary(text, max = MAX_PASSAGE_CHARS) {
 
 /**
  * The text the model sees for one hit. A note that fits is sent whole. A longer one is sent as the
- * chunk(s) that matched the question, best first, each a whole `##` section (or a window of one), up to
- * the cap. Sending the first N characters instead dropped the answering section whenever it sat past
- * the cut, and cut mid-word.
+ * section that matched the question with the sections that follow it in the note, up to the cap. Sending
+ * the first N characters instead dropped the answering section whenever it sat past the cut, and cut
+ * mid-word.
  */
 export function passageText(hit) {
   const body = String(hit.note.body ?? '');
   if (body.length <= MAX_PASSAGE_CHARS) return body;
-  const chunks = (hit.chunks?.length ? hit.chunks : hit.chunk ? [hit.chunk] : []).map((c) => c.text);
-  if (!chunks.length) return cutAtBoundary(body);
-  let out = '';
-  for (const text of chunks) {
-    const joined = out ? `${out}\n\n[…]\n\n${text}` : text;
-    if (joined.length <= MAX_PASSAGE_CHARS) out = joined;
-    else {
-      if (!out) out = cutAtBoundary(text);
-      break;
+  const matched = hit.chunks?.length ? hit.chunks : hit.chunk ? [hit.chunk] : [];
+  if (!matched.length) return cutAtBoundary(body);
+  // A passage is the matched section with what follows it in the note, not the three best-scoring
+  // sections in score order: a question whose words the answering section does not literally contain
+  // ("What are the first thing to do in 5S?") ranks that section fourth, and sending only the top three
+  // withheld the answer (measured on CT150 2026-11-04: note 14, 1492 chars, cap 1400).
+  const sections = chunkBody(body);
+  const at = sections.findIndex((c) => c.text === matched[0].text);
+  if (at < 0) {
+    let out = '';
+    for (const { text } of matched) {
+      const joined = out ? `${out}\n\n[…]\n\n${text}` : text;
+      if (joined.length <= MAX_PASSAGE_CHARS) out = joined;
+      else {
+        if (!out) out = cutAtBoundary(text);
+        break;
+      }
     }
+    return out;
   }
-  return out;
+  if (sections[at].text.length > MAX_PASSAGE_CHARS) return cutAtBoundary(sections[at].text);
+  const join = (lo, hi) => sections.slice(lo, hi + 1).map((c) => c.text).join('\n\n');
+  let hi = at;
+  while (hi + 1 < sections.length && join(at, hi + 1).length <= MAX_PASSAGE_CHARS) hi += 1;
+  let lo = at;
+  while (lo > 0 && join(lo - 1, hi).length <= MAX_PASSAGE_CHARS) lo -= 1;
+  return join(lo, hi);
 }
 
 /**
@@ -276,10 +291,48 @@ function ungroundedSentence(answer, byNumber, attributed = null) {
   return '';
 }
 
+// A numbered list writes its markers as ordinals ("… in this order: 1) Sort … 2) Set in order …"), and an
+// answer that copies a numbered passage keeps them inline — where the line-start strip below never looked.
+// The passage's markers are stripped from `have`, so an inline list was withheld as the figure "1"
+// (measured on CT150 2026-11-04: the same draft passes when each item is on its own line). What makes a
+// marker an ordinal is the *cited passage's own* numbered run: a passage that lists 1, 2, 3, … at line
+// starts says which values are ordinals, and only an ascending run from 1 in the answer, among those
+// values, is stripped (in any of "1." "1)" "(1)" "**1.**" "1:" "1 -" "**1) Sort**"). A passage that lists
+// nothing makes every number in the answer a figure ("cut the batch to 1. Then … to 2."), and a lone number
+// with punctuation ("cut it to 3.", "every 30 days") is still a figure, so the guard keeps its teeth.
+// Accepted residue: a passage with a run 1–3 lets an answer's own "to 1. … to 2." through as ordinals.
+const LINE_MARKER = /^\s*(\d{1,2})[.)]\s/gm;
+const LIST_MARKER = /(^|\s)((?:\(|\*\*|\*|__)?)(\d{1,2})(?:\)|[.:]|\s[-–])(?:\*\*|\*|__)?(?=\s)/g;
+
+function ordinalValues(passages) {
+  const out = new Set();
+  for (const p of passages) {
+    const run = [];
+    for (const m of `${p.title}\n${p.body}`.matchAll(LINE_MARKER)) if (Number(m[1]) === run.length + 1) run.push(Number(m[1]));
+    if (run.length >= 2) for (const n of run) out.add(n);
+  }
+  return out;
+}
+
+function withoutOrdinals(text, ordinals) {
+  if (!ordinals || !ordinals.size) return text;
+  const run = [];
+  let want = 1;
+  for (const m of String(text).matchAll(LIST_MARKER)) if (Number(m[3]) === want && ordinals.has(want)) { run.push(m); want += 1; }
+  if (run.length < 2) return text;
+  let out = '';
+  let last = 0;
+  for (const m of run) {
+    out += `${text.slice(last, m.index + m[1].length + m[2].length)} `;
+    last = m.index + m[0].length;
+  }
+  return out + text.slice(last);
+}
+
 // "10,000", "10.000", "2,5", "37%": digits with their separators; the unit does not matter, the value does.
-function numbersIn(text) {
+function numbersIn(text, ordinals) {
   const out = [];
-  for (const m of String(text).replace(MARKER, ' ').replace(/^\s*\d+[.)]\s+/gm, '').matchAll(/\d+(?:[.,]\d+)*/g)) {
+  for (const m of withoutOrdinals(String(text).replace(MARKER, ' ').replace(/^\s*\d+[.)]\s+/gm, ''), ordinals).matchAll(/\d+(?:[.,]\d+)*/g)) {
     const raw = m[0];
     out.push({ raw, key: /^\d{1,3}([.,]\d{3})+$/.test(raw) ? raw.replace(/[.,]/g, '') : raw.replace(',', '.') });
   }
@@ -288,7 +341,7 @@ function numbersIn(text) {
 
 function unsupportedNumber(answer, passages) {
   const have = new Set(passages.flatMap((p) => numbersIn(`${p.title}\n${p.body}`).map((x) => x.key)));
-  return numbersIn(answer).find((x) => !have.has(x.key))?.raw ?? '';
+  return numbersIn(answer, ordinalValues(passages)).find((x) => !have.has(x.key))?.raw ?? '';
 }
 
 /** The cited sentence: the sentence of the passage that shares most words with the answer's sentence. */

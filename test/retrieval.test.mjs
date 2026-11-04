@@ -105,6 +105,17 @@ test('the model is sent the matched section of a long note, whole, never cut mid
   assert.match(cut, /word …$/);
 });
 
+test('the answering section is sent even when it is not the best-scoring chunk', () => {
+  const hits = search('What are the first thing to do in 5S?', index, 5);
+  const h = hits.find((x) => /5s-start-where/.test(x.note.slug));
+  assert.ok(h, 'the 5S note is retrieved');
+  assert.doesNotMatch(h.chunks[0].heading, /Five steps/, 'the steps section is not the best-scoring chunk');
+  const sent = passagesSent(hits).find((p) => p.id === h.note.id);
+  assert.match(sent.body, /Five steps, in this exact order/);
+  assert.match(sent.body, /1\. Sort/);
+  assert.ok(sent.body.length <= 1400);
+});
+
 test('chunking splits a note at its ## headings and every chunk carries its heading', () => {
   const chunks = chunkBody('# T\nintro\n## One\naaa\n## Two\nbbb ccc\n');
   assert.deepEqual(chunks.map((c) => c.heading), ['T', 'One', 'Two']);
