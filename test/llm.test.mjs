@@ -87,10 +87,9 @@ test('empty citations on an ok answer: refused, and hits[0] is not attached', as
   assert.ok(!out.citations.includes(11));
 });
 
-test('a citations list with no marker in the text is also uncited', async () => {
-  const out = await ask(async () => json({ answer: 'Replace the die when the burr grows past the gauge mark.', citations: [1], coverage: 'ok', missing: '' }));
-  refused(out, 'llm-uncited');
-});
+// A citations list with no markers in the prose used to be refused outright. It is a measured shape
+// (CT150 2026-11-04: 1 ask in 20) and the list is a usable attribution, so it is now checked against
+// exactly the passages it names — see the two tests under "ungrounded" for both halves of the rule.
 
 test('truncated JSON falls back to the extractive answer with the finish reason in the mode', async () => {
   const out = await ask(async () => reply('{"answer":"Replace the die when the bu', 'length'));
@@ -199,6 +198,175 @@ test('a number that is in the cited passage passes; one that is only in another 
 test('a sentence the cited passage never said is refused as ungrounded', async () => {
   const out = await ask(async () => json({ answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [1].', citations: [1], coverage: 'ok', missing: '' }));
   refused(out, 'llm-ungrounded');
+});
+
+// t_1b49a634: on CT150 three asks in eleven withheld an answer note 17 plainly gives. Both shapes below
+// came out of the model as a *fragment*, and neither asserted anything a passage could contradict.
+test('a sentence the model split at "e.g." is one claim, and a grounded one does not withhold the answer', async () => {
+  const out = await ask(async () => json({
+    answer: 'Passage [1] lists the checks in order, e.g. the die face is wiped and the guide pillars are lubricated before the first stroke.',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  assert.equal(out.mode, 'llm', 'a fragment left by an abbreviation is not a claim of its own');
+  assert.deepEqual(out.citations, [11]);
+});
+
+test('a sentence the model stopped mid-marker does not withhold a grounded answer', async () => {
+  const out = await ask(async () => json({
+    answer: 'Replace the die when the burr grows past the gauge mark [1]. Record the burr height in the shift notebook [',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  assert.equal(out.mode, 'llm', 'a grounded sentence cut inside its marker does not withhold the answer');
+  assert.deepEqual(out.citations, [11]);
+  assert.doesNotMatch(out.answer, /\[\s*$/, 'the marker it never closed is not shown to the reader');
+});
+
+test('a sentence that stops mid-marker is still weighed: words the passage never says are refused', async () => {
+  // The bracket can never resolve, but the words are a claim. Weighed against every passage when no
+  // citation precedes it, this invented procedure has no support and must not be shown.
+  const out = await ask(async () => json({
+    answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+});
+
+test('the same mid-marker claim on a non-final line is refused against the citation before it', async () => {
+  const out = await ask(async () => json({
+    answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [\nReplace the die when the burr grows past the gauge mark [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /^The draft answer said "/, 'the refusal names the fabricated sentence');
+});
+
+test('an abbreviation before a capitalised sentence still ends it, so a claim cannot ride on the previous one', async () => {
+  // Each of these words is in ABBREVIATION. Treating it as non-terminal glued the next sentence onto a
+  // supported one, and the fabricated instruction passed the share test on the earlier sentence's words.
+  for (const abbr of ['e.g', 'i.e', 'etc', 'vs', 'cf', 'approx', 'no', 'fig', 'al', 'resp', 'st']) {
+    const out = await ask(async () => json({
+      answer: `Replace the die when the burr grows past the gauge mark at every shift change, ${abbr}. Also replace the hydraulic pump every month [1].`,
+      citations: [1], coverage: 'ok', missing: ''
+    }));
+    assert.equal(out.mode, 'llm-ungrounded', `"${abbr}." before "Also" is the end of a sentence`);
+  }
+});
+
+test('an abbreviation before a lowercase sentence still ends it: a fabricated tail is weighed on its own', async () => {
+  // Round-2 regression: joining a lowercase continuation onto the sentence before an abbreviation let a
+  // fabricated tail pass on the supported prefix's words. Measured against pre-fix 8f22f41: all refused.
+  for (const abbr of ['e.g', 'i.e', 'etc', 'vs', 'cf', 'approx', 'no', 'fig', 'al', 'resp', 'st']) {
+    const out = await ask(async () => json({
+      answer: `Replace the die when the burr grows past the gauge mark at every shift change, ${abbr}. paint the fence blue and call the vendor about invoices [1].`,
+      citations: [1], coverage: 'ok', missing: ''
+    }));
+    assert.equal(out.mode, 'llm-ungrounded', `a fabricated lowercase tail after "${abbr}." is refused`);
+  }
+});
+
+test('a fabricated tail after "e.g." is refused even when the prefix it rides on is supported', async () => {
+  const out = await ask(async () => json({
+    answer: 'Replace the die at the gauge mark, e.g. paint the fence blue and call the vendor about invoices [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /paint the fence blue/, 'the refusal names the fabricated tail');
+});
+
+test('an invented clause before an abbreviation is refused when it shares no word with the pool', async () => {
+  // Scope: this pins the `best > 0` guard, not every invented prefix. A fabricated clause that *does*
+  // share a word with the pool is structurally identical to a real fragment (the card's own shape) and
+  // is recorded as accepted residue in src/llm.mjs next to the rule. Here the clause shares none.
+  const out = await ask(async () => json({
+    answer: 'Call the vendor about invoices monthly, e.g. replace the die when the burr grows past the gauge mark [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Call the vendor about invoices/, 'the refusal names the invented clause');
+});
+
+test('a complete sentence ending in "etc." is weighed, not treated as a fragment', async () => {
+  // Round-3 regression: `etc`/`no` end ordinary sentences, so a piece that stops on one is the whole
+  // claim. Skipping it showed a fabricated instruction with a citation attached.
+  const out = await ask(async () => json({
+    answer: 'Replace the die when the burr grows past the gauge mark [1]. Also replace the hydraulic pump and the clutch brake every month, etc.',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Also replace the hydraulic pump/, 'the refusal names the fabricated sentence');
+});
+
+test('a sentence that ends in "etc." is weighed even when another sentence follows it', async () => {
+  // The `followed` guard alone would excuse this piece as a fragment; `etc`/`no` are excluded from the
+  // fragment rule precisely because they complete a sentence, so the fabricated instruction is refused.
+  const out = await ask(async () => json({
+    answer: 'Replace the die when the burr grows past the gauge mark [1]. Also replace the hydraulic pump and the clutch brake every month, etc.\nRecord the burr height in the shift notebook [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Also replace the hydraulic pump/, 'the refusal names the "etc." sentence');
+});
+
+test('a sentence that ends in "no." is weighed even when another sentence follows it', async () => {
+  const out = await ask(async () => json({
+    answer: 'Call the vendor about the die offset monthly, no.\nRecord the burr height in the shift notebook [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Call the vendor about the die offset/, 'the refusal names the "no." sentence');
+});
+
+test('a marker-less sentence ending in "etc." is weighed against the citations list', async () => {
+  const out = await ask(async () => json({
+    answer: 'Replace the hydraulic pump, the clutch brake and the flywheel bearings every month, etc.',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+});
+
+test('a sentence ending in "no." is weighed, not treated as a fragment', async () => {
+  const out = await ask(async () => json({ answer: 'Call the vendor about the die offset monthly, no.', citations: [1], coverage: 'ok', missing: '' }));
+  refused(out, 'llm-ungrounded');
+});
+
+test('a piece that ends the answer on an abbreviation carries no continuation, so it is weighed', async () => {
+  // There is no next piece to carry the claim, so the abbreviation rule cannot apply to the last piece.
+  const out = await ask(async () => json({
+    answer: 'Replace the die when the burr grows past the gauge mark [1]. Call the vendor about the burr offset monthly, e.g.',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Call the vendor about the burr offset/, 'the refusal names the trailing piece');
+});
+
+test('a claim the passage does not make is still refused once its marker is closed', async () => {
+  // The same trailing sentence from the test above, with the marker the model failed to write.
+  const out = await ask(async () => json({
+    answer: 'Replace the die when the burr grows past the gauge mark [1]. The crew decision and the estimator say who acts [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+});
+
+test('a citation list without markers in the text attributes the answer instead of withholding it', async () => {
+  // Measured on CT150 2026-11-04: one ask in twenty came back with `citations: [1]` and no [1] in the
+  // prose, and was withheld as uncited although every sentence was in the passage it named.
+  const out = await ask(async () => json({ answer: 'Replace the die when the burr grows past the gauge mark.', citations: [1], coverage: 'ok', missing: '' }));
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [11]);
+  assert.deepEqual(out.cites.map((c) => c.n), [1]);
+  assert.ok(out.cites[0].snippet.length > 20);
+  assert.equal(out.answer, 'Replace the die when the burr grows past the gauge mark.');
+});
+
+test('a marker-less answer is still refused when what it says is not in the passage it names', async () => {
+  const out = await ask(async () => json({ answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly.', citations: [1], coverage: 'ok', missing: '' }));
+  refused(out, 'llm-ungrounded');
+});
+
+test('a marker-less answer that names no citation at all is still uncited', async () => {
+  const out = await ask(async () => json({ answer: 'Replace the die when the burr grows past the gauge mark.', citations: [], coverage: 'ok', missing: '' }));
+  refused(out, 'llm-uncited');
 });
 
 test('a plant_type injection attempt never reaches the prompt', () => {
