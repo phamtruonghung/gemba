@@ -813,3 +813,17 @@ test('a lead-in followed by a fabricated claim instead of a list is still refuse
   const out = await ask5S('Straight from the 5S procedure we use [1]:\nRepaint the walkways with yellow tape every quarter [1].');
   refused(out, 'llm-ungrounded');
 });
+
+// A lead-in is weighed on its words that are not attribution vocabulary: one shared content word
+// ("machine") no longer excuses a fabricated claim that ends on a colon or stands before a list.
+test('a fabricated claim before a list is refused, not excused as a lead-in', async () => {
+  refused(await ask5S('The team repaints the machine housing every quarter [1].' + STEPS), 'llm-ungrounded');
+});
+
+test('a fabricated claim ending on a colon is refused when a claim follows', async () => {
+  refused(await ask5S('The team repaints the machine housing every quarter [1]:\nEach thing has one place, and the place is marked [1].'), 'llm-ungrounded');
+});
+
+test('a fabricated claim ending on a colon is refused when a list follows', async () => {
+  refused(await ask5S('The team repaints the machine housing every quarter [1]:' + STEPS), 'llm-ungrounded');
+});

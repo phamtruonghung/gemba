@@ -73,8 +73,10 @@ human reason in `ai_missing`), each with its own mode; nothing is ever attribute
    `1:` `1 -`, form an ascending run from 1 within those values; a passage that numbers nothing makes every number a figure;
 3. every sentence with at least 3 content words shares at least `GROUNDED_SHARE = 0.5` of them with a passage it cites
    (`llm-ungrounded`), using the retrieval tokenizer; a lead-in that introduces what follows (ends on `:` once its markers
-   are removed, or stands directly before a list marker or item) is not weighed alone when a later piece is a claim or a
-   list marker/item and at least one of its content words is in the passage it is checked against.
+   are removed, or stands directly before a list marker or item) is weighed on its words that are not pointer/attribution
+   vocabulary ("straight", "procedure", "note", "order", …): those must themselves clear `GROUNDED_SHARE` against the
+   passage it is checked against, and a lead-in made only of pointer words is data when a later piece is a claim or a list
+   marker/item. Known residue: a fabricated lead-in whose non-pointer words are mostly in the passage still shows.
 
 **Rendering.** Markers are renumbered `[1]..[k]` in order of first appearance and rewritten in the text, so the prose and the
 source list agree; the internal note id is never shown. Each citation stores `{n, id, snippet}` (the passage sentence closest
