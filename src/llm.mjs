@@ -210,6 +210,12 @@ function sentencesOf(text) {
 // carries the claim forward. `etc` and `no` are not in this set: they end ordinary sentences ("…, etc.",
 // "the answer is no."), so a piece that stops on one is a complete claim and is weighed like any other.
 const ABBREVIATION = /(?:^|\s)(?:e\.g|i\.e|vs|cf|approx|fig|al|resp|st)\.$/i;
+// A list marker or the start of a list item as a piece reads after sentenceSplit(): a bare ordinal ("1.",
+// "2)"), an ordinal or bullet followed by text, either with markdown `**` around it.
+const LIST_PIECE = /^[\s*_]*(?:\d{1,2}[.)]|[-*\u2022])[*_]*(?:\s|$)/;
+
+// Pointer and attribution words of a lead-in, as contentTokens() yields them. Kept narrow on purpose.
+const LEAD_IN_WORDS = new Set(['straight', 'procedure', 'note', 'notes', 'brief', 'exactly', 'order', 'matters', 'matter', 'use', 'used', 'list', 'step', 'steps']);
 
 function sentenceSplit(text) {
   const out = [];
@@ -286,6 +292,27 @@ function ungroundedSentence(answer, byNumber, attributed = null) {
     // Accepted residue: a fabricated clause *before* a mark whose tail is in the pool looks exactly like
     // a real fragment here and shows.
     if (followed && ABBREVIATION.test(text) && best > 0) continue;
+    // A lead-in introduces what follows ("Straight from the 5S procedure we use [1]:", or any piece
+    // directly before a list marker). Much of its vocabulary is attribution ("straight", "procedure",
+    // "order"), so it shares 0.25-0.40 with the passage while the list items under it fall under
+    // MIN_CLAIM_TOKENS and are never judged: the lead-in was the only piece weighed and withheld a
+    // correct answer (CT150 2026-11-04, note 14, issue #79). Excusing it on one shared word, though,
+    // also excused a fabricated claim: "The team repaints the machine housing every quarter [1]." shares
+    // only "machine" with note 14 and showed with a citation when a list followed. So the pointer words
+    // (LEAD_IN_WORDS) are set aside and the rest must clear GROUNDED_SHARE against the same pool. A
+    // lead-in made only of pointer words is data, when the claim is carried forward, i.e. a later piece
+    // is itself a claim or a list marker/item (a lead-in that ends the draft is weighed like any other).
+    // Accepted residue: a fabricated lead-in whose non-pointer words are mostly in the passage still shows.
+    const leadIn = /:$/.test(text.replace(MARKER, ' ').trim()) || LIST_PIECE.test(pieces[i + 1] ?? '');
+    if (leadIn && pieces.slice(i + 1).some((s) => carriesClaim(s) || LIST_PIECE.test(s))) {
+      const rest = tokens.filter((t) => !LEAD_IN_WORDS.has(t));
+      if (!rest.length) continue;
+      const restBest = Math.max(...pool.map((n) => {
+        const { tokens: have, forms } = byNumber.get(n);
+        return rest.filter((t) => forms.has(t) || inflections(t).some((v) => have.has(v))).length;
+      }));
+      if (restBest / rest.length >= GROUNDED_SHARE) continue;
+    }
     if (best / tokens.length < GROUNDED_SHARE) return plain(text);
   }
   return '';
