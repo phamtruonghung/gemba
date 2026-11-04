@@ -213,12 +213,43 @@ test('a sentence the model split at "e.g." is one claim, and a grounded one does
 
 test('a sentence the model stopped mid-marker does not withhold a grounded answer', async () => {
   const out = await ask(async () => json({
-    answer: 'Replace the die when the burr grows past the gauge mark [1]. The crew decision and the estimator say who acts [',
+    answer: 'Replace the die when the burr grows past the gauge mark [1]. Record the burr height in the shift notebook [',
     citations: [1], coverage: 'ok', missing: ''
   }));
-  assert.equal(out.mode, 'llm', 'a sentence the model never finished carries no checkable claim');
+  assert.equal(out.mode, 'llm', 'a grounded sentence cut inside its marker does not withhold the answer');
   assert.deepEqual(out.citations, [11]);
   assert.doesNotMatch(out.answer, /\[\s*$/, 'the marker it never closed is not shown to the reader');
+});
+
+test('a sentence that stops mid-marker is still weighed: words the passage never says are refused', async () => {
+  // The bracket can never resolve, but the words are a claim. Weighed against every passage when no
+  // citation precedes it, this invented procedure has no support and must not be shown.
+  const out = await ask(async () => json({
+    answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+});
+
+test('the same mid-marker claim on a non-final line is refused against the citation before it', async () => {
+  const out = await ask(async () => json({
+    answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [\nReplace the die when the burr grows past the gauge mark [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /^The draft answer said "/, 'the refusal names the fabricated sentence');
+});
+
+test('an abbreviation before a capitalised sentence still ends it, so a claim cannot ride on the previous one', async () => {
+  // Each of these words is in ABBREVIATION. Treating it as non-terminal glued the next sentence onto a
+  // supported one, and the fabricated instruction passed the share test on the earlier sentence's words.
+  for (const abbr of ['e.g', 'i.e', 'etc', 'vs', 'cf', 'approx', 'no', 'fig', 'al', 'resp', 'st']) {
+    const out = await ask(async () => json({
+      answer: `Replace the die when the burr grows past the gauge mark at every shift change, ${abbr}. Also replace the hydraulic pump every month [1].`,
+      citations: [1], coverage: 'ok', missing: ''
+    }));
+    assert.equal(out.mode, 'llm-ungrounded', `"${abbr}." before "Also" is the end of a sentence`);
+  }
 });
 
 test('a claim the passage does not make is still refused once its marker is closed', async () => {

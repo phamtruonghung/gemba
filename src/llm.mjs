@@ -183,10 +183,16 @@ function sentencesOf(text) {
   return sentenceSplit(text).map(plain).filter(Boolean);
 }
 
-// A sentence ends on . ! or ? — unless the mark is part of an abbreviation. Splitting "… in its list,
-// e.g. slow running" left "…, e.g." as a sentence of its own: a fragment that asserts nothing, still
-// counted as a claim, and it withheld the whole answer when it shared too little with a passage.
+// A sentence ends on . ! or ? — unless the mark is part of an abbreviation that continues the same
+// sentence ("… in its list, e.g. the die face is wiped"). Splitting there left "…, e.g." as a sentence
+// of its own: a fragment that asserts nothing, still counted as a claim, and it withheld the whole
+// answer when it shared too little with a passage.
+//
+// An abbreviation is only non-terminal before a lowercase word or a digit. "The answer is no. Also
+// replace the pump" is two sentences, and treating the first as an abbreviation glued them into one
+// unit — which let an unsupported claim ride on the supported sentence before it.
 const ABBREVIATION = /(?:^|\s)(?:e\.g|i\.e|etc|vs|cf|approx|no|fig|al|resp|st)\.$/i;
+const CONTINUES_SENTENCE = /^[a-z0-9]/;
 
 function sentenceSplit(text) {
   const out = [];
@@ -194,7 +200,8 @@ function sentenceSplit(text) {
     let start = 0;
     for (const m of line.matchAll(/[.!?](?=\s)/g)) {
       const end = m.index + 1;
-      if (ABBREVIATION.test(line.slice(start, end))) continue;
+      const next = line.slice(end).trimStart();
+      if (ABBREVIATION.test(line.slice(start, end)) && CONTINUES_SENTENCE.test(next)) continue;
       out.push(line.slice(start, end));
       start = end;
       while (line[start] === ' ' || line[start] === '\t') start += 1;
@@ -212,11 +219,13 @@ export const EN_FALLBACK_NOTE_VI = 'Bản tiếng Việt không qua kiểm tra; 
 // Sentences with fewer content words than this ("Do it now.") carry no claim to check.
 const MIN_CLAIM_TOKENS = 3;
 
-// The model sometimes stops inside a marker ("…, the split points to who acts ["). The sentence it was
-// writing never landed — markersIn finds no number, and there is no complete claim to weigh against a
-// passage — so the tail is skipped rather than read as an unsupported claim. Measured on CT150
-// 2026-11-04: two asks in eleven withheld a correct answer this way.
-const OPEN_MARKER_TAIL = /\[[\d\s]*$/;
+// The model sometimes stops inside a marker ("…, the split points to who acts ["). The bracket can
+// never resolve, so it is dropped before the reader sees it — but the words it did write are still a
+// claim, and are weighed against the citation it was writing about (the one before it in the answer)
+// or every passage when it had not cited anything yet. Skipping the sentence showed an unsupported
+// claim with a citation attached. Measured on CT150 2026-11-04: two asks in eleven withheld a correct
+// answer this way, which is why the tail is no longer treated as data.
+const OPEN_MARKER_TAIL = /[ \t]*\[[\d \t]*$/;
 
 /** A marker the model opened and never closed can never resolve: drop it before the reader sees it. */
 const stripOpenMarker = (text) => String(text).replace(/[ \t]*\[[\d \t]*$/gm, '');
@@ -228,17 +237,22 @@ const stripOpenMarker = (text) => String(text).replace(/[ \t]*\[[\d \t]*$/gm, ''
  */
 function ungroundedSentence(answer, byNumber, attributed = null) {
   const pool0 = attributed?.length ? attributed : null;
+  let lastCited = null;
   for (const raw of sentenceSplit(answer)) {
-    if (OPEN_MARKER_TAIL.test(raw)) continue;
-    const own = [...new Set(markersIn(raw))].filter((n) => byNumber.has(n));
-    const tokens = [...new Set(contentTokens(raw.replace(MARKER, ' ')).filter((t) => !/^\d+$/.test(t)))];
+    const openTail = OPEN_MARKER_TAIL.test(raw);
+    const text = raw.replace(OPEN_MARKER_TAIL, '');
+    const own = [...new Set(markersIn(text))].filter((n) => byNumber.has(n));
+    if (own.length) lastCited = own;
+    const tokens = [...new Set(contentTokens(text.replace(MARKER, ' ')).filter((t) => !/^\d+$/.test(t)))];
     if (tokens.length < MIN_CLAIM_TOKENS) continue;
-    const pool = own.length ? own : (pool0 ?? [...byNumber.keys()]);
+    // A sentence that stopped inside a marker was being written about the citation before it, so it is
+    // held to that passage alone — a claim that passage does not make still fails the share test.
+    const pool = own.length ? own : (openTail && lastCited ? lastCited : (pool0 ?? [...byNumber.keys()]));
     const best = Math.max(...pool.map((n) => {
       const { tokens: have, forms } = byNumber.get(n);
       return tokens.filter((t) => forms.has(t) || inflections(t).some((v) => have.has(v))).length;
     }));
-    if (best / tokens.length < GROUNDED_SHARE) return plain(raw);
+    if (best / tokens.length < GROUNDED_SHARE) return plain(text);
   }
   return '';
 }
