@@ -268,6 +268,38 @@ test('a sentence the cited passage never said is refused as ungrounded', async (
   refused(out, 'llm-ungrounded');
 });
 
+// t_cb787b0b: inflections() used to emit the truncated stem of an -ing/-ed word ("caring" -> car,
+// "rated" -> rat), so a passage that says "caring" carried "car" as a supported word and a fabricated
+// draft using it cleared the share test. The control changes only that word and is refused on both
+// trees, which is what makes the collision, not a loosened share test, the cause.
+const BELT = `# Belt care
+## Torque
+Operators caring for the line know a belt looks tired and the rated torque matters. A belt that looks tired at the rated torque is replaced.
+`;
+const beltAsk = (answer) => askFromCorpus({
+  question: 'when do I replace the belt',
+  hits: [{ note: { id: 7, slug: 'belt-care', title: 'Belt care', topic: 'tpm', body: BELT }, score: 3 }],
+  coverageVerdict: ok, cfg, sleep: noSleep,
+  fetchImpl: async () => json({ answer, citations: [1], coverage: 'ok', missing: '' })
+});
+
+test('a draft word that is only the truncated stem of a passage word is not support: "car" is not "caring"', async () => {
+  const out = await beltAsk('Rate the car tires [1].');
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Rate the car tires/, 'the refusal names the fabricated sentence');
+});
+
+test('the same fabricated sentence with the colliding word changed is refused as well', async () => {
+  const out = await beltAsk('Rate the banana tires [1].');
+  refused(out, 'llm-ungrounded');
+});
+
+test('the share test still counts an inflection of a passage word: "tire" for "tired", "rate" for "rated"', async () => {
+  const out = await beltAsk('A tire belt looks tired at the rate of torque [1].');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [7]);
+});
+
 // t_1b49a634: on CT150 three asks in eleven withheld an answer note 17 plainly gives. Both shapes below
 // came out of the model as a *fragment*, and neither asserted anything a passage could contradict.
 test('a sentence the model split at "e.g." is one claim, and a grounded one does not withhold the answer', async () => {
