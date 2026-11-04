@@ -68,7 +68,9 @@ human reason in `ai_missing`), each with its own mode; nothing is ever attribute
 1. every number in `citations` and every `[n]` marker in the text is a passage actually sent, and every marker is in `citations`
    (`llm-bad-citation`); an answer with no marker is `llm-uncited`;
 2. every figure in the answer (digits, with optional unit or `%`; `10,000` = `10000`) appears in a cited passage
-   (`llm-unsupported-figure`); a list marker in an ascending run from 1 (`1) … 2) …`) is an ordinal, not a figure;
+   (`llm-unsupported-figure`); a list marker is an ordinal, not a figure, only when a cited passage itself numbers a run
+   from 1 at line starts (`1.` `2.` …, at least two) and the answer's markers, in any of `1.` `1)` `(1)` `**1.**` `**1)**`
+   `1:` `1 -`, form an ascending run from 1 within those values; a passage that numbers nothing makes every number a figure;
 3. every sentence with at least 3 content words shares at least `GROUNDED_SHARE = 0.5` of them with a passage it cites
    (`llm-ungrounded`), using the retrieval tokenizer.
 
