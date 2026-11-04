@@ -191,9 +191,13 @@ export function isStopWord(w) {
   return STOPWORDS.has(fold(w));
 }
 
-// English function words that are not a Vietnamese word typed without marks: seeing one means English.
+// English function words, and the unambiguous English imperative/query verbs a request is phrased with,
+// that are not a Vietnamese word typed without marks: seeing one means English. The verbs matter because
+// an imperative ("List the five steps of 5S in order.") carries no interrogative word at all, so without
+// them it fell through to the Vietnamese default and was answered in Vietnamese.
 const ENGLISH_ONLY_MARKERS = new Set(
-  ['how', 'what', 'whats', 'why', 'when', 'where', 'who', 'which', 'does', 'did', 'should', 'would', 'could', 'my', 'our', 'your', 'we', 'you', 'i', 'please', 'pls', 'tell', 'is', 'are', 'was', 'were', 'have', 'has', 'about', 'with', 'from', 'there', 'their', 'they', 'this', 'that']
+  ['how', 'what', 'whats', 'why', 'when', 'where', 'who', 'which', 'does', 'did', 'should', 'would', 'could', 'my', 'our', 'your', 'we', 'you', 'i', 'please', 'pls', 'tell', 'is', 'are', 'was', 'were', 'have', 'has', 'about', 'with', 'from', 'there', 'their', 'they', 'this', 'that',
+    'list', 'name', 'describe', 'explain', 'give', 'show', 'state', 'outline', 'walk']
 );
 
 // --- Vietnamese -> English bridge ---------------------------------------------------------------

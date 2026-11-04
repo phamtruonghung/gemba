@@ -258,6 +258,12 @@ test('"1." and "2." in an answer are figures when the cited note lists nothing n
   refused(out, 'llm-unsupported-figure');
 });
 
+test('a list with its first marker inline and the rest at line starts is ordinals, not figures', async () => {
+  const out = await askFiveS('From [1], in this order: 1. Sort: take out what is not used.\n2. Set in order: one place per thing.\n3. Shine: cleaning is inspection. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
 test('a run that does not start at 1 is still figures', async () => {
   const out = await askFiveS('2) Set in order: one place per thing. 3) Shine: cleaning is inspection. [1]');
   refused(out, 'llm-unsupported-figure');
@@ -577,6 +583,25 @@ test('questionLang: diacritics, Vietnamese without them, English, and a mix', ()
     ['when do I replace the die', 'en'],
     ['How do I explain OEE to công nhân on the line?', 'vi'],
     ['', 'en']
+  ];
+  for (const [text, want] of table) assert.equal(questionLang(text), want, text);
+});
+
+test('questionLang: an English imperative is English, even with no interrogative word', () => {
+  // #72: an imperative carries no question word, so it used to fall through to the Vietnamese default.
+  const table = [
+    ['List the five steps of 5S in order.', 'en'],
+    ['Name the three parts of OEE.', 'en'],
+    ['Describe the changeover procedure in four steps.', 'en'],
+    ['Explain the difference between availability and performance.', 'en'],
+    ['Give an example of a first step in 5S.', 'en'],
+    ['Show the order of the 5S steps.', 'en'],
+    ['State the four steps of changeover.', 'en'],
+    ['Outline the five steps of 5S.', 'en'],
+    ['Walk me through a changeover.', 'en'],
+    // Diacritic-free Vietnamese is still Vietnamese: none of the verbs is a Vietnamese word.
+    ['5s nen bat dau tu dau', 'vi'],
+    ['cach giam thoi gian doi khuon', 'vi']
   ];
   for (const [text, want] of table) assert.equal(questionLang(text), want, text);
 });
