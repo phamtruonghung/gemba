@@ -216,6 +216,53 @@ test('a lone "3." with no list around it is still a figure', async () => {
   refused(out, 'llm-unsupported-figure');
 });
 
+test('an inline list marked "(1) (2) (3)" is ordinals, not figures', async () => {
+  const out = await askFiveS('From [1], in this order: (1) Sort: take out what is not used. (2) Set in order: one place per thing. (3) Shine: cleaning is inspection. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('an inline list marked "**1.** **2.** **3.**" is ordinals, not figures', async () => {
+  const out = await askFiveS('From [1], in this order: **1.** Sort: take out what is not used. **2.** Set in order: one place per thing. **3.** Shine: cleaning is inspection. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('an inline list marked "**1)** **2)** **3)**" is ordinals, not figures', async () => {
+  const out = await askFiveS('From [1], in this order: **1)** Sort: take out what is not used. **2)** Set in order: one place per thing. **3)** Shine: cleaning is inspection. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('an inline list marked "1: 2: 3:" is ordinals, not figures', async () => {
+  const out = await askFiveS('From [1], in this order: 1: Sort: take out what is not used. 2: Set in order: one place per thing. 3: Shine: cleaning is inspection. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('an inline list marked "1 - 2 - 3 -" is ordinals, not figures', async () => {
+  const out = await askFiveS('From [1], in this order: 1 - Sort: take out what is not used. 2 - Set in order: one place per thing. 3 - Shine: cleaning is inspection. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('a bold-wrapped "**1) Sort: …**" list is ordinals, not figures', async () => {
+  const out = await askFiveS('From [1], in this order: **1) Sort: take out what is not used.** **2) Set in order: one place per thing.** **3) Shine: cleaning is inspection.** [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('"1." and "2." in an answer are figures when the cited note lists nothing numbered', async () => {
+  const flat = [{ note: { id: 21, slug: 'batch', title: 'Batch', topic: 'tpm', body: 'Cut the batch size and re-measure the batch against the gauge mark after each change.' }, score: 3 }];
+  const out = await askFromCorpus({ question: 'q', hits: flat, coverageVerdict: ok, cfg, sleep: noSleep, fetchImpl: async () => json({ answer: 'Cut the batch to 1. Then re-measure the batch to 2. [1].', citations: [1], coverage: 'ok', missing: '' }) });
+  refused(out, 'llm-unsupported-figure');
+});
+
+test('a run that does not start at 1 is still figures', async () => {
+  const out = await askFiveS('2) Set in order: one place per thing. 3) Shine: cleaning is inspection. [1]');
+  refused(out, 'llm-unsupported-figure');
+});
+
 test('a sentence the cited passage never said is refused as ungrounded', async () => {
   const out = await ask(async () => json({ answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [1].', citations: [1], coverage: 'ok', missing: '' }));
   refused(out, 'llm-ungrounded');

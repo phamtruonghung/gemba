@@ -289,30 +289,45 @@ function ungroundedSentence(answer, byNumber, attributed = null) {
 // A numbered list writes its markers as ordinals ("… in this order: 1) Sort … 2) Set in order …"), and an
 // answer that copies a numbered passage keeps them inline — where the line-start strip below never looked.
 // The passage's markers are stripped from `have`, so an inline list was withheld as the figure "1"
-// (measured on CT150 2026-11-04: the same draft passes when each item is on its own line). Only a run from
-// 1 makes a marker an ordinal; a lone number with punctuation ("cut it to 3.", "every 30 days") is still a
-// figure, so the guard keeps its teeth.
-const LIST_MARKER = /(^|\s)(\d{1,2})[.)](?=\s)/g;
+// (measured on CT150 2026-11-04: the same draft passes when each item is on its own line). What makes a
+// marker an ordinal is the *cited passage's own* numbered run: a passage that lists 1, 2, 3, … at line
+// starts says which values are ordinals, and only an ascending run from 1 in the answer, among those
+// values, is stripped (in any of "1." "1)" "(1)" "**1.**" "1:" "1 -" "**1) Sort**"). A passage that lists
+// nothing makes every number in the answer a figure ("cut the batch to 1. Then … to 2."), and a lone number
+// with punctuation ("cut it to 3.", "every 30 days") is still a figure, so the guard keeps its teeth.
+// Accepted residue: a passage with a run 1–3 lets an answer's own "to 1. … to 2." through as ordinals.
+const LINE_MARKER = /^\s*(\d{1,2})[.)]\s/gm;
+const LIST_MARKER = /(^|\s)((?:\(|\*\*|\*|__)?)(\d{1,2})(?:\)|[.:]|\s[-–])(?:\*\*|\*|__)?(?=\s)/g;
 
-function withoutOrdinals(text) {
-  const marks = [...String(text).matchAll(LIST_MARKER)];
+function ordinalValues(passages) {
+  const out = new Set();
+  for (const p of passages) {
+    const run = [];
+    for (const m of `${p.title}\n${p.body}`.matchAll(LINE_MARKER)) if (Number(m[1]) === run.length + 1) run.push(Number(m[1]));
+    if (run.length >= 2) for (const n of run) out.add(n);
+  }
+  return out;
+}
+
+function withoutOrdinals(text, ordinals) {
+  if (!ordinals || !ordinals.size) return text;
   const run = [];
   let want = 1;
-  for (const m of marks) if (Number(m[2]) === want) { run.push(m); want += 1; }
+  for (const m of String(text).matchAll(LIST_MARKER)) if (Number(m[3]) === want && ordinals.has(want)) { run.push(m); want += 1; }
   if (run.length < 2) return text;
   let out = '';
   let last = 0;
   for (const m of run) {
-    out += `${text.slice(last, m.index + m[1].length)} `;
+    out += `${text.slice(last, m.index + m[1].length + m[2].length)} `;
     last = m.index + m[0].length;
   }
   return out + text.slice(last);
 }
 
 // "10,000", "10.000", "2,5", "37%": digits with their separators; the unit does not matter, the value does.
-function numbersIn(text) {
+function numbersIn(text, ordinals) {
   const out = [];
-  for (const m of withoutOrdinals(String(text).replace(MARKER, ' ').replace(/^\s*\d+[.)]\s+/gm, '')).matchAll(/\d+(?:[.,]\d+)*/g)) {
+  for (const m of withoutOrdinals(String(text).replace(MARKER, ' ').replace(/^\s*\d+[.)]\s+/gm, ''), ordinals).matchAll(/\d+(?:[.,]\d+)*/g)) {
     const raw = m[0];
     out.push({ raw, key: /^\d{1,3}([.,]\d{3})+$/.test(raw) ? raw.replace(/[.,]/g, '') : raw.replace(',', '.') });
   }
@@ -321,7 +336,7 @@ function numbersIn(text) {
 
 function unsupportedNumber(answer, passages) {
   const have = new Set(passages.flatMap((p) => numbersIn(`${p.title}\n${p.body}`).map((x) => x.key)));
-  return numbersIn(answer).find((x) => !have.has(x.key))?.raw ?? '';
+  return numbersIn(answer, ordinalValues(passages)).find((x) => !have.has(x.key))?.raw ?? '';
 }
 
 /** The cited sentence: the sentence of the passage that shares most words with the answer's sentence. */
