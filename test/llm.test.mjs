@@ -269,6 +269,82 @@ test('a run that does not start at 1 is still figures', async () => {
   refused(out, 'llm-unsupported-figure');
 });
 
+const FIVE_STEP = '# 5S\n## Five steps, in this exact order\n\n1. Sort: pull everything not used out of the area.\n2. Set in order: one place per thing.\n3. Shine: cleaning is inspection.\n4. Standardise: turn the first three steps into a habit with an owner and a time inside the shift.\n5. Sustain: audit it.\n\nThe trap is running 5S as a periodic clean-up campaign.\n';
+const fiveStep = [{ note: { id: 14, slug: 'five-s', title: '5S', topic: '5s', body: FIVE_STEP }, score: 3 }];
+const askFiveStep = (answer, hits = fiveStep) => askFromCorpus({ question: 'what are the five steps of 5S', hits, coverageVerdict: ok, cfg, sleep: noSleep, fetchImpl: async () => json({ answer, citations: [1], coverage: 'ok', missing: '' }) });
+
+test('a range of the passage\'s own ordinals after "steps" in an inline "1. … 4." list is ordinals, not a figure', async () => {
+  const out = await askFiveStep('From [1], in this order: 1. Sort: pull everything not used out of the area. 2. Set in order: one place per thing. 3. Shine: cleaning is inspection. 4. Standardise: turn steps 1–3 into a habit with an owner and a time inside the shift. The trap is running 5S as a periodic clean-up campaign. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('a "1) … steps 1–3 … 5S" answer citing a five-step note is ordinals, not a figure', async () => {
+  const out = await askFiveStep('Straight from the passage, in this exact order: 1) Sort: pull everything not used out of the area. 2) Set in order: one place per thing. 3) Shine: cleaning is inspection. 4) Standardise: turn steps 1–3 into a habit with an owner and a time inside the shift. 5) Sustain: audit it. The trap is running 5S as a periodic clean-up campaign. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('an ordinal range spelled "1 to 3", "1 - 3" or "1 through 3" is ordinals, not a figure', async () => {
+  for (const range of ['steps 1 to 3', 'steps 1 - 3', 'Steps 1 through 3', 'steps 1—3']) {
+    const out = await askFiveStep(`Standardise: turn ${range} into a habit with an owner and a time inside the shift [1].`);
+    assert.equal(out.mode, 'llm', range);
+    assert.deepEqual(out.citations, [14], range);
+  }
+});
+
+test('a range with no ordinal noun is still a figure, even where the passage numbers 2 and 3', async () => {
+  const out = await askFiveStep('Standardise: we cut the batch by 2–3 and re-measured [1].');
+  refused(out, 'llm-unsupported-figure');
+});
+
+test('a range with an endpoint outside the passage\'s ordinals is still a figure', async () => {
+  for (const range of ['steps 1–9', 'steps 2–7']) {
+    const out = await askFiveStep(`Standardise: turn ${range} into a habit with an owner and a time inside the shift [1].`);
+    refused(out, 'llm-unsupported-figure');
+  }
+});
+
+test('"steps 1–3" is a figure when the cited note numbers nothing', async () => {
+  const flat = [{ note: { id: 21, slug: 'habit', title: 'Habit', topic: 'tpm', body: 'Turn the cleaning routine into a habit with an owner and a time inside the shift.' }, score: 3 }];
+  const out = await askFiveStep('Turn steps 1–3 into a habit with an owner and a time inside the shift [1].', flat);
+  refused(out, 'llm-unsupported-figure');
+});
+
+const FIVE_S_START = '# 5S — start where mistakes are easiest, not with a slogan\n\n## Pick one area, not the whole plant\n\nA plant-wide 5S campaign usually ends up as one big clean-up. A more solid way: pick a small area with an obvious problem — a place where tools go missing, or an aisle that keeps getting blocked — and work it until the people there say "it really is easier to work here".\n\n## Five steps, in this exact order\n\n1. Sort: take everything out of the area that is not used for the job running now. Do not throw it away — put it in a holding area with the date and who left it.\n2. Set in order: each thing has one place, the place is marked, and the place is chosen by how often it is used (the ones used most, closest to hand).\n3. Shine: cleaning is a way to inspect the machine. If wiping it down turns up a fresh oil trace, that is a find, not lost time.\n4. Standardise: turn the three steps above into a habit with an owner and a time inside the shift.\n5. Sustain: only once you hold it is it worth talking about discipline and scoring.\n';
+const fiveSStart = [{ note: { id: 14, slug: 'five-s-start', title: '5S — start where mistakes are easiest, not with a slogan', topic: 'safety', body: FIVE_S_START }, score: 3 }];
+
+test('a bare reference to the passage\'s own ordinal ("step 1 of the five") is ordinals, not a figure', async () => {
+  const out = await askFiveStep('Start with one small area that has an obvious problem — tools going missing, an aisle that keeps getting blocked — and work it until the people there say it really is easier to work there, not a plant-wide campaign that turns into one big clean-up [1]. Then step 1 of the five, in this exact order: Sort — take out everything not used for the job running now, don\'t bin it, put it in a holding area with the date and who left it [1]. Pick the area today and do the Sort before anything else.', fiveSStart);
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('"Start with step 2 of the five" citing a five-step note is ordinals, not a figure', async () => {
+  const out = await askFiveStep('Start with step 2 of the five and set in order: one place per thing [1].', fiveSStart);
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
+test('a bare reference outside the passage\'s ordinals ("step 9") is still a figure', async () => {
+  const out = await askFiveStep('Start with step 9 of the five and sort out what is not used in the area [1].');
+  refused(out, 'llm-unsupported-figure');
+  assert.match(out.missing, /"9"/);
+});
+
+test('"step 1" is a figure when the cited note numbers nothing', async () => {
+  const flat = [{ note: { id: 18, slug: 'ops', title: 'One-point standard', topic: 'tpm', body: 'A one-point standard names one point and shows what done looks like. Take out what is not used.' }, score: 3 }];
+  const out = await askFiveStep('A one-point standard names one point and shows what done looks like [1]. Start with step 1 and take out what is not used [1].', flat);
+  refused(out, 'llm-unsupported-figure');
+  assert.match(out.missing, /"1"/);
+});
+
+test('a range the passage does not number ("steps 1–9") is not re-read as a bare "step 1"', async () => {
+  const out = await askFiveStep('Turn steps 1–9 into a habit with an owner and a time inside the shift [1].');
+  refused(out, 'llm-unsupported-figure');
+  assert.match(out.missing, /"1"/);
+});
+
 test('a sentence the cited passage never said is refused as ungrounded', async () => {
   const out = await ask(async () => json({ answer: 'Always schedule the hydraulic accumulator inspection with the maintenance supervisor monthly [1].', citations: [1], coverage: 'ok', missing: '' }));
   refused(out, 'llm-ungrounded');
