@@ -581,6 +581,25 @@ test('questionLang: diacritics, Vietnamese without them, English, and a mix', ()
   for (const [text, want] of table) assert.equal(questionLang(text), want, text);
 });
 
+test('questionLang: an English imperative is English, even with no interrogative word', () => {
+  // #72: an imperative carries no question word, so it used to fall through to the Vietnamese default.
+  const table = [
+    ['List the five steps of 5S in order.', 'en'],
+    ['Name the three parts of OEE.', 'en'],
+    ['Describe the changeover procedure in four steps.', 'en'],
+    ['Explain the difference between availability and performance.', 'en'],
+    ['Give an example of a first step in 5S.', 'en'],
+    ['Show the order of the 5S steps.', 'en'],
+    ['State the four steps of changeover.', 'en'],
+    ['Outline the five steps of 5S.', 'en'],
+    ['Walk me through a changeover.', 'en'],
+    // Diacritic-free Vietnamese is still Vietnamese: none of the verbs is a Vietnamese word.
+    ['5s nen bat dau tu dau', 'vi'],
+    ['cach giam thoi gian doi khuon', 'vi']
+  ];
+  for (const [text, want] of table) assert.equal(questionLang(text), want, text);
+});
+
 test('a Vietnamese question with a grounded answer_en and a faithful Vietnamese answer shows the Vietnamese', async () => {
   const out = await askVi({ answer_en: EN_ANSWER, answer: VI_ANSWER, citations: [1, 2], coverage: 'ok', missing: '' });
   assert.equal(out.mode, 'llm');
