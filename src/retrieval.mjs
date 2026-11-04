@@ -99,7 +99,8 @@ function stem(t) {
 }
 
 // The other inflections a word might be written in: stops/stopped/stopping -> stop, whys -> why.
-function inflections(t) {
+// Exported for the AI tier's grounding check, which compares an answer's words with a passage's.
+export function inflections(t) {
   if (!/^[a-z]+$/.test(t) || t.length <= 3) return [];
   const out = [];
   const base = (b) => { out.push(b); if (/(.)\1$/.test(b)) out.push(b.slice(0, -1)); out.push(`${b}e`); };
