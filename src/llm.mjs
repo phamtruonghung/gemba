@@ -183,16 +183,17 @@ function sentencesOf(text) {
   return sentenceSplit(text).map(plain).filter(Boolean);
 }
 
-// A sentence ends on . ! or ? — unless the mark is part of an abbreviation that continues the same
-// sentence ("… in its list, e.g. the die face is wiped"). Splitting there left "…, e.g." as a sentence
-// of its own: a fragment that asserts nothing, still counted as a claim, and it withheld the whole
-// answer when it shared too little with a passage.
+// A sentence ends on . ! or ? — but the model writes abbreviations inside a sentence ("… in its list,
+// e.g. the die face is wiped"), and the piece before the mark is a fragment that asserts nothing. It
+// was still counted as a claim and withheld the whole answer when it shared too little with a passage,
+// which is the false refusal this card is about.
 //
-// An abbreviation is only non-terminal before a lowercase word or a digit. "The answer is no. Also
-// replace the pump" is two sentences, and treating the first as an abbreviation glued them into one
-// unit — which let an unsupported claim ride on the supported sentence before it.
+// The pieces either side of an abbreviation are graded separately rather than glued back into one
+// unit: gluing let a fabricated clause ride on a supported one's words ("… at every shift change, e.g.
+// paint the fence blue and call the vendor about invoices [1].", refused before the fix). A piece that
+// stops on an abbreviation is treated as data in ungroundedSentence, with the words after it weighed
+// on their own against the citation the fragment carried.
 const ABBREVIATION = /(?:^|\s)(?:e\.g|i\.e|etc|vs|cf|approx|no|fig|al|resp|st)\.$/i;
-const CONTINUES_SENTENCE = /^[a-z0-9]/;
 
 function sentenceSplit(text) {
   const out = [];
@@ -200,8 +201,6 @@ function sentenceSplit(text) {
     let start = 0;
     for (const m of line.matchAll(/[.!?](?=\s)/g)) {
       const end = m.index + 1;
-      const next = line.slice(end).trimStart();
-      if (ABBREVIATION.test(line.slice(start, end)) && CONTINUES_SENTENCE.test(next)) continue;
       out.push(line.slice(start, end));
       start = end;
       while (line[start] === ' ' || line[start] === '\t') start += 1;
@@ -252,6 +251,12 @@ function ungroundedSentence(answer, byNumber, attributed = null) {
       const { tokens: have, forms } = byNumber.get(n);
       return tokens.filter((t) => forms.has(t) || inflections(t).some((v) => have.has(v))).length;
     }));
+    // A piece that stops on an abbreviation is the front half of a sentence whose claim and citation
+    // are in the next piece ("… matching loss names in its list, e.g." + "the die face is wiped [1].").
+    // Grading it alone withheld correct answers, so it is data — unless not one of its words is in the
+    // passage it names: that is an invented clause carrying its own marker, not the front of one, and
+    // it is still weighed and refused.
+    if (ABBREVIATION.test(text) && best > 0) continue;
     if (best / tokens.length < GROUNDED_SHARE) return plain(text);
   }
   return '';

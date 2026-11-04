@@ -252,6 +252,38 @@ test('an abbreviation before a capitalised sentence still ends it, so a claim ca
   }
 });
 
+test('an abbreviation before a lowercase sentence still ends it: a fabricated tail is weighed on its own', async () => {
+  // Round-2 regression: joining a lowercase continuation onto the sentence before an abbreviation let a
+  // fabricated tail pass on the supported prefix's words. Measured against pre-fix 8f22f41: all refused.
+  for (const abbr of ['e.g', 'i.e', 'etc', 'vs', 'cf', 'approx', 'no', 'fig', 'al', 'resp', 'st']) {
+    const out = await ask(async () => json({
+      answer: `Replace the die when the burr grows past the gauge mark at every shift change, ${abbr}. paint the fence blue and call the vendor about invoices [1].`,
+      citations: [1], coverage: 'ok', missing: ''
+    }));
+    assert.equal(out.mode, 'llm-ungrounded', `a fabricated lowercase tail after "${abbr}." is refused`);
+  }
+});
+
+test('a fabricated tail after "e.g." is refused even when the prefix it rides on is supported', async () => {
+  const out = await ask(async () => json({
+    answer: 'Replace the die at the gauge mark, e.g. paint the fence blue and call the vendor about invoices [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /paint the fence blue/, 'the refusal names the fabricated tail');
+});
+
+test('an invented clause before an abbreviation is still refused, not treated as a fragment', async () => {
+  // The fragment rule must not become a hiding place: a piece that stops on an abbreviation is data only
+  // when the passage it names shares a word with it. This clause shares none, so it is weighed and refused.
+  const out = await ask(async () => json({
+    answer: 'Call the vendor about invoices monthly, e.g. replace the die when the burr grows past the gauge mark [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Call the vendor about invoices/, 'the refusal names the invented clause');
+});
+
 test('a claim the passage does not make is still refused once its marker is closed', async () => {
   // The same trailing sentence from the test above, with the marker the model failed to write.
   const out = await ask(async () => json({
