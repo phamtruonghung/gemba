@@ -258,6 +258,12 @@ test('"1." and "2." in an answer are figures when the cited note lists nothing n
   refused(out, 'llm-unsupported-figure');
 });
 
+test('a list with its first marker inline and the rest at line starts is ordinals, not figures', async () => {
+  const out = await askFiveS('From [1], in this order: 1. Sort: take out what is not used.\n2. Set in order: one place per thing.\n3. Shine: cleaning is inspection. [1]');
+  assert.equal(out.mode, 'llm');
+  assert.deepEqual(out.citations, [14]);
+});
+
 test('a run that does not start at 1 is still figures', async () => {
   const out = await askFiveS('2) Set in order: one place per thing. 3) Shine: cleaning is inspection. [1]');
   refused(out, 'llm-unsupported-figure');
