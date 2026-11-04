@@ -210,6 +210,9 @@ function sentencesOf(text) {
 // carries the claim forward. `etc` and `no` are not in this set: they end ordinary sentences ("…, etc.",
 // "the answer is no."), so a piece that stops on one is a complete claim and is weighed like any other.
 const ABBREVIATION = /(?:^|\s)(?:e\.g|i\.e|vs|cf|approx|fig|al|resp|st)\.$/i;
+// A list marker or the start of a list item as a piece reads after sentenceSplit(): a bare ordinal ("1.",
+// "2)"), an ordinal or bullet followed by text, either with markdown `**` around it.
+const LIST_PIECE = /^[\s*_]*(?:\d{1,2}[.)]|[-*\u2022])[*_]*(?:\s|$)/;
 
 function sentenceSplit(text) {
   const out = [];
@@ -286,6 +289,17 @@ function ungroundedSentence(answer, byNumber, attributed = null) {
     // Accepted residue: a fabricated clause *before* a mark whose tail is in the pool looks exactly like
     // a real fragment here and shows.
     if (followed && ABBREVIATION.test(text) && best > 0) continue;
+    // A lead-in introduces what follows ("Straight from the 5S procedure we use [1]:", or any piece
+    // directly before a list marker). Its words are attribution vocabulary, so it shares 0.25-0.40 with
+    // the passage while the list items under it fall under MIN_CLAIM_TOKENS and are never judged: the
+    // lead-in was the only piece weighed and withheld a correct answer (CT150 2026-11-04, note 14, issue
+    // #79). It is data, not a claim — but only when (a) the claim is carried forward, i.e. a later piece
+    // is itself a claim or a list marker/item (a lead-in that ends the draft is weighed like any other
+    // sentence), and (b) at least one of its words is in the pool it is checked against.
+    // Accepted residue: the lead-in is excused by lexical contact, not by being true, so a fabricated
+    // lead-in that reuses one of the passage's words and is followed by a list still shows.
+    const leadIn = /:$/.test(text.replace(MARKER, ' ').trim()) || LIST_PIECE.test(pieces[i + 1] ?? '');
+    if (leadIn && best > 0 && pieces.slice(i + 1).some((s) => carriesClaim(s) || LIST_PIECE.test(s))) continue;
     if (best / tokens.length < GROUNDED_SHARE) return plain(text);
   }
   return '';

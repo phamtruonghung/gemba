@@ -738,3 +738,53 @@ test('probe: no key means no call at all', async () => {
   assert.equal(await createTierProbe()({ ...PROBE_CFG, enabled: false, key: '' }, fetchImpl), 'none');
   assert.equal(calls.length, 0);
 });
+
+// Issue #79: a lead-in ("Straight from the 5S procedure we use [1]:") is attribution vocabulary, so it
+// shares 0.25-0.40 with note 14 and was the only piece judged: the list items under it are skipped
+// under MIN_CLAIM_TOKENS. The fixture is note 14's real wording.
+const NOTE_5S = `# 5S — start where mistakes are easiest, not with a slogan
+## Five steps, in this exact order
+
+1. Sort: take everything out of the area that is not used for the job running now. Do not throw it away — put it in a holding area with the date and who left it.
+2. Set in order: each thing has one place, the place is marked, and the place is chosen by how often it is used (the ones used most, closest to hand).
+3. Shine: cleaning is a way to inspect the machine. If wiping it down turns up a fresh oil trace, that is a find, not lost time.
+4. Standardise: turn the three steps above into a habit with an owner and a time inside the shift.
+5. Sustain: only once you hold it is it worth talking about discipline and scoring.
+`;
+const ask5S = (answer) => askFromCorpus({
+  question: 'what are the five steps of 5S',
+  hits: [{ note: { id: 14, slug: 'demo-5s-on-the-floor', title: '5S — start where mistakes are easiest, not with a slogan', topic: 'safety', body: NOTE_5S }, score: 3 }],
+  coverageVerdict: ok, cfg, sleep: noSleep,
+  fetchImpl: async () => json({ answer, citations: [1], coverage: 'ok', missing: '' })
+});
+const STEPS = '\n1. Sort: take out what is not used.\n2. Set in order: one place per thing.\n3. Shine: cleaning is inspection.\n4. Standardise: make it a habit.\n5. Sustain: hold it.';
+
+const LEAD_INS = [
+  'Straight from the 5S procedure we use [1]:',
+  'Straight from the 5S note, in exactly this order [1]:',
+  'Straight from the 5S brief, and the order matters [1].'
+];
+test('a lead-in that introduces a list is not judged alone', async () => {
+  for (const lead of LEAD_INS) {
+    const out = await ask5S(lead + STEPS);
+    assert.equal(out.mode, 'llm', lead);
+    assert.deepEqual(out.citations, [14], lead);
+  }
+});
+
+// "Here is what the vendor told us" has two content words (vendor, told), under MIN_CLAIM_TOKENS, so it is
+// never weighed and was never refused; the sentence below has three and no contact with the passage.
+test('a lead-in with no lexical contact with the passage is still refused when a list follows', async () => {
+  const out = await ask5S('Here is what the vendor told us about invoices [1]:' + STEPS);
+  refused(out, 'llm-ungrounded');
+});
+
+test('a lead-in that ends the draft is weighed like any other sentence', async () => {
+  const out = await ask5S('Straight from the 5S procedure we use [1]:');
+  refused(out, 'llm-ungrounded');
+});
+
+test('a lead-in followed by a fabricated claim instead of a list is still refused', async () => {
+  const out = await ask5S('Straight from the 5S procedure we use [1]:\nRepaint the walkways with yellow tape every quarter [1].');
+  refused(out, 'llm-ungrounded');
+});

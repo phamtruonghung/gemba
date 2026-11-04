@@ -72,7 +72,9 @@ human reason in `ai_missing`), each with its own mode; nothing is ever attribute
    from 1 at line starts (`1.` `2.` …, at least two) and the answer's markers, in any of `1.` `1)` `(1)` `**1.**` `**1)**`
    `1:` `1 -`, form an ascending run from 1 within those values; a passage that numbers nothing makes every number a figure;
 3. every sentence with at least 3 content words shares at least `GROUNDED_SHARE = 0.5` of them with a passage it cites
-   (`llm-ungrounded`), using the retrieval tokenizer.
+   (`llm-ungrounded`), using the retrieval tokenizer; a lead-in that introduces what follows (ends on `:` once its markers
+   are removed, or stands directly before a list marker or item) is not weighed alone when a later piece is a claim or a
+   list marker/item and at least one of its content words is in the passage it is checked against.
 
 **Rendering.** Markers are renumbered `[1]..[k]` in order of first appearance and rewritten in the text, so the prose and the
 source list agree; the internal note id is never shown. Each citation stores `{n, id, snippet}` (the passage sentence closest
