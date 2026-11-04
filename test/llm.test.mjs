@@ -373,6 +373,38 @@ test('a fabricated tail after "e.g." is refused even when the prefix it rides on
   assert.match(out.missing, /paint the fence blue/, 'the refusal names the fabricated tail');
 });
 
+// t_6187e896: the `followed` guard asked only whether *a* later piece existed, so a tail that asserts
+// nothing (a bare marker, or "Do it") satisfied it. A fabricated clause before an abbreviation was then
+// skipped as a fragment and the answer showed as llm where pre-fix 8f22f41 refused it.
+test('a fabricated clause before "e.g." is weighed when the only piece after it is a bare marker', async () => {
+  const out = await ask(async () => json({
+    answer: 'Die invoices are settled by the vendor every quarter, e.g. [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Die invoices are settled/, 'the refusal names the fabricated clause');
+});
+
+test('a fabricated clause before "e.g." is weighed when the tail is a claim too short to check', async () => {
+  const out = await ask(async () => json({
+    answer: 'Die invoices are settled by the vendor every quarter, e.g. Do it [1].',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  refused(out, 'llm-ungrounded');
+  assert.match(out.missing, /Die invoices are settled/, 'the refusal names the fabricated clause');
+});
+
+test('a real fragment is still data when its continuation is a claim of its own', async () => {
+  // The other side of the claim test: this prefix is *not* grounded alone (1 of 4 content words), so a
+  // `carriesClaim` that answered false for everything would refuse it. Its continuation carries the claim.
+  const out = await ask(async () => json({
+    answer: 'Passage [1] lists the checks in order, e.g. the die face is wiped and the guide pillars are lubricated before the first stroke.',
+    citations: [1], coverage: 'ok', missing: ''
+  }));
+  assert.equal(out.mode, 'llm', 'a fragment whose tail carries the claim is not weighed on its own');
+  assert.deepEqual(out.citations, [11]);
+});
+
 test('an invented clause before an abbreviation is refused when it shares no word with the pool', async () => {
   // Scope: this pins the `best > 0` guard, not every invented prefix. A fabricated clause that *does*
   // share a word with the pool is structurally identical to a real fragment (the card's own shape) and
