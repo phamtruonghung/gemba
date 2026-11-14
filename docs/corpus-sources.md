@@ -49,10 +49,12 @@ draws on, so a note can be re-derived by reading those pages.
 The same work changed one existing note and worded one new note to avoid a collision, both measured
 by `npm run eval` (see the pull request). `demo-andon-surface-the-abnormal.md` now says the call is
 *split* into levels and how the heavy level is *handled*, because `q07` — the question it used to
-answer — fell to a 0.497 share against the 0.5 floor once the eight new notes diluted the idf of the
-words they share. `demo-job-relations-the-four-steps.md` is new in this change, and was written
-without the word "leave" from the start, because it would have made an unrelated question about
-annual-leave entitlement look covered. Neither change alters what the note teaches.
+answer — was already below the 0.5 share floor before this change (0.487 on the 12-note corpus, the
+one miss in that 50/51 baseline) and still below it at 0.497 once the eight new notes landed; the
+revision took it to 0.801 and the gate to 51/51. `demo-job-relations-the-four-steps.md` is new in
+this change, and was written without the word "leave" from the start, because it would have made an
+unrelated question about annual-leave entitlement look covered. Neither change alters what the note
+teaches.
 
 ## What the notes keep, and what they drop
 
