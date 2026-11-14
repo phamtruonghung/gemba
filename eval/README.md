@@ -78,7 +78,7 @@ TP / FP / TN / FN on questions, english, holdout-1 (holdout-2 was not used for a
 | 4 | Acronym map (OEE, SMED, TPM, 5S, OPL, andon, both ways) | Kept | off: 21/0/29/1, 12/0/11/3, 6/0/7/3. Neutral on dev, +2 on english (long forms "overall equipment effectiveness", "single minute exchange of die"). Long form and short form are rewritten to the same token on the note and question side. |
 | 5 | Diacritic-sensitive index | Kept, no eval effect | off: identical on all three. No labelled question turns on it; kept on correctness grounds and covered by a unit test (hạt vs hát; mã = code, ca = shift, đèn = lamp; bare "ma" says nothing; unaccented input still works). |
 | 6 | `##` chunking, send the matched chunk, cut at a boundary | Kept for the passage only | Chunk-level ranking and chunk-level coverage were measured on `improve/retrieval` and lost (recall 0.77 to 0.50; FP 1 to 2), so chunks never change the verdict. They choose what the model sees. Test: the answering section of a 10 KB note, which sits past character 1400, is what is sent, with its heading, not cut mid-word. |
-| 7 | Top-1/top-2 margin rule | Reverted (switch kept, off) | margin 0.05/0.1/0.2: no change; 0.3: 20/0/29/2, 6/0/7/3 (-1 TP); 0.5: 20/0/29/2, 5/0/7/4; 1: 15/0/29/7. There is no false cover for it to remove, so it only costs recall. A margin refusal is a soft vote. |
+| 7 | Top-1/top-2 margin rule | Kept, on at 0.05 (20-note corpus) | At 12 notes off was right: 0.05/0.1/0.2 no change, 0.3 cost a TP. At 20 notes it has a false cover to remove: 0.05 and 0.10 give 22/0/29/0, 14/0/11/1, 6/1/6/3 and refuse `e16` (its two notes score 4.1% apart; at 0.0 it is covered, english 14/1/10/1). 0.15 is the ceiling — `q12` (12.5% lead) becomes a false refuse (21/0/29/1); 0.20: 21/0/29/1, 13/0/11/2; 0.30: 19/0/29/3, 12/0/11/3, 6/0/7/3. A margin refusal is a soft vote the model can overrule. |
 | 8 | Model's thin vote primary when a key is configured | Kept | `hard` thin (nothing matched, too short, weak top, only everyday words shared) never reaches the model; a share/margin `thin` is a soft vote and goes to the model, whose own coverage vote (`ok` or INSUFFICIENT_DATA) stands, behind every #36 check (citations, markers, per-sentence groundedness). Not measured by the offline eval, which has no key; unit-tested. |
 
 ## Experiment log
@@ -166,9 +166,10 @@ on any set, and 0.15 refuses `q12`. The tightest answered question in the gate a
 12.5%, which is the ceiling; 0.05 is the smallest value that fixes the row, and the next-tightest answered gate
 question (`q15`) leads by 28%.
 
-`h16` is left as a false cover on purpose. Every switch swept for it either misses it (a `margin` of 0.27
-would be needed; `minShare=0.55` leaves it covered) or breaks the gate (`distinctShare=0.05` → 44/51,
-`scoring=distinctive` → 50/51 with two new false covers on `english`). The shape it needs — a bridged unit
+`h16` is left as a false cover on purpose. Every switch swept for it either misses it (a `margin` of 0.28
+would be needed, and that costs a gate false refuse — `q12`; `minShare=0.55` leaves it covered) or breaks
+the gate (`distinctShare=0.05` → 44/51; `scoring=distinctive` at `margin=0` → 50/51, with two false covers
+on `english` of which one, `e16`, is already there at `margin=0` — one is new, `e17`). The shape it needs — a bridged unit
 whose corpus-unknown alias (`sewing`, `garment`, df 0) is matched through a generic one (`worker`, df 2) — is
 the same shape as seventeen gate questions that must stay answered (`q03` "bắt đầu" → start/begin, `q21`
 "vận hành" → operator/operate). The distinguishing fact is that garment staffing is a different subject, not
