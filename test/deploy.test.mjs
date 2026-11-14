@@ -11,7 +11,7 @@ import { mkdtemp, readFile, writeFile, mkdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { readFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, mkdtempSync, readdirSync } from 'node:fs';
 import { createApp, loadConfig } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
 
@@ -139,7 +139,10 @@ test('a backup of a live database opens, checks out, and reports what it holds',
       }
     });
     assert.match(stdout, /integrity=ok/);
-    assert.match(stdout, /notes=1[0-9]/); // the seeded corpus, not an empty file
+    // The seeded corpus, not an empty file: the count is the shipped corpus, so a note added to
+    // seed/corpus/ and never reaching the database shows up here.
+    const shipped = readdirSync(join(ROOT, 'seed', 'corpus')).filter((f) => f.endsWith('.md')).length;
+    assert.match(stdout, new RegExp(`notes=${shipped}\\b`));
     assert.match(stdout, /questions=0/);
   } finally {
     await rm(dir, { recursive: true, force: true });

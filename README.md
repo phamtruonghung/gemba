@@ -113,7 +113,7 @@ fails is **shown to its author with the reason** — never dropped silently.
 gate's findings and the attestation text, can edit it and re-run the gate, and the note is published only
 when the form posts the attestation checkbox *and* the gate passes. The same gate stops an expert's answer
 to a routed question. The seed has no author, so it attests nothing: a shipped note that would need an attestation stays
-unpublished. All 12 shipped notes publish without one, and `test/gate.test.mjs` fails if one stops. What survives is the portable craft: the order of checks, the countermeasure, the
+unpublished. All 20 shipped notes publish without one, and `test/gate.test.mjs` fails if one stops. What survives is the portable craft: the order of checks, the countermeasure, the
 standard, the diagnostic question.
 
 The employer's own names (the strings the gate must never let through) are a deployment file, not source,
