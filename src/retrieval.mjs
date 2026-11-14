@@ -20,7 +20,7 @@ export const TUNING = {
   minShare: 0.5,
   distinctShare: 0.25,
   exactTerms: true, // diacritic-sensitive index: an accented word is also indexed (and asked) under its exact spelling, so mã != ma
-  margin: 0, // required relative gap between the top two scores (0 = off)
+  margin: 0.05, // required relative gap between the top two scores (0 = off): two notes that match about equally do not establish an answer
   clauseShare: 0, // a question may also be covered if one clause of it is (0 = off): length must not decide
   chunkRank: false
 };
@@ -459,6 +459,13 @@ export function search(query, index, k = 5) {
  * cannot separate an off-corpus question at 0.44–0.55 from an on-corpus one at 1.00, because
  * Vietnamese questions share their common words ("dừng", "vấn", "thường", "nhà") with
  * everything. Weighting each missing word by how rare it is separates them cleanly.
+ *
+ * `margin` is on from t_80ec07d6. At 20 notes "what is the world class OEE target for an assembly
+ * line?" was covered off two notes 4% apart — the supervisor-rhythm note, which only warns that
+ * published benchmarks are misapplied, and the OEE note, which gives no figure — on 59% of the
+ * question's key terms. Requiring the top score to lead the second by 5% refuses that pair and costs
+ * nothing measurable: the gate stays 51/51 and its tightest answered question (`q12`) leads by 12.5%,
+ * `holdout-1`/`holdout-2` do not move, and `eval/english.jsonl` returns to 25/26 at precision 1.
  */
 export function coverage(question, hits, index, opts = {}) {
   const o = { ...TUNING, ...opts };

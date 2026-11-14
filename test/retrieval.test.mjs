@@ -146,14 +146,24 @@ test('inflections: a short stem is the +e reading, never the truncated word', ()
   }
 });
 
-test('the margin rule, when switched on, refuses two near-tied notes; off by default', () => {
+test('the margin rule is on by default: two notes that match about equally are a soft refusal', () => {
   const q = 'How do I reduce changeover time?';
   const hits = search(q, index, 5);
-  assert.equal(coverage(q, hits, index).verdict, 'ok');
+  assert.equal(coverage(q, hits, index).verdict, 'ok', 'a clear winner is still answered');
   const tied = [hits[0], { ...hits[0], note: hits[1]?.note ?? hits[0].note }];
-  const r = coverage(q, tied, index, { margin: 0.1 });
+  const r = coverage(q, tied, index);
   assert.equal(r.verdict, 'thin');
   assert.equal(r.hard, false, 'a margin refusal is a soft vote');
+  assert.equal(coverage(q, tied, index, { margin: 0 }).verdict, 'ok', 'the switch still turns the rule off');
+});
+
+test('the world-class OEE benchmark question is refused: the notes warn about benchmarks, none gives a figure', () => {
+  // t_80ec07d6: at 20 notes this was covered off two notes 4% apart — the supervisor-rhythm note, which only
+  // says published benchmarks are misapplied, and the OEE note, which gives no target.
+  const q = 'What is the world class OEE target for an assembly line?';
+  const r = coverage(q, search(q, index, 5), index);
+  assert.equal(r.verdict, 'thin', r.why);
+  assert.equal(r.hard, false, 'the margin refusal is a soft vote the model may overrule');
 });
 
 test('with a key configured a soft thin verdict goes to the model; a hard one never does', async () => {
