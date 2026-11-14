@@ -46,11 +46,13 @@ draws on, so a note can be re-derived by reading those pages.
 | `demo-the-3-pillar-activity-three-pillars-one-foundation.md` | `/learning/3-pillar-activity/` |
 | `demo-poka-yoke-prevention-before-occurrence.md` | `/gemba-coach/poka-yoke/`, `/gemba-coach/mistake-vs-error-proofing/` |
 
-Two edits to existing notes came out of the same work, both measured by `npm run eval` (see the
-pull request): the andon note now says the call is *split* into levels and how the heavy level is
-*handled*, because a question that used to be answered by it started refusing once the corpus grew;
-and the Job Relations case no longer uses the word "leave", because it made an unrelated question
-about annual-leave entitlement look covered. Neither edit changes what the note teaches.
+The same work changed one existing note and worded one new note to avoid a collision, both measured
+by `npm run eval` (see the pull request). `demo-andon-surface-the-abnormal.md` now says the call is
+*split* into levels and how the heavy level is *handled*, because `q07` — the question it used to
+answer — fell to a 0.497 share against the 0.5 floor once the eight new notes diluted the idf of the
+words they share. `demo-job-relations-the-four-steps.md` is new in this change, and was written
+without the word "leave" from the start, because it would have made an unrelated question about
+annual-leave entitlement look covered. Neither change alters what the note teaches.
 
 ## What the notes keep, and what they drop
 
