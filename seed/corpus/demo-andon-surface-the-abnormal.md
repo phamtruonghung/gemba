@@ -12,9 +12,11 @@ Many plants buy the lamps and still cannot get anyone to come. What is needed fi
 
 ## Three levels, not one button
 
+The call is split into three levels, and the level decides who comes, how fast, and whether the machine keeps running.
+
 - Light: needs support within the shift, line does not stop. For example, a material shortage at the last station.
 - Medium: the line keeps running but risks stopping within tens of minutes — someone with expertise needs to come right away.
-- Heavy: quality or safety is already affected — stop the line first, talk afterwards.
+- Heavy: quality or safety is already affected — the way it is handled is fixed in advance: stop the line first, talk afterwards.
 
 Set the levels in advance so the operator does not have to judge for themselves whether something is an abnormality or an incident.
 
