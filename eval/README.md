@@ -101,33 +101,47 @@ its README; this tree reproduces its final state, so I re-ran only the ablations
 
 ### Sweeps
 
-All rows TP/FP/TN/FN on questions / english / holdout-1. Chosen value in bold.
+All rows TP/FP/TN/FN on questions / english / holdout-1. Chosen value in bold. Measured at **20 notes**,
+the corpus after #88, with the shipped `margin=0.05` (node v26.7.0). The rows this block carried before #92
+were the 12-note measurement and are superseded; every row below reproduces with
+`npm run eval -- --questions <file> --tune <switch>=<value>`. What the eight new notes changed is in
+§The 12 → 20 corpus growth.
 
 `minShare` (coverage share threshold):
 
 | minShare | questions | english | holdout-1 |
 |---|---|---|---|
-| 0.30 | 22/6/23/0 | 14/2/9/1 | 7/2/5/2 |
-| 0.40 | 22/3/26/0 | 14/2/9/1 | 6/0/7/3 |
-| 0.45 | 22/2/27/0 | 14/1/10/1 | 6/0/7/3 |
-| **0.50** | 21/0/29/1 | 14/0/11/1 | 6/0/7/3 |
-| 0.55 | 20/0/29/2 | 13/0/11/2 | 5/0/7/4 |
-| 0.60 | 16/0/29/6 | 13/0/11/2 | 2/0/7/7 |
-| 0.70 | 14/0/29/8 | 12/0/11/3 | 1/0/7/8 |
+| 0.30 | 22/6/23/0 | 14/1/10/1 | 6/2/5/3 |
+| 0.40 | 22/3/26/0 | 14/1/10/1 | 6/1/6/3 |
+| 0.45 | 22/1/28/0 | 14/1/10/1 | 6/1/6/3 |
+| **0.50** | 22/0/29/0 | 14/0/11/1 | 6/1/6/3 |
+| 0.55 | 22/0/29/0 | 13/0/11/2 | 5/1/6/4 |
+| 0.60 | 19/0/29/3 | 13/0/11/2 | 3/1/6/6 |
+| 0.70 | 13/0/29/9 | 12/0/11/3 | 1/1/6/8 |
 
-0.50 is the smallest value with no false cover on any of the three sets. The margin is thin: lowering it to
-0.45 admits 2 false covers on questions.
+0.50 is the smallest value with no false cover on questions or english. holdout-1 carries one false cover,
+`h16`, at every value from 0.40 up, and no `minShare` in this sweep removes it (§The 12 → 20 corpus growth).
+The margin on questions is thin: 0.45 admits one false cover.
 
-`minTop` (BM25 floor): 1.5, 2.2, 3, 4 all give 21/0/29/1, 14/0/11/1, 6/0/7/3; 6 loses one english TP. Flat; 2.2 kept.
+`minTop` (BM25 floor): 2.2, 3 and 4 give 22/0/29/0, 14/0/11/1, 6/1/6/3; 1.5 admits one english false cover
+(14/1/10/1); 6 loses one english TP (13/0/11/2) and its floor sits above `h16`'s 5.83, so holdout-1 reads
+6/0/7/3. Flat; 2.2 kept.
 
-`distinctShare`: 0.15 gives 19/0/29/3 and 9/0/11/6 (too strict); 0.25, 0.35, 0.5 are identical. 0.25 kept.
+`distinctShare`: 0.15, 0.25, 0.35 and 0.5 are identical (22/0/29/0, 14/0/11/1, 6/1/6/3). The switch bites
+only below 0.15: 0.10 costs two questions TPs and five english TPs (49/51, 21/26), 0.05 gives 44/51.
+0.25 kept.
 
 `margin`: see item 7. `clauseShare` (cover if one clause of a long question is covered): 0.5 gives
-22/1/28/0 and 15/0/11/0; 0.6 gives 21/1/28/1; 0.7 and 0.8 are no change. It would fix the long paragraph
-question e15 but costs a false cover on questions.jsonl at the values that work, so it stays off.
-`missPower=2` (the worst miss decides): 22/2/27/0, 15/2/9/0, a false cover on each: reverted.
+22/1/28/0 and 15/0/11/0 (one false cover on questions); 0.6 gives 22/0/29/0 and 15/0/11/0 — it fixes the
+long paragraph question `e15`, and holdout-1 is unchanged at 6/1/6/3; 0.7 and 0.8 are no change. It stays
+off: at 12 notes 0.6 cost a false cover on questions.jsonl, which is why it was not kept, and that cost does
+not reproduce at 20 notes — turning it on is a behaviour change left as an open question, not made here.
+`missPower=2` (the worst miss decides): 22/2/27/0, 15/1/10/0, a false cover on each: reverted.
 
 ## Remaining failures
+
+These bullets are the 12-note reading (share figures from before #88): read them as history, not as the
+current state — `q07` in particular is covered at 20 notes (share 0.801, rank 1).
 
 - `q07` "andon chia may cap, cap nang thi xu ly sao" (share 0.487, just under 0.50). Written without
   diacritics, bare "may" bridges to "machine", which the andon note does not contain. Making bare "may"
@@ -190,7 +204,7 @@ judgement, not a lexical rule.
   (below); one is refused by the margin rule, one is still open. A false refuse hands the question to a
   practitioner; a false cover shows an answer the notes do not support. The second is the failure that
   matters. With 30 or fewer refuse labels per set, "no false cover" is weak evidence: the minShare sweep
-  shows 2 appear if the line moves by 0.05.
+  shows one appearing if the line moves by 0.05, to 0.45.
 - Nobody measured the model path (item 8); the offline eval cannot.
 - The corpus is 20 notes. A corpus change can move a question across the line, which is what the gate is for.
 
