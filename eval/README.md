@@ -78,7 +78,7 @@ TP / FP / TN / FN on questions, english, holdout-1 (holdout-2 was not used for a
 | 4 | Acronym map (OEE, SMED, TPM, 5S, OPL, andon, both ways) | Kept | off: 21/0/29/1, 12/0/11/3, 6/0/7/3. Neutral on dev, +2 on english (long forms "overall equipment effectiveness", "single minute exchange of die"). Long form and short form are rewritten to the same token on the note and question side. |
 | 5 | Diacritic-sensitive index | Kept, no eval effect | off: identical on all three. No labelled question turns on it; kept on correctness grounds and covered by a unit test (hạt vs hát; mã = code, ca = shift, đèn = lamp; bare "ma" says nothing; unaccented input still works). |
 | 6 | `##` chunking, send the matched chunk, cut at a boundary | Kept for the passage only | Chunk-level ranking and chunk-level coverage were measured on `improve/retrieval` and lost (recall 0.77 to 0.50; FP 1 to 2), so chunks never change the verdict. They choose what the model sees. Test: the answering section of a 10 KB note, which sits past character 1400, is what is sent, with its heading, not cut mid-word. |
-| 7 | Top-1/top-2 margin rule | Reverted (switch kept, off) | margin 0.05/0.1/0.2: no change; 0.3: 20/0/29/2, 6/0/7/3 (-1 TP); 0.5: 20/0/29/2, 5/0/7/4; 1: 15/0/29/7. There is no false cover for it to remove, so it only costs recall. A margin refusal is a soft vote. |
+| 7 | Top-1/top-2 margin rule | Kept, on at 0.05 (20-note corpus) | At 12 notes, keeping it switched off was right: 0.05/0.1/0.2 changed nothing and 0.3 cost a TP. At 20 notes it has a false cover to remove: 0.05 and 0.10 give 22/0/29/0, 14/0/11/1, 6/1/6/3 and refuse `e16` (its two notes score 4.1% apart; at 0.0 it is covered, english 14/1/10/1). 0.15 is the ceiling — `q12` (12.5% lead) becomes a false refuse (21/0/29/1); 0.20: 21/0/29/1, 13/0/11/2; 0.30: 19/0/29/3, 12/0/11/3, 6/0/7/3. A margin refusal is a soft vote the model can overrule. |
 | 8 | Model's thin vote primary when a key is configured | Kept | `hard` thin (nothing matched, too short, weak top, only everyday words shared) never reaches the model; a share/margin `thin` is a soft vote and goes to the model, whose own coverage vote (`ok` or INSUFFICIENT_DATA) stands, behind every #36 check (citations, markers, per-sentence groundedness). Not measured by the offline eval, which has no key; unit-tested. |
 
 ## Experiment log
@@ -142,6 +142,40 @@ question e15 but costs a false cover on questions.jsonl at the values that work,
   `g08` (shares 0.19 to 0.45). All are Vietnamese phrasings the lexicon does not bridge. Every one has the
   right note at rank 1; they are refusals, the safe direction.
 
+## The 12 → 20 corpus growth (t_80ec07d6)
+
+Adding eight craft notes (#88) kept the gate at 51/51 and moved two diagnostic rows from `refuse` to a
+cover. Both were read against the corpus, not against the score:
+
+| id | set | question | read against the corpus | outcome |
+|---|---|---|---|---|
+| `e16` | english, near | "What is the world class OEE target for an assembly line?" | No note states a figure. The only note carrying "world-class" says "published world-class benchmarks are misapplied to a line with many changeovers a day; and a target set before there is a baseline teaches the team that the number is not honest. Set the target from what the process actually does." (`vault-supervisor-operating-rhythm.md`). | Label stands. Fixed by `margin=0.05`: the two notes scored 5.991 and 5.756, 4% apart. |
+| `h16` | holdout-1, off | "mã hàng mới cần bao nhiêu công nhân may" | No note mentions sewing, garment, or a headcount per item code — the corpus has never carried the asker's trade. The cover came from `công nhân may` bridged to "sewing garment worker" and credited through the generic "worker" in `demo-job-instruction-the-four-steps`. | Label stands. Not fixed: see below. |
+
+Measured before and after (`npm run eval -- --questions <file>`; 12 notes at `b1e3825`, 20 notes at head):
+
+| set | 12 notes | 20 notes, `margin=0` | 20 notes, `margin=0.05` |
+|---|---|---|---|
+| `questions` (gate) | 50/51, P 1 | 51/51, P 1 | 51/51, P 1 |
+| `english` | 25/26, P 1 | 24/26, P 0.933 | 25/26, P 1 |
+| `holdout-1` | 13/16, P 1 | 12/16, P 0.857 | 12/16, P 0.857 |
+| `holdout-2` | 12/18, P 1 | 12/18, P 1 | 12/18, P 1 |
+
+The margin sweep: 0.03 and 0.04 do not catch `e16` (its two notes are 4.1% apart), 0.05 to 0.10 cost nothing
+on any set, and 0.15 refuses `q12`. The tightest answered question in the gate at `margin=0` is `q12` at
+12.5%, which is the ceiling; 0.05 is the smallest value that fixes the row, and the next-tightest answered gate
+question (`q15`) leads by 28%.
+
+`h16` is left as a false cover on purpose. Every switch swept for it either misses it (a `margin` of 0.28
+would be needed, and that costs a gate false refuse — `q12`; `minShare=0.55` leaves it covered) or breaks
+the gate (`distinctShare=0.05` → 44/51; `scoring=distinctive` at `margin=0` → 50/51, with two false covers
+on `english` of which one, `e16`, is already there at `margin=0` — one is new, `e17`). The shape it needs — a bridged unit
+whose corpus-unknown alias (`sewing`, `garment`, df 0) is matched through a generic one (`worker`, df 2) — is
+the same shape as seventeen gate questions that must stay answered (`q03` "bắt đầu" → start/begin, `q21`
+"vận hành" → operator/operate). The distinguishing fact is that garment staffing is a different subject, not
+a rarer synonym, and an idf share cannot see the difference. Refusing it needs the model tier's grounding
+judgement, not a lexical rule.
+
 ## How optimistic these numbers are
 
 - The dev recall 0.9545 is optimistic. Most of the lexicon was written on `improve/retrieval` while
@@ -152,12 +186,13 @@ question e15 but costs a false cover on questions.jsonl at the values that work,
   on `improve/retrieval` because the lexicon was ported; nothing here was tuned against it.
 - `english.jsonl` was written during this work and the switches (stopwords, acronyms, synonyms) were
   chosen while looking at it. Its 14/0/11/1 is dev, not held out.
-- Precision has held at 1 on all four sets, so the system errs toward refusal. A false refuse hands the
-  question to a practitioner; a false cover shows an answer the notes do not support. The second is the
-  failure that matters and none was measured. With 30 or fewer refuse labels per set, "no false cover" is
-  weak evidence: the minShare sweep shows 2 appear if the line moves by 0.05.
+- Precision held at 1 on all four sets at 12 notes. Two false covers appeared when the corpus grew to 20
+  (below); one is refused by the margin rule, one is still open. A false refuse hands the question to a
+  practitioner; a false cover shows an answer the notes do not support. The second is the failure that
+  matters. With 30 or fewer refuse labels per set, "no false cover" is weak evidence: the minShare sweep
+  shows 2 appear if the line moves by 0.05.
 - Nobody measured the model path (item 8); the offline eval cannot.
-- The corpus is 12 notes. A corpus change can move a question across the line, which is what the gate is for.
+- The corpus is 20 notes. A corpus change can move a question across the line, which is what the gate is for.
 
 ## Tests
 
