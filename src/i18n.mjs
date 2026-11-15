@@ -71,6 +71,11 @@ export const STRINGS = Object.freeze({
   // 8. signing in
   signin_heading: { vi: 'Đăng nhập', en: 'Sign in' },
   signin_button: { vi: 'Đăng nhập', en: 'Sign in' },
+  signin_forgot: { vi: 'Quên mật khẩu?', en: 'Forgot your password?' },
+  signin_forgot_help: {
+    vi: 'Bản triển khai này không gửi email đặt lại mật khẩu. Hãy nhờ người vận hành: họ tạo một liên kết dùng một lần trong màn hình Tài khoản, bạn mở liên kết đó rồi tự đặt mật khẩu mới.',
+    en: 'This deployment sends no reset email. Ask the operator: they issue a one-time link from the Accounts screen, you open it and choose a new password.'
+  },
   // 9. an error
   error_lead: { vi: 'Không có gì được đoán mò ở đây — trang này đơn giản là không tồn tại.', en: 'Nothing is guessed here either — this page is simply missing.' },
   error_404: { vi: 'Không tìm thấy trang này', en: 'Not found' },

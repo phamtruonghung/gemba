@@ -58,6 +58,11 @@ when it last signed in, and the practitioner row it belongs to.
 - **Lock** stops the account signing in *and* ends every session it is already holding. A lock that
   leaves someone working for as long as their cookie lives is a claim about the future, not about now.
 - **Unlock** restores it; **Sign out everywhere** ends the sessions without locking.
+- **Reset password** issues a one-time link (seven days), and the page it lands on shows the link once.
+  Nothing is emailed on this deployment, so the operator sends it the way they already reach the person;
+  the link opens `/reset/:token`, where the person chooses a new password twice, every session the
+  account was holding ends, and the link dies. A locked account is refused — a new password would not
+  let anybody in, so the console asks for an unlock first.
 - **Role** moves an account between asker, operator and practitioner. It refuses two things on purpose:
   the account you are signed in as (a mistake nobody can undo from inside the console) and the last
   operator who can sign in (which would lock everybody out). An account cannot be made a practitioner
@@ -195,10 +200,11 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 | `GET /healthz` | liveness + corpus size + the gateway's verdict on the AI tier: `none` (no key), `configured` (the gateway accepted it), `rejected` (401/403 — the key is dead), `unreachable` (no verdict: network, timeout or any other non-2xx — 5xx, 429, 404, a redirect); probed at most once a minute, so the answer can be up to a minute old, and the first read after a quiet spell is the previous tier (the refresh happens behind the request) |
 | `GET/POST /signup`, `GET/POST /signin`, `POST /signout` | create an account, sign in, sign out |
 | `GET/POST /invite/:token` | a practitioner sets their own password from an invitation (single use, seven days) |
+| `GET/POST /reset/:token` | a forgotten password is reset from an operator-issued link (single use, seven days) |
 | `GET /desk` | the desk of the signed-in practitioner (the account door, next to `/c/<token>`) |
 | `GET/POST /admin/login`, `POST /admin/logout` | operator sign-in |
 | `GET /admin`, `GET/POST /admin/experts`, `GET/POST /admin/experts/:id` (+ `/invite`, `/pause`, `/resume`, `/rotate`), `GET /admin/invites`, `GET/POST /admin/settings`, `GET /admin/audit` | the operator console |
-| `GET/POST /admin/accounts` (+ `/role`, `/lock`, `/unlock`, `/signout`) | every account, and stopping one |
+| `GET/POST /admin/accounts` (+ `/role`, `/lock`, `/unlock`, `/signout`, `/reset`) | every account, stopping one, and issuing a reset link |
 | `GET /admin/bookings` (+ `/paid`, `/completed`, `/reschedule`, `/cancel`) | reconcile, move or cancel a booking |
 | `GET /account` | the signed-in asker's own questions and bookings |
 | `GET /reference`, `GET /reference/:slug` | the reference shelf: published third-party material, searchable by section and word, never part of the answer corpus |
@@ -236,7 +242,8 @@ What it buys you:
   and it lists only rows whose `user_id` matches.
 
 Sign-ins are rate-limited per address and per email, and every post form carries its session's CSRF token.
-What it does not do yet: no password reset and no email verification.
+What it does not do yet: no email verification. A forgotten password is reset from `/signin` — the page
+says what to do, and the operator issues the one-time link from `/admin/accounts`.
 
 The old `GEMBA_USER`/`GEMBA_PASS` gate is separate and still available: it is the *door*, kept for
 protecting a public prototype, while accounts are the *identity* inside it. Tests and LAN runs leave
@@ -296,7 +303,7 @@ states the three money shapes, a recommendation, and the questions. These are en
 
 ## Tests, and what they caught
 
-444 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+448 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
 (a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:
@@ -477,8 +484,8 @@ No payment gateway or escrow, no Zalo notification (email goes through the outbo
 KYC/vetting, no invoice or withholding module, no final contracts or ToS (the Vietnamese terms pages are drafts
 marked as not reviewed by counsel), no mobile app, no analytics. Accounts exist for askers (email + password,
 above) and for the operator (`/admin`); practitioners get accounts by invitation rather than by registering.
-There is no password reset by email (a practitioner who loses one uses a fresh desk link) and no email
-verification. `SPEC.md` § *Open questions* names the ones that must be decided before selling
+There is no password reset by email (the operator issues a one-time link from `/admin/accounts`, and
+nothing is emailed) and no email verification. `SPEC.md` § *Open questions* names the ones that must be decided before selling
 anything.
 
 ## Repo layout

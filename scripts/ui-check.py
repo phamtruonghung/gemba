@@ -57,6 +57,37 @@ ADMIN_PAGES = [
 failures = []
 
 
+def make_reset_token(db_path):
+    """A live reset row for the operator this run created, so the reset page has a real URL to walk.
+
+    The page is reached only through such a link, and there is no local database to write against when
+    the checks point at a deployment (`UI_BASE`) — there the page is simply not walked.
+    """
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    def stamp(when):
+        # The app compares these strings against JavaScript's toISOString(), so the format must be that
+        # one exactly: milliseconds and a trailing Z, not Python's +00:00 offset.
+        return when.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    token = "ui-check-reset-token"
+    con = sqlite3.connect(db_path)
+    try:
+        row = con.execute("select id from users where lower(email) = lower(?)", (ADMIN_EMAIL,)).fetchone()
+        if not row:
+            return None
+        now = datetime.now(timezone.utc)
+        con.execute(
+            "insert or replace into password_resets (token, user_id, created_at, expires_at) values (?, ?, ?, ?)",
+            (token, row[0], stamp(now), stamp(now + timedelta(days=1))),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return token
+
+
 def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f" — {detail}" if detail else ""))
     if not ok:
@@ -152,6 +183,9 @@ def main():
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    reset_token = make_reset_token(db_path) if ADMIN_EMAIL and ADMIN_PASSWORD else None
+    if reset_token:
+        PAGES.append(("reset", f"/reset/{reset_token}"))
     try:
         for _ in range(40):
             try:

@@ -119,6 +119,21 @@ export function checkPassword(password) {
   return { ok: true, value };
 }
 
+/**
+ * A new password typed twice, for a link that sets one (an invitation, a reset). The two fields must
+ * agree before anything is hashed: the person cannot read the password back, and a typo here locks
+ * them out of the account the operator just reopened.
+ */
+export function checkNewPassword(form) {
+  const errors = {};
+  const password = String(form?.password ?? '');
+  const again = String(form?.password2 ?? '');
+  const single = checkPassword(password);
+  if (!single.ok) errors.password = single.error;
+  else if (again !== password) errors.password2 = 'The two passwords do not match.';
+  return { ok: Object.keys(errors).length === 0, values: { password }, errors };
+}
+
 export function checkName(name) {
   const value = String(name ?? '').trim().replace(/\s+/g, ' ');
   if (value.length < 2) return { ok: false, field: 'name', error: 'Enter the name an expert should see.' };

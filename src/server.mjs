@@ -21,7 +21,7 @@ import { cachePolicy, buildServiceWorker, MANIFEST, PUBLIC_DIR } from './pwa.mjs
 import { serveStatic } from './static.mjs';
 import * as outbox from './outbox.mjs';
 import { createLimiter, DEFAULT_LIMITS } from './ratelimit.mjs';
-import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookies, newSessionId, sessionExpiry, hashPassword, verifyPassword, needsRehash, Busy, checkEmail, checkPassword, checkName, sessionIdFrom, SESSION_IDLE_MINUTES, SESSION_ADMIN_IDLE_MINUTES } from './auth.mjs';
+import { parseCookies, isSecureRequest, sessionCookie, clearedSessionCookies, newSessionId, sessionExpiry, hashPassword, verifyPassword, needsRehash, Busy, checkEmail, checkPassword, checkNewPassword, checkName, sessionIdFrom, SESSION_IDLE_MINUTES, SESSION_ADMIN_IDLE_MINUTES } from './auth.mjs';
 
 const ROUTE_DUE_HOURS = 48;
 const TEXT_COOKIE = 'gemba_text';
@@ -447,7 +447,7 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     // without credentials, so a gated instance would otherwise never be installable. All five are
     // public by construction: the manifest and sw.js are generated from constants and the repo's own
     // source, the icons are static art, and /offline renders the signed-out frame with no data.
-    const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|manifest\.webmanifest|sw\.js|app\.[0-9a-f]{12}\.css|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
+    const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|reset\/[^/]+|manifest\.webmanifest|sw\.js|app\.[0-9a-f]{12}\.css|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
     if (!gateExempt && !account && !basicAuthOk(req.headers.authorization, config)) {
       const page = stamp(views.unauthorizedPage()); // before writeHead: the header wrapper reads the nonce
       res.writeHead(401, {
@@ -928,10 +928,13 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
           flash: url.searchParams.get('locked') ? 'Account locked and signed out everywhere.'
             : url.searchParams.get('unlocked') ? 'Account unlocked.'
             : url.searchParams.get('role') ? 'Role changed.'
-            : url.searchParams.get('signout') ? 'Every session for that account was ended.' : ''
+            : url.searchParams.get('signout') ? 'Every session for that account was ended.'
+            : url.searchParams.get('reset') ? 'Reset link issued for that account — send it to the person. It works once, in seven days.'
+            : url.searchParams.get('reset_locked') ? 'That account is locked, so a reset link would only reach a door that stays shut. Unlock it first.' : '',
+          resetLink: url.searchParams.get('reset') ? `/reset/${url.searchParams.get('reset')}` : ''
         }));
       }
-      const accMatch = /^\/admin\/accounts\/(\d+)\/(role|lock|unlock|signout)$/.exec(path);
+      const accMatch = /^\/admin\/accounts\/(\d+)\/(role|lock|unlock|signout|reset)$/.exec(path);
       if (accMatch && method === 'POST') {
         const target = dbm.userById(db, Number(accMatch[1]));
         if (!target) return fail(404, 'No such account.');
@@ -977,6 +980,17 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
           const ended = dbm.deleteSessionsForUser(db, target.id);
           dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} signed_out_everywhere=${target.email} sessions_ended=${ended}`);
           return redirect('/admin/accounts?signout=1');
+        }
+        if (action === 'reset') {
+          // A locked account cannot sign in, so a link it cannot redeem is a link that misleads. The
+          // operator unlocks first; the console says so rather than handing over a dead address.
+          if ((target.status ?? 'active') !== 'active') return redirect('/admin/accounts?reset_locked=1');
+          const token = randomBytes(24).toString('base64url');
+          dbm.createPasswordReset(db, { token, userId: target.id, createdBy: actor });
+          dbm.logEvent(db, 'account', `user:${target.id}`, `actor=${actor} reset_link_issued=${target.email}`);
+          // The link is shown once, on the page the operator lands on, and never stored in a readable
+          // form beyond the row that makes it work: nothing is emailed, so this page is the delivery.
+          return redirect(`/admin/accounts?reset=${encodeURIComponent(token)}`);
         }
         return fail(404, 'No such action.');
       }
@@ -1262,6 +1276,54 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
       if (!b) return fail(404, 'No such booking.');
       dbm.reportTransfer(db, ref);
       return redirect(`/b/${ref}`);
+    }
+
+    // --- a reset link is the one place a password is chosen without the old one ---
+    // It is reached without a session on purpose: a person who cannot sign in cannot be asked to first
+    // prove they can. What proves the change was asked for is the link, which the operator hands over
+    // and which dies on first use.
+    const resetMatch = /^\/reset\/([^/]+)$/.exec(path);
+    if (resetMatch) {
+      const token = decodeURIComponent(resetMatch[1]);
+      const reset = dbm.passwordResetByToken(db, token);
+      const state = dbm.passwordResetState(reset);
+      const target = reset ? dbm.userById(db, reset.user_id) : null;
+      if (state !== 'live' || !target) {
+        return send(state === 'unknown' || !target ? 404 : 410, views.resetDeadPage({ state: target ? state : 'unknown', email: target?.email ?? '' }));
+      }
+      // A locked account cannot be signed into at all, so a new password would only send the person
+      // round a loop that cannot succeed. Say that instead of accepting a password that is refused later.
+      if ((target.status ?? 'active') !== 'active') {
+        return send(403, views.resetDeadPage({ state: 'locked', email: target.email }));
+      }
+      if (method === 'POST') {
+        const check = checkNewPassword(form);
+        if (!check.ok) return send(400, views.resetPage({ token, email: target.email, errors: check.errors, draft: form }));
+
+        // Hash before the transaction: node:sqlite is synchronous on one shared connection, so an await
+        // inside `tx` would let another request's statements run inside it. The claim below is what
+        // decides between two requests that both passed the state check.
+        const password_hash = await hashPassword(check.values.password);
+        const ALREADY_USED = Symbol('reset already redeemed');
+        const id = newSessionId();
+        try {
+          dbm.tx(db, () => {
+            if (!dbm.usePasswordReset(db, token)) throw ALREADY_USED;
+            dbm.setPasswordHash(db, target.id, password_hash);
+            // The old password may be known to someone else, and a session minted with it must not
+            // outlive the reset. The session minted here is the person who just proved they hold the link.
+            const ended = dbm.deleteSessionsForUser(db, target.id);
+            dbm.createSession(db, { id, userId: target.id, expiresAt: sessionExpiry(), userAgent: req.headers['user-agent'] ?? '' });
+            dbm.touchUser(db, target.id);
+            dbm.logEvent(db, 'password_reset', `user:${target.id}`, `sessions_ended=${ended}`);
+          });
+        } catch (err) {
+          if (err === ALREADY_USED) return send(410, views.resetDeadPage({ state: 'used', email: target.email }));
+          throw err;
+        }
+        return withCookie('/account', id, isSecureRequest(req));
+      }
+      return send(200, views.resetPage({ token, email: target.email, errors: {}, draft: {} }));
     }
 
     // --- an invitation is the only way an account is created for a practitioner ---
