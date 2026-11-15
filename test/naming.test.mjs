@@ -12,7 +12,10 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'data']);
+// The anchor checkout hosts the dispatcher's sibling worktrees under `.worktrees/`, and `.worktrees`
+// is not git-ignored — they are separate checkouts of this same repo, so a copy of an allowlisted
+// file inside one of them says nothing about this checkout and must not be judged as an offender.
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'data', '.worktrees']);
 const ALLOWED_FILES = new Set([
   'deploy/migrate-rename.sh', // knows the old name on purpose
   'src/retrieval.mjs', // the folded Vietnamese stopword, not the product name
