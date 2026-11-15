@@ -140,21 +140,30 @@ not reproduce at 20 notes — turning it on is a behaviour change left as an ope
 
 ## Remaining failures
 
-These bullets are the 12-note reading (share figures from before #88): read them as history, not as the
-current state — `q07` in particular is covered at 20 notes (share 0.801, rank 1).
+Measured at **20 notes** (the corpus after #88), node v26.7.0, shipped `margin=0.05`. Each share and rank
+below is a row of `node scripts/eval-retrieval.mjs --questions <set>`; the per-set totals are in §Sweeps.
+Figures marked *12 notes* are the pre-#88 reading and reproduce at `b1e3825`.
 
-- `q07` "andon chia may cap, cap nang thi xu ly sao" (share 0.487, just under 0.50). Written without
-  diacritics, bare "may" bridges to "machine", which the andon note does not contain. Making bare "may"
-  strict would break every unaccented "may dung" question.
-- `e15` the 52-word paragraph version of the flagship question (share 0.268). Length still costs share:
-  every unseen word (plastics, three presses, night crew, month) counts a little as a miss. The issue's
-  other complaint, a 62-word paragraph at 18x the floor being refused, is not fixed for the very long form.
-  A shorter padded version ("Last night at our plant in Binh Duong a machine stopped in the middle of the
-  shift, what is the right order ...") is covered. With a key configured this refusal is a soft vote that
-  the model can overrule.
-- holdout-1: `h04`, `h06`, `h08` (shares 0.31, 0.19, 0.24). holdout-2: `g01`, `g03`, `g04`, `g06`, `g07`,
-  `g08` (shares 0.19 to 0.45). All are Vietnamese phrasings the lexicon does not bridge. Every one has the
-  right note at rank 1; they are refusals, the safe direction.
+- `q07` "andon chia may cap, cap nang thi xu ly sao" is no longer a failure: covered at 20 notes, share
+  0.801, expected note at rank 1. At *12 notes* it shared 0.487 and was refused, and that reading put the
+  shortfall down to bare "may" bridging to "machine", a word the andon note did not contain. That was true
+  of the *12 notes* note and is false at 20: #88 added "the level decides who comes, how fast, and whether
+  the machine keeps running" to it (`seed/corpus/demo-andon-surface-the-abnormal.md`). Making bare "may"
+  strict would still break every unaccented "may dung" question — the *12 notes* reading's view, not
+  re-measured since.
+- `e15` the 57-word paragraph version of the flagship question (share 0.278 at 20 notes; 0.268 at *12
+  notes*). Length still costs share: every word the matched note does not carry (plastics, three presses,
+  night crew, month) counts a little as a miss. The issue's other complaint, a 62-token paragraph at 18x the
+  floor being refused, is not fixed for the very long form. The shorter padded form of the same question is
+  covered — it is the test named "a long paragraph version of a question is judged on its topic, not its
+  length" in `test/retrieval.test.mjs`, which asserts the machine-stops note. With a key configured this
+  refusal is a soft vote that the model can overrule.
+- holdout-1: `h04` 0.266, `h06` 0.220, `h08` 0.270; holdout-2: `g01` 0.452, `g03` 0.458, `g04` 0.276,
+  `g06` 0.430, `g07` 0.322, `g08` 0.263 — all at 20 notes, against *12 notes* 0.310, 0.194, 0.238 and
+  0.189 to 0.454. All nine are refusals: their coverage share, 0.220 to 0.458, stays under the 0.50 line.
+  The expected note is at rank 1 for `h04`, `h06` and five of the six holdout-2 questions, at rank 2 for
+  `h08` and rank 4 for `g08`; they are refusals, the safe direction. Holdout-1's one false cover at 20 notes
+  is `h16`, in §The 12 → 20 corpus growth.
 
 ## The 12 → 20 corpus growth (t_80ec07d6)
 
