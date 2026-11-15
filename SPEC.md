@@ -432,6 +432,13 @@ instance seeded before accounts existed keeps its rows and simply has them unatt
     as the fallbacks, so an instance that predates the table behaves exactly as it did. A form with one
     invalid field changes nothing — refusing beats clamping, because a clamped value is not the value
     the operator typed. Every write lands in `events` with the actor's email.
+20. **Third-party reading is a shelf, not the corpus.** A published lean library (artoflean.com) is
+    served at `/reference` from its own table (`reference_docs`), loaded from `<GEMBA_DATA_DIR>/reference/`
+    and never committed: this repository is public and the text is not ours to redistribute, so only the
+    page metadata (`seed/reference/manifest.tsv`) is in git. A shelf page is never indexed for answering
+    and never cited — it did not pass the gate, and the gate is what makes a citation a claim this
+    deployment can stand behind. Every page carries the attribution, the original URL, and the statement
+    that it is outside the corpus.
 
 ## 11. Open questions — decide before selling anything
 

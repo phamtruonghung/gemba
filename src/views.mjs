@@ -30,6 +30,7 @@ import { SCRIPT } from './interview.mjs';
 import { formatLocal } from './when.mjs';
 import { t } from './i18n.mjs';
 import { renderMarkdown, markdownToText } from './markdown.mjs';
+import { sectionLabel, SECTION_ORDER, passageAround } from './reference.mjs';
 import { SETTING_SPECS, SETTING_KEYS } from './settings.mjs';
 
 export function esc(s) {
@@ -101,6 +102,12 @@ function summary(body) {
   if (!text || text.length < 30) return 'A note written by a practitioner.';
   const first = text.split(/(?<=[.!?])\s/)[0];
   return first.length > 150 ? `${first.slice(0, 147)}…` : first;
+}
+
+/** One line of a reference page, for a result card: markdown stripped, whitespace folded, truncated. */
+function excerptLine(text, max = 220) {
+  const flat = markdownToText(text).replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
 // --- icons -----------------------------------------------------------------
@@ -531,6 +538,7 @@ window.addEventListener('appinstalled', function () {
 const NAV = [
   ['/#ask', 'Ask', 'ask', '/'],
   ['/library', 'Library', 'library'],
+  ['/reference', 'Reference', 'book'],
   ['/experts', 'Experts', 'people'],
   ['/how-it-works', 'How it works', 'rules']
 ];
@@ -1339,6 +1347,118 @@ export function corpusPage({ notes, total = notes.length, page = 1, pages = 1, t
       <p>A refusal is easier to trust once you have seen one happen.</p>
       <p style="margin:var(--space-5) 0 0"><a class="btn" href="/#ask">${icon('ask')}Ask a question</a></p>
     </div>
+  </div>
+</section>`
+  });
+}
+
+/**
+ * The third-party reference shelf's index: every page a load recorded, filterable by section and by a
+ * word. It is deliberately its own page and its own nav entry — a reader arriving here is going to
+ * read the source, not to get an answer cited from the deployment's own corpus.
+ */
+export function referenceIndexPage({ docs, total, page = 1, pages = 1, section = '', sections = [], q = '', user = null, place = null }) {
+  const rank = (s) => {
+    const i = SECTION_ORDER.indexOf(s);
+    return i === -1 ? SECTION_ORDER.length : i;
+  };
+  const ordered = [...sections].sort((a, b) => rank(a.section) - rank(b.section) || b.n - a.n);
+  const chips = ordered
+    .map(
+      (s) =>
+        `<a class="badge" href="/reference?section=${encodeURIComponent(s.section)}"${s.section === section ? ' aria-current="true"' : ''}>${esc(sectionLabel(s.section))} <span class="muted">${s.n}</span></a>`
+    )
+    .join('');
+  const cards = docs
+    .map((d) => {
+      const excerpt = d.body ? excerptLine(q ? passageAround(d.body, q) : d.body) : '';
+      return `<article class="card">
+  <p class="row tight-gap" style="margin:0">
+    <span class="badge tag">${esc(sectionLabel(d.section))}</span>
+    <span class="badge">${icon('clock')}${Math.max(1, Math.round(d.chars / 1200))} min read</span>
+  </p>
+  <h3 style="margin:var(--space-3) 0 var(--space-2)"><a href="/reference/${esc(d.slug)}">${esc(d.title)}</a></h3>
+  <p class="muted" style="margin:0">${esc(excerpt)}</p>
+</article>`;
+    })
+    .join('');
+  const keep = (extra) => `?${[section ? `section=${encodeURIComponent(section)}` : '', q ? `q=${encodeURIComponent(q)}` : '', extra].filter(Boolean).join('&amp;')}`;
+  const pageHref = (n) => `/reference${keep(`page=${n}`)}`;
+  const pager =
+    pages > 1
+      ? `<nav class="row center-cta" aria-label="Pages" style="margin-top:var(--space-5)">${page > 1 ? `<a class="btn alt" rel="prev" href="${pageHref(page - 1)}">Previous</a>` : ''}<span class="muted small">Page ${page} of ${pages}</span>${page < pages ? `<a class="btn alt" rel="next" href="${pageHref(page + 1)}">Next</a>` : ''}</nav>`
+      : '';
+  return layout({
+    title: 'Reference shelf',
+    user,
+    active: '/reference',
+    body: `
+<section class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">The reference shelf</p>
+    <h1 style="font-size:clamp(30px,4.4vw,52px)">Published lean material, kept to read</h1>
+    <p class="lead">${total} page${total === 1 ? '' : 's'} from a published lean library (artoflean.com)${section ? `, filed under ${esc(sectionLabel(section))}` : ''}. This shelf is for reading the source, not for answers: the assistant cites the notes in <a href="/library">the library</a>, never these pages.</p>
+    ${continueLink(place)}
+    <form method="get" action="/reference" class="row" style="margin-top:var(--space-5);gap:var(--space-3);flex-wrap:wrap">
+      <div class="field" style="margin:0;flex:1 1 260px">
+        <label for="reference-q" style="margin-top:0">Find a page</label>
+        <input id="reference-q" name="q" value="${esc(q)}" placeholder="andon, takt, oee, hoshin…">
+      </div>
+      ${section ? `<input type="hidden" name="section" value="${esc(section)}">` : ''}
+      <button class="btn alt" type="submit">Search this shelf</button>
+    </form>
+    <p class="stack-sm chips" style="margin-top:var(--space-5)">${chips}<a class="badge" href="/reference"${section || q ? '' : ' aria-current="true"'}>Every page</a></p>
+  </div>
+</section>
+<section class="tight">
+  <div class="wrap">${cards ? `<div class="grid">${cards}</div>${pager}` : `<div class="card" style="margin:0"><p class="muted" style="margin:0">${q || section ? `Nothing on the shelf matches ${q ? `“${esc(q)}”` : 'this filter'}${section ? ` in ${esc(sectionLabel(section))}` : ''}. ` : 'No pages are on the shelf yet: an operator loads them with <code>npm run reference</code>. '}<a href="/reference">See every page</a>.</p></div>`}</div>
+</section>`
+  });
+}
+
+/**
+ * One page of the reference shelf. The attribution band is not decoration: it is where the product
+ * says whose words these are, and that they are outside the corpus the assistant answers from.
+ */
+export function referenceDocPage({ doc, prev = null, next = null, user = null, place = null }) {
+  const outline = [];
+  const bodyHtml = renderMarkdown(doc.body, { title: doc.title, outline });
+  const host = (() => {
+    try {
+      return new URL(doc.source_url).host;
+    } catch {
+      return '';
+    }
+  })();
+  const walk = (d, rel, label) =>
+    d ? `<a class="btn alt" rel="${rel}" href="/reference/${esc(d.slug)}">${esc(label)}: ${esc(d.title)}</a>` : '';
+  return layout({
+    title: doc.title,
+    user,
+    active: '/reference',
+    body: `
+<section class="page-head">
+  <div class="wrap narrow">
+    <p class="eyebrow"><a class="plain" href="/reference">The reference shelf</a> ${icon('chevron')} ${esc(sectionLabel(doc.section))}</p>
+    <h1 style="font-size:clamp(28px,3.8vw,46px)">${esc(doc.title)}</h1>
+    <p class="row muted tight-gap">
+      <span class="badge warn">Third-party reference</span>
+      <span class="badge">${icon('clock')}${Math.max(1, Math.round(doc.chars / 1200))} min read</span>
+      ${host ? `<a class="badge" href="${esc(doc.source_url)}" rel="noopener noreferrer" target="_blank">${esc(host)} ${icon('arrow')}</a>` : ''}
+    </p>
+  </div>
+</section>
+<section class="tight">
+  <div class="wrap narrow">
+    <div class="card" style="margin:0 0 var(--space-4);border-left:3px solid var(--warn, #b45309)">
+      <p class="small" style="margin:0">This page is published material by its own author, kept here so it can be read and searched. It is <strong>not</strong> part of the answer library: it did not pass the publishability gate, and the assistant will not cite it.${host ? ` The original is at <a href="${esc(doc.source_url)}" rel="noopener noreferrer" target="_blank">${esc(doc.source_url)}</a>.` : ''}</p>
+    </div>
+    <article class="card" style="margin-top:0"><div class="prose">${bodyHtml}</div></article>
+    <nav class="row" aria-label="More in this section" style="margin-top:var(--space-4);gap:var(--space-3);flex-wrap:wrap">
+      ${walk(prev, 'prev', 'Previous')}
+      ${walk(next, 'next', 'Next')}
+    </nav>
+    <p class="small muted"><a class="back" href="/reference">← The reference shelf</a></p>
   </div>
 </section>`
   });

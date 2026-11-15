@@ -132,6 +132,7 @@ The demo instance runs on the LAN:
 ```
 http://192.168.1.150:8090/                # ask a question
 http://192.168.1.150:8090/library         # the published corpus, by topic
+http://192.168.1.150:8090/reference       # the reference shelf: published lean material, to read
 http://192.168.1.150:8090/experts         # expert profiles and 1:1 booking
 http://192.168.1.150:8090/how-it-works    # how the rungs and the gate work
 http://192.168.1.150:8090/c/demo-hung-7f3a91   # demo expert workspace (answer queue, notes, interview)
@@ -200,6 +201,7 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 | `GET/POST /admin/accounts` (+ `/role`, `/lock`, `/unlock`, `/signout`) | every account, and stopping one |
 | `GET /admin/bookings` (+ `/paid`, `/completed`, `/reschedule`, `/cancel`) | reconcile, move or cancel a booking |
 | `GET /account` | the signed-in asker's own questions and bookings |
+| `GET /reference`, `GET /reference/:slug` | the reference shelf: published third-party material, searchable by section and word, never part of the answer corpus |
 | `POST /api/ask` | JSON ask: question, plant type, asker → answer, citations, coverage, ref |
 | `GET /api/question/:ref` | one question with its answer, citations and expert answers |
 | `GET /api/experts` | expert profiles |
@@ -294,7 +296,7 @@ states the three money shapes, a recommendation, and the questions. These are en
 
 ## Tests, and what they caught
 
-431 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+444 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
 (a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:
@@ -335,6 +337,33 @@ than the coverage number because of what they found:
   reached the service: the gate *looked* configured while the instance answered `200` unauthenticated.
 - The installer's final smoke question posted without credentials, so a correctly configured front
   gate made a healthy install report a JSON parse error.
+
+## The reference shelf (third-party reading)
+
+`/reference` serves a second collection beside the corpus: the pages of a **published** lean library
+(artoflean.com — 457 pages when it was loaded), kept so a reader can search the shelf and read the source.
+
+It is deliberately not the corpus. A corpus note passed the publishability gate and is the deployment's
+own craft knowledge, and the answer engine cites it by name. A reference page is someone else's prose:
+it did not pass the gate and cannot, its figures and plant names are not ours, and every page says so on
+its own face. Nothing on the shelf is cited by an answer or listed in `/library`; a test asserts both halves
+of that sentence.
+
+The text is **not in this repository** — the repo is public and this material is not ours to republish.
+What is committed is the metadata: `seed/reference/manifest.tsv`, one line per page (section, URL, page
+title, file name). The extracted page text lives in `<GEMBA_DATA_DIR>/reference/`, outside git, and an
+operator loads it with:
+
+```bash
+npm run reference                 # reads $GEMBA_DATA_DIR/reference and the committed manifest
+npm run reference -- --dir /path/to/extracted --manifest seed/reference/manifest.tsv
+npm run reference -- --dry-run    # say what would be loaded, write nothing
+```
+
+The load upserts by slug (the page's own path, so `/learning/kaizen/the-procedure/` is
+`learning-kaizen-the-procedure`), reports pages whose text file is missing instead of emptying the shelf,
+and retires pages the manifest no longer names. `docs/corpus-sources.md` records where the material
+came from, what the notes distilled from it keep, and how to re-derive it.
 
 ## Deployment
 

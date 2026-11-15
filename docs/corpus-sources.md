@@ -31,7 +31,35 @@ By section (page count / extracted characters):
 
 The crawl is a one-shot research artifact, not a script this repo ships or runs: it produced text,
 not published content, and nothing it downloaded is committed. Each note below names the pages it
-draws on, so a note can be re-derived by reading those pages.
+draws on, so a note can be re-derived by reading those pages. The extracted text is, however,
+**loaded into the running app** as a separate reading shelf — see "The shelf" below — from a directory
+outside git.
+
+## The shelf
+
+Eight distilled notes are not the whole use of this library: the requirement was to keep the material
+itself, to read later. `GET /reference` serves it, page by page, from the `reference_docs` table.
+
+What that shelf is, and what it deliberately is not:
+
+- It is **not the corpus**. A shelf page did not pass the publishability gate and cannot — it is
+  another author's prose, carrying that author's figures, plant names and staff names, which are not
+  this deployment's to publish. The shelf is never indexed for answering, never cited, and never listed
+  in `/library`. `test/reference.test.mjs` asserts both halves: a shelf page is not in the library, and
+  a page renders with its attribution and a link to the original.
+- It is **not in this repository**. The repository is public; the material is not ours to redistribute.
+  What is committed is `seed/reference/manifest.tsv` — one line per page with its section, URL, page
+  title and extracted-text file name. That is metadata, and it is what makes a load reproducible.
+- It is **loaded by the operator**, into `<GEMBA_DATA_DIR>/reference/` (outside git), with
+  `npm run reference`. Re-loading is idempotent (upsert by slug, the page's own path), a page whose text
+  file is absent is reported rather than silently dropped, and a page the manifest no longer names is
+  retired — the same three rules the corpus loader follows.
+- Each page names its own source: the badge "Third-party reference", the original URL, and a note that
+  it is outside the answer corpus. Nothing borrowed is ever presented as this deployment's craft.
+
+Where the loaded text came from, when it was read, and how to re-derive it: the two tables above. The
+crawl's own index files (`index.tsv`, `by-section.tsv`) are what the committed manifest was generated
+from; a re-crawl regenerates the manifest in the same shape, and the loader needs nothing else.
 
 ## Which note came from which page
 

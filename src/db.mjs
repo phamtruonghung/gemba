@@ -158,7 +158,22 @@ create table if not exists outbox (
   sent_at text,
   dedupe text not null unique
 );
+-- The third-party reference shelf: pages of a published lean library (artoflean.com) kept for reading
+-- and search, never as answers. It is a separate table from notes on purpose — a reference page did
+-- not pass the publishability gate (it is someone else's prose, with their figures and their plant
+-- names), and the answer engine must never cite it as the deployment's own craft knowledge.
+create table if not exists reference_docs (
+  id integer primary key,
+  slug text unique not null,
+  section text not null default '',
+  title text not null,
+  source_url text not null,
+  body text not null,
+  chars integer not null default 0,
+  loaded_at text not null
+);
 create index if not exists idx_notes_topic on notes(topic, status);
+create index if not exists idx_reference_section on reference_docs(section, id);
 create index if not exists idx_questions_status on questions(status);
 create index if not exists idx_bookings_status on bookings(status);
 `;
@@ -1190,6 +1205,84 @@ export function advanceInterview(db, id, answer) {
 export function finishInterview(db, id, noteId) {
   db.prepare(`update interviews set status = 'done', note_id = ? where id = ?`).run(noteId, id);
   return interviewById(db, id);
+}
+
+export const REFERENCE_PAGE_SIZE = 60;
+
+/**
+ * Add or replace one reference page. Keyed on the slug, like the corpus: re-loading a page updates it
+ * instead of publishing a second copy under the same title.
+ */
+export function upsertReferenceDoc(db, d) {
+  const row = db.prepare('select id from reference_docs where slug = ?').get(d.slug);
+  if (row) {
+    db.prepare('update reference_docs set section=?, title=?, source_url=?, body=?, chars=?, loaded_at=? where id=?').run(
+      d.section ?? '', d.title, d.source_url, d.body, d.body.length, nowIso(), row.id
+    );
+    return row.id;
+  }
+  const info = db
+    .prepare('insert into reference_docs (slug, section, title, source_url, body, chars, loaded_at) values (?, ?, ?, ?, ?, ?, ?)')
+    .run(d.slug, d.section ?? '', d.title, d.source_url, d.body, d.body.length, nowIso());
+  return Number(info.lastInsertRowid);
+}
+
+/** Retire pages the source no longer serves. Only called by a load that actually produced pages. */
+export function pruneReferenceDocs(db, keepSlugs) {
+  if (!keepSlugs.length) return [];
+  const keep = new Set(keepSlugs);
+  const gone = db.prepare('select id, slug from reference_docs').all().filter((r) => !keep.has(r.slug));
+  for (const r of gone) db.prepare('delete from reference_docs where id = ?').run(r.id);
+  return gone.map((r) => r.slug);
+}
+
+export function referenceStats(db) {
+  const total = db.prepare('select count(*) n, coalesce(sum(chars), 0) c from reference_docs').get();
+  const sections = db
+    .prepare('select section, count(*) n, coalesce(sum(chars), 0) chars from reference_docs group by section order by n desc')
+    .all();
+  return { docs: total.n, chars: total.c, sections };
+}
+
+/**
+ * One page of the shelf, filtered by section and/or a word. The word matches the title first-class and
+ * the body second: a title hit is what the reader meant, a body hit is a place to start reading.
+ */
+export function referencePage(db, { section = '', q = '', limit = REFERENCE_PAGE_SIZE, offset = 0 } = {}) {
+  const where = [];
+  const args = [];
+  if (section) {
+    where.push('section = ?');
+    args.push(section);
+  }
+  if (q) {
+    // A search for "50%" or "w_o" is a search for those characters, not a wildcard: LIKE's own
+    // metacharacters are escaped, so a reader cannot turn the box into a full-table match.
+    const like = q.replace(/[\\%_]/g, (c) => `\\${c}`);
+    where.push("(title like ? escape '\\' or body like ? escape '\\')");
+    args.push(`%${like}%`, `%${like}%`);
+  }
+  const clause = where.length ? `where ${where.join(' and ')}` : '';
+  const total = db.prepare(`select count(*) n from reference_docs ${clause}`).get(...args).n;
+  const docs = db
+    .prepare(`select id, slug, section, title, source_url, chars, body from reference_docs ${clause} order by section, id limit ? offset ?`)
+    .all(...args, limit, offset);
+  return { docs, total };
+}
+
+export function referenceBySlug(db, slug) {
+  return db.prepare('select * from reference_docs where slug = ?').get(slug);
+}
+
+/** The pages either side of this one inside its own section, so a reader can walk a guide in order. */
+export function referenceNeighbours(db, doc) {
+  const prev = db
+    .prepare('select slug, title from reference_docs where section = ? and id < ? order by id desc limit 1')
+    .get(doc.section, doc.id);
+  const next = db
+    .prepare('select slug, title from reference_docs where section = ? and id > ? order by id asc limit 1')
+    .get(doc.section, doc.id);
+  return { prev: prev ?? null, next: next ?? null };
 }
 
 export function stats(db) {

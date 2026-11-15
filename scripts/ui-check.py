@@ -32,6 +32,7 @@ PAGES = [
     ("signup", "/signup"),
     ("signin", "/signin"),
     ("library", "/library"),
+    ("reference", "/reference"),
     ("experts", "/experts"),
     ("how-it-works", "/how-it-works"),
 ]
