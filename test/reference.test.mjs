@@ -42,6 +42,14 @@ const PAGES = [
     file: 'p-andon.txt',
     title: 'Andon: surface the abnormal',
     body: 'An andon is a signal, not a report.\n\n## Levels\n\nA cord, a lamp and a board are three levels of the same call.\n'
+  },
+  {
+    // A crawl of a real site can carry markup. The shelf renders text, so markup must arrive inert.
+    section: 'articles',
+    url: 'https://example.test/articles/markup/',
+    file: 'p-markup.txt',
+    title: 'A page that carries markup',
+    body: 'Some text <script>alert(1)</script> and <b>a bold tag</b>, which is a character here.\n'
   }
 ];
 
@@ -151,6 +159,14 @@ test('LIKE metacharacters in a search are characters, not wildcards', async () =
   assert.match(body, /Nothing on the shelf matches/, 'no page holds a literal %, so nothing matches');
 });
 
+test('markup in a crawled page arrives inert, not as markup', async () => {
+  const { res, body } = await text('/reference/articles-markup');
+  assert.equal(res.status, 200);
+  assert.ok(!body.includes('<script>alert(1)</script>'), 'a page must not execute what the source contained');
+  assert.ok(body.includes('&lt;script&gt;'), 'the characters are shown as text');
+  assert.ok(!body.includes('<b>a bold tag</b>'), 'and so is inline markup');
+});
+
 test('the shelf is not the library: its pages are never listed as notes', async () => {
   const { body } = await text('/library');
   for (const p of PAGES) assert.ok(!body.includes(p.title), `${p.title} must not appear in the answer library`);
@@ -173,5 +189,5 @@ test('a page whose text file is missing is reported, and the rest of the shelf s
   const result = loadReference(app.db, { dir: textDir, manifestPath: sparse });
   assert.equal(result.loaded, 1);
   assert.deepEqual(result.missing, ['p-absent.txt']);
-  assert.deepEqual(result.retired.sort(), ['gemba-coach-takt-time', 'home', 'learning-kaizen-the-procedure'].sort(), 'pages this manifest no longer names are retired');
+  assert.deepEqual(result.retired.sort(), ['articles-markup', 'gemba-coach-takt-time', 'home', 'learning-kaizen-the-procedure'].sort(), 'pages this manifest no longer names are retired');
 });
