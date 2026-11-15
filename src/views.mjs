@@ -416,6 +416,9 @@ th{color:var(--color-muted-foreground);font-weight:600;font-size:13px}
 code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
 code{background:var(--color-muted);padding:2px 6px;border-radius:5px}
 .auth{max-width:560px;margin:0 auto}
+.auth details{margin-top:var(--space-4)}
+.auth details summary{cursor:pointer;font-weight:600}
+.auth details p{margin:var(--space-2) 0 0}
 /* closing CTA band + footer */
 .cta-band{background:var(--color-band);color:#fff;text-align:center;border-radius:var(--radius);padding:var(--space-8) var(--space-6)}
 .cta-band p{color:var(--color-band-muted);max-width:58ch;margin-left:auto;margin-right:auto}
@@ -1011,7 +1014,10 @@ ${error && !bad ? `<div class="notice bad" role="alert">${icon('warn')} ${esc(er
   <button class="btn row" type="submit">${icon('lock')}${bi('signin_button', {}, { inline: true })}</button>
 </form>
       <p class="muted">No account yet? <a href="/signup${keep ? `?keep=${encodeURIComponent(keep)}` : ''}">Create one</a> — an email and a password of at least 10 characters.</p>
-      <p class="muted small">Password reset is not built yet: it needs a mail path this deployment does not have. If you are locked out, the operator can reset the account by hand.</p>
+      <details>
+        <summary>${bi('signin_forgot', {}, { inline: true })}</summary>
+        <p class="muted small">${bi('signin_forgot_help')}</p>
+      </details>
     </div>
   </div>
 </section>`
@@ -1038,10 +1044,63 @@ ${error && !bad ? `<div class="notice bad" role="alert">${icon('warn')} ${esc(er
   <button class="btn row" type="submit">${icon('account')}Create account</button>
 </form>
       <p class="muted">Already have one? <a href="/signin${keep ? `?keep=${encodeURIComponent(keep)}` : ''}">Sign in</a>.</p>
-      <p class="muted small">Prototype note: accounts here are for asking. There is no password reset and no email verification yet, and the operator and the practitioners do not have accounts at all.</p>
+      <p class="muted small">Prototype note: accounts here are for asking. There is no email verification yet; a lost password is reset by a one-time link the operator issues.</p>
     </div>
   </div>
 </section>`
+  });
+}
+
+/**
+ * The page a one-time reset link opens. It is reached without a session — the person may be signed out
+ * on every device — and it is the only place a password is chosen without proving the old one, which
+ * is exactly why the link is single-use and short-lived.
+ */
+export function resetPage({ token, email = '', errors = {}, draft = {} }) {
+  return layout({
+    title: 'Choose a new password',
+    nav: false,
+    body: `
+<section class="page-head"><div class="wrap narrow">
+  <p class="eyebrow">Password reset</p>
+  <h1 style="font-size:clamp(26px,3.4vw,40px)">Choose a new password</h1>
+  <p class="muted">The operator issued this link for <strong>${esc(email)}</strong>. It works once, and it stops working seven days after it was created.</p>
+</div></section>
+<section class="tight"><div class="wrap narrow">
+  <form method="post" action="/reset/${esc(token)}" class="card">
+    <div class="field"><label for="rp-password">New password</label>
+      <input id="rp-password" name="password" type="password" autocomplete="new-password"${errors.password ? ' aria-invalid="true"' : ''}>
+      <p class="hint" style="margin-top:-4px">At least 10 characters. A sentence you can remember is stronger than a short jumble you cannot.</p>
+      ${errors.password ? `<p class="field-error">${icon('warn')} ${esc(errors.password)}</p>` : ''}</div>
+    <div class="field"><label for="rp-password2">And again</label>
+      <input id="rp-password2" name="password2" type="password" autocomplete="new-password"${errors.password2 ? ' aria-invalid="true"' : ''}>
+      ${errors.password2 ? `<p class="field-error">${icon('warn')} ${esc(errors.password2)}</p>` : ''}</div>
+    <div class="row"><button class="btn" type="submit">${icon('check')}Set the password and sign me in</button>
+      <span class="muted small">Setting it ends every session this account is holding, on every device.</span></div>
+  </form>
+  <p class="muted small">If you do not use this link, nothing changes — ask the operator to issue another when you need one.</p>
+</div></section>`
+  });
+}
+
+export function resetDeadPage({ state, email = '' }) {
+  const message = state === 'used'
+    ? 'This reset link has already been used. Sign in with the password you chose — or ask the operator for a new link.'
+    : state === 'expired'
+      ? 'This reset link has expired. Links last seven days; ask the operator for a new one.'
+      : state === 'locked'
+        ? 'This account is locked, so a new password would not let you in. Ask the operator to unlock it.'
+        : 'This reset link is not one we know about.';
+  return layout({
+    title: 'This reset link is no longer valid',
+    nav: false,
+    body: `
+<section class="page-head"><div class="wrap narrow">
+  <p class="eyebrow">${esc(state === 'unknown' ? '404' : state)}</p>
+  <h1 style="font-size:clamp(26px,3.4vw,40px)">${esc(message.split('.')[0])}.</h1>
+  <p class="muted">${esc(message)}${email ? ` The account is <strong>${esc(email)}</strong>.` : ''}</p>
+  <p class="row" style="margin-top:var(--space-5)"><a class="btn" href="/signin">Sign in</a> <a class="btn ghost" href="/">Back to the site</a></p>
+</div></section>`
   });
 }
 
@@ -2177,7 +2236,7 @@ export function adminExpertPage({ admin, expert, stats = {}, invite = null, topi
   <h2>Account</h2>
   <div class="card">
     ${inviteLink ? `<p class="flash" role="status">${icon('check')} Invitation link (send it to them — it works once, in seven days): <span class="mono">${esc(inviteLink)}</span></p>` : ''}
-    ${expert.user_id ? '<p style="margin:0">This practitioner has an account and can sign in at <a href="/signin">/signin</a>. If they lose the password, generate a new desk link above — a fresh invitation to the same address would be refused, and there is no reset by email yet.</p>' : invite ? `<p style="margin:0">A pending invitation for <strong>${esc(invite.email)}</strong> (expires ${esc((invite.expires_at ?? '').slice(0, 10))}). Creating another replaces it as the live one.</p>` : '<p style="margin:0">No account yet. An account is created only by invitation.</p>'}
+    ${expert.user_id ? '<p style="margin:0">This practitioner has an account and can sign in at <a href="/signin">/signin</a>. If they lose the password, issue a reset link from the <a href="/admin/accounts">Accounts screen</a> — a fresh invitation to the same address would be refused, and there is no reset by email.</p>' : invite ? `<p style="margin:0">A pending invitation for <strong>${esc(invite.email)}</strong> (expires ${esc((invite.expires_at ?? '').slice(0, 10))}). Creating another replaces it as the live one.</p>` : '<p style="margin:0">No account yet. An account is created only by invitation.</p>'}
     ${expert.user_id ? '' : `<form method="post" action="/admin/experts/${expert.id}/invite">`}
       <div class="form-row two">
         <div class="field"><label for="inv-email">Their email</label>
@@ -2194,7 +2253,7 @@ export function adminExpertPage({ admin, expert, stats = {}, invite = null, topi
   });
 }
 
-export function adminAccountsPage({ admin, users = [], q = '', errors = {}, draft = {}, flash = '' }) {
+export function adminAccountsPage({ admin, users = [], q = '', errors = {}, draft = {}, flash = '', resetLink = '' }) {
   const roleBadge = (u) => (u.role === 'admin' ? 'brand' : u.role === 'expert' ? 'ok' : '');
   const rows = users
     .map((u) => `<tr>
@@ -2216,6 +2275,7 @@ export function adminAccountsPage({ admin, users = [], q = '', errors = {}, draf
       ? `<form method="post" action="/admin/accounts/${u.id}/lock"><button class="btn ghost sm" type="submit">Lock</button></form>`
       : `<form method="post" action="/admin/accounts/${u.id}/unlock"><button class="btn alt sm" type="submit">Unlock</button></form>`}
     <form method="post" action="/admin/accounts/${u.id}/signout"><button class="btn ghost sm" type="submit">Sign out everywhere</button></form>
+    <form method="post" action="/admin/accounts/${u.id}/reset"><button class="btn ghost sm" type="submit">Reset password</button></form>
   </td>
 </tr>`)
     .join('');
@@ -2225,7 +2285,8 @@ export function adminAccountsPage({ admin, users = [], q = '', errors = {}, draf
     title: 'Accounts',
     body: `
 <section class="tight"><div class="wrap">
-  <p class="muted">${users.length} account${users.length === 1 ? '' : 's'}${q ? ` matching “${esc(q)}”` : ''}. Locking an account also ends every session it is holding — a lock that leaves someone working would only be a claim about the future.</p>
+  <p class="muted">${users.length} account${users.length === 1 ? '' : 's'}${q ? ` matching “${esc(q)}”` : ''}. Locking an account also ends every session it is holding — a lock that leaves someone working would only be a claim about the future. <strong>Reset password</strong> issues a one-time link the person opens to choose a new password: nothing is emailed on this deployment, so send the link the way you already reach them.</p>
+  ${resetLink ? `<p class="flash" role="status">${icon('lock')} Reset link for that account (send it to them — it works once, in seven days): <a class="mono" href="${esc(resetLink)}">${esc(resetLink)}</a></p>` : ''}
   <form method="get" action="/admin/accounts" class="row" style="margin-bottom:var(--space-4)">
     <div class="field" style="margin:0;flex:1"><label class="sr-only" for="q">Search accounts</label>
       <input id="q" name="q" value="${esc(q)}" placeholder="email or name"></div>

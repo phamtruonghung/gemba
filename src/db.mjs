@@ -134,6 +134,14 @@ create table if not exists invites (
   accepted_at text,
   created_by text not null default ''
 );
+create table if not exists password_resets (
+  token text primary key,
+  user_id integer not null references users(id) on delete cascade,
+  created_at text not null,
+  expires_at text not null,
+  used_at text,
+  created_by text not null default ''
+);
 create table if not exists settings (
   key text primary key,
   value text not null,
@@ -251,6 +259,7 @@ export function migrate(db) {
     'create index if not exists idx_bookings_user on bookings(user_id)',
     'create index if not exists idx_bookings_starts on bookings(starts_at)',
     'create index if not exists idx_sessions_user on sessions(user_id)',
+    'create index if not exists idx_password_resets_user on password_resets(user_id)',
     'create index if not exists idx_notes_expert on notes(expert_id)',
     'create index if not exists idx_events_kind on events(kind, id)',
     'create index if not exists idx_questions_expert on questions(expert_id)',
@@ -788,6 +797,48 @@ export function pendingInviteForExpert(db, expertId) {
   return db
     .prepare('select * from invites where expert_id = ? and accepted_at is null order by id desc limit 1')
     .get(expertId);
+}
+
+// --- password resets -------------------------------------------------------
+// The other single-use link: an operator says "this person may choose a new password", and the person
+// redeems it. It exists because there is no mail path, so "reset it by email" cannot be built here —
+// the operator hands the link over the way they already reach the person, and the link itself is what
+// proves the password change was asked for.
+//
+// Seven days, like an invitation, for the same reason: a link that outlives the reason for it is a
+// key left in a door. Issue a second and the first retires, so an operator cannot leave two ways in.
+
+export const RESET_DAYS = 7;
+
+export function createPasswordReset(db, { token, userId, createdBy = '', days = RESET_DAYS }) {
+  const at = new Date();
+  db.prepare('delete from password_resets where user_id = ? and used_at is null').run(userId);
+  db.prepare(
+    `insert into password_resets (token, user_id, created_at, expires_at, created_by)
+     values (?, ?, ?, ?, ?)`
+  ).run(
+    token, userId, at.toISOString(),
+    new Date(at.getTime() + days * 86400_000).toISOString(), createdBy
+  );
+  return passwordResetByToken(db, token);
+}
+
+export function passwordResetByToken(db, token) {
+  return db.prepare('select * from password_resets where token = ?').get(String(token ?? ''));
+}
+
+/** Live, used or expired — computed, not stored, so there is one source of truth for time. */
+export function passwordResetState(reset, at = new Date()) {
+  if (!reset) return 'unknown';
+  if (reset.used_at) return 'used';
+  if (reset.expires_at <= at.toISOString()) return 'expired';
+  return 'live';
+}
+
+/** Claim a reset link: 1 if this call redeemed it, 0 if it was already used or has lapsed. */
+export function usePasswordReset(db, token, now = new Date()) {
+  return db.prepare('update password_resets set used_at = ? where token = ? and used_at is null and expires_at > ?')
+    .run(now.toISOString(), String(token ?? ''), now.toISOString()).changes;
 }
 
 /** What each practitioner is actually doing — the numbers an operator looks at before changing a rate. */
