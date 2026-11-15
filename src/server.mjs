@@ -1089,6 +1089,26 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
       }
       return send(200, views.corpusPage({ notes, total, page, pages, topic, topics: views.topicList(), user, place: placeOf() }));
     }
+    if (path === '/reference') {
+      const section = (url.searchParams.get('section') ?? '').slice(0, 40);
+      const q = (url.searchParams.get('q') ?? '').trim().slice(0, 80);
+      const requested = Math.max(1, Math.floor(Number(url.searchParams.get('page'))) || 1);
+      let page = requested;
+      let { docs, total } = dbm.referencePage(db, { section, q, offset: (page - 1) * dbm.REFERENCE_PAGE_SIZE });
+      const pages = Math.max(1, Math.ceil(total / dbm.REFERENCE_PAGE_SIZE));
+      if (page > pages) {
+        page = pages;
+        ({ docs } = dbm.referencePage(db, { section, q, offset: (page - 1) * dbm.REFERENCE_PAGE_SIZE }));
+      }
+      return send(200, views.referenceIndexPage({ docs, total, page, pages, section, q, sections: dbm.referenceStats(db).sections, user, place: placeOf() }));
+    }
+    if (path.startsWith('/reference/')) {
+      const slug = decodeURIComponent(path.slice('/reference/'.length));
+      const doc = dbm.referenceBySlug(db, slug);
+      if (!doc) return fail(404, 'No such page on the reference shelf.');
+      const { prev, next } = dbm.referenceNeighbours(db, doc);
+      return send(200, views.referenceDocPage({ doc, prev, next, user, place: placeOf() }));
+    }
     if (path.startsWith('/notes/')) {
       const slug = decodeURIComponent(path.slice('/notes/'.length));
       const note = dbm.noteBySlug(db, slug);
