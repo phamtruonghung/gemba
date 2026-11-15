@@ -128,7 +128,7 @@ The margin on questions is thin: 0.45 admits one false cover.
 6/0/7/3. Flat; 2.2 kept.
 
 `distinctShare`: 0.15, 0.25, 0.35 and 0.5 are identical (22/0/29/0, 14/0/11/1, 6/1/6/3). The switch bites
-only below 0.15: 0.10 costs two questions TPs and five english TPs (49/51, 21/26), 0.05 gives 44/51.
+only below 0.15: 0.10 costs two questions TPs and four english TPs (49/51, 21/26), 0.05 gives 44/51.
 0.25 kept.
 
 `margin`: see item 7. `clauseShare` (cover if one clause of a long question is covered): 0.5 gives
@@ -183,7 +183,10 @@ question (`q15`) leads by 28%.
 `h16` is left as a false cover on purpose. Every switch swept for it either misses it (a `margin` of 0.28
 would be needed, and that costs a gate false refuse — `q12`; `minShare=0.55` leaves it covered) or breaks
 the gate (`distinctShare=0.05` → 44/51; `scoring=distinctive` at `margin=0` → 50/51, with two false covers
-on `english` of which one, `e16`, is already there at `margin=0` — one is new, `e17`). The shape it needs — a bridged unit
+on `english` of which one, `e16`, is already there at `margin=0` — one is new, `e17`) — with one exception,
+`minTop=6`, which does refuse it, but by a blanket BM25 floor: every note whose top match scores below 6 is
+refused, so it never reads the garment-staffing shape, and it costs one `english` TP (24/26; `### Sweeps`).
+The shape it needs — a bridged unit
 whose corpus-unknown alias (`sewing`, `garment`, df 0) is matched through a generic one (`worker`, df 2) — is
 the same shape as seventeen gate questions that must stay answered (`q03` "bắt đầu" → start/begin, `q21`
 "vận hành" → operator/operate). The distinguishing fact is that garment staffing is a different subject, not
