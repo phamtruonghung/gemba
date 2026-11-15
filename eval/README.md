@@ -151,12 +151,13 @@ Figures marked *12 notes* are the pre-#88 reading and reproduce at `b1e3825`.
   the machine keeps running" to it (`seed/corpus/demo-andon-surface-the-abnormal.md`). Making bare "may"
   strict would still break every unaccented "may dung" question — the *12 notes* reading's view, not
   re-measured since.
-- `e15` the 52-word paragraph version of the flagship question (share 0.278 at 20 notes; 0.268 at *12
+- `e15` the 57-word paragraph version of the flagship question (share 0.278 at 20 notes; 0.268 at *12
   notes*). Length still costs share: every word the matched note does not carry (plastics, three presses,
-  night crew, month) counts a little as a miss. The issue's other complaint, a 62-word paragraph at 18x the
+  night crew, month) counts a little as a miss. The issue's other complaint, a 62-token paragraph at 18x the
   floor being refused, is not fixed for the very long form. The shorter padded form of the same question is
-  covered — it is the padding test in `test/retrieval.test.mjs`. With a key configured this refusal is a
-  soft vote that the model can overrule.
+  covered — it is the test named "a long paragraph version of a question is judged on its topic, not its
+  length" in `test/retrieval.test.mjs`, which asserts the machine-stops note. With a key configured this
+  refusal is a soft vote that the model can overrule.
 - holdout-1: `h04` 0.266, `h06` 0.220, `h08` 0.270; holdout-2: `g01` 0.452, `g03` 0.458, `g04` 0.276,
   `g06` 0.430, `g07` 0.322, `g08` 0.263 — all at 20 notes, against *12 notes* 0.310, 0.194, 0.238 and
   0.189 to 0.454. All nine are refusals: their coverage share, 0.220 to 0.458, stays under the 0.50 line.
