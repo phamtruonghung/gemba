@@ -4,11 +4,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { createApp, basicAuthOk, loadConfig } from '../src/server.mjs';
+import { createApp, basicAuthOk, clientIp, loadConfig } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
 import { upsertExpert, createUser, makeRef } from '../src/db.mjs';
 import { hashPassword, secretHash } from '../src/auth.mjs';
@@ -179,7 +179,82 @@ test('behind the tunnel the limiter keys on the address the proxy reports, only 
   }
 });
 
-// --- #33: methods, errors, the gate, timeouts --------------------------------
+// --- the limit a visitor spends is charged to the visitor, not to the tunnel --------------------
+
+const WIDE = { capacity: 10_000, perMs: 60_000 };
+const limitsWith = (over = {}) => ({
+  limits: { askIp: WIDE, askIdentity: WIDE, signinIp: WIDE, signinEmail: WIDE, signupIp: WIDE, gateIp: WIDE, ...over }
+});
+
+test('the forwarded address is believed only from a peer that is actually a proxy for us', () => {
+  const req = (remoteAddress, headers) => ({ headers, socket: { remoteAddress } });
+  assert.equal(clientIp(req('127.0.0.1', { 'cf-connecting-ip': '203.0.113.5' }), { trustProxy: true }), '203.0.113.5', 'the tunnel dials loopback and reports the visitor');
+  assert.equal(clientIp(req('::ffff:127.0.0.1', { 'x-forwarded-for': '203.0.113.6, 10.0.0.1' }), { trustProxy: true }), '203.0.113.6', 'first entry of the chain, IPv4-mapped peer');
+  assert.equal(clientIp(req('192.168.1.50', { 'cf-connecting-ip': '203.0.113.5' }), { trustProxy: true }), '192.168.1.50', 'a LAN client cannot name the bucket it is charged to');
+  assert.equal(clientIp(req('127.0.0.1', { 'cf-connecting-ip': '203.0.113.5' }), {}), '127.0.0.1', 'untrusted: the socket address, always');
+  const named = { trustProxy: true, trustedProxies: ['192.168.1.22'] };
+  assert.equal(clientIp(req('192.168.1.22', { 'cf-connecting-ip': '203.0.113.7' }), named), '203.0.113.7', 'a named proxy may speak for its clients');
+  assert.equal(clientIp(req('192.168.1.23', { 'cf-connecting-ip': '203.0.113.7' }), named), '192.168.1.23', 'its neighbour may not');
+  const dir = mkdtempSync(join(tmpdir(), 'gemba-proxy-'));
+  const env = { GEMBA_DATA_DIR: dir, GEMBA_ENV_FILE: '/dev/null' };
+  try {
+    const saved = process.env.GEMBA_ENV_FILE;
+    process.env.GEMBA_ENV_FILE = '/dev/null';
+    try {
+      assert.deepEqual(loadConfig({ ...env, GEMBA_TRUST_PROXY: '192.168.1.22' }).trustedProxies, ['192.168.1.22']);
+      assert.equal(loadConfig({ ...env, GEMBA_TRUST_PROXY: '1' }).trustProxy, true);
+      assert.equal(loadConfig({ ...env, GEMBA_TRUST_PROXY: '1' }).trustedProxies.length, 0, '1 is loopback, and loopback needs no name');
+      assert.equal(loadConfig(env).trustProxy, false, 'unset trusts no peer');
+    } finally {
+      if (saved === undefined) delete process.env.GEMBA_ENV_FILE; else process.env.GEMBA_ENV_FILE = saved;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a burst of wrong passwords on one visitor’s address leaves another visitor’s sign-in budget whole', async () => {
+  const s = await start({ trustProxy: true, ...limitsWith({ signinIp: { capacity: 5, perMs: 60_000 } }) });
+  try {
+    const attempt = (cfIp, password = 'not-the-password') => fetch(`${s.base}/admin/login`, {
+      method: 'POST', headers: { ...FORM, 'cf-connecting-ip': cfIp }, redirect: 'manual',
+      body: enc({ email: 'ops@plant.vn', password })
+    });
+    for (let i = 0; i < 5; i += 1) assert.equal((await attempt('198.51.100.9')).status, 401, `attempt ${i + 1} still answers`);
+    assert.equal((await attempt('198.51.100.9')).status, 429, 'the sixth guess from that address is refused');
+    // One address, one bucket: the refusal is keyed on the forwarding address the tunnel reported.
+    assert.equal((await attempt('198.51.100.10')).status, 401, 'a second visitor keeps their own budget');
+    createUser(s.app.db, { email: 'ops@plant.vn', name: 'Ops', role: 'admin', password_hash: await hashPassword('the-right-password') });
+    const signedIn = await attempt('198.51.100.10', 'the-right-password');
+    assert.equal(signedIn.status, 303, 'and can still sign in');
+  } finally {
+    s.stop();
+  }
+});
+
+test('a refused gate credential is charged to the visitor and recorded, and an admitted one is recorded too', async () => {
+  const basic = Buffer.from('ops:the-right-password').toString('base64');
+  const s = await start({ user: 'ops', pass: 'the-right-password', trustProxy: true, ...limitsWith({ gateIp: { capacity: 2, perMs: 60_000 } }) });
+  try {
+    const gate = (cfIp, auth = false) => fetch(`${s.base}/`, {
+      headers: { 'cf-connecting-ip': cfIp, ...(auth ? { authorization: `Basic ${basic}` } : {}) }, redirect: 'manual'
+    });
+    assert.equal((await gate('203.0.113.50')).status, 401);
+    assert.equal((await gate('203.0.113.50')).status, 401);
+    const refused = await gate('203.0.113.50');
+    assert.equal(refused.status, 429, 'the third refusal on one address meets the limiter');
+    assert.ok(Number(refused.headers.get('retry-after')) >= 1, 'and says when to come back');
+    assert.equal((await gate('203.0.113.51')).status, 401, 'another visitor is not locked out by that burst');
+    assert.equal((await gate('203.0.113.52', true)).status, 200, 'the shared credential still opens the gate');
+
+    const rows = s.app.db.prepare("select kind, ref, detail from events where kind like 'gate%' order by id").all();
+    assert.deepEqual(rows.filter((r) => r.kind === 'gate_refused').map((r) => r.ref), ['203.0.113.50', '203.0.113.50', '203.0.113.51'], 'each refusal names the address that made it');
+    assert.deepEqual(rows.filter((r) => r.kind === 'gate_admit').map((r) => [r.ref, r.detail]), [['203.0.113.52', '/']], 'an admission names who was let in and to what');
+  } finally {
+    s.stop();
+  }
+});
+
 
 test('PUT, DELETE, TRACE and OPTIONS are 405 with an Allow header', async () => {
   const s = await start();
