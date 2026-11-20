@@ -63,6 +63,7 @@ def make_reset_token(db_path):
     The page is reached only through such a link, and there is no local database to write against when
     the checks point at a deployment (`UI_BASE`) — there the page is simply not walked.
     """
+    import hashlib
     import sqlite3
     from datetime import datetime, timedelta, timezone
 
@@ -78,9 +79,11 @@ def make_reset_token(db_path):
         if not row:
             return None
         now = datetime.now(timezone.utc)
+        # The column holds sha256 of the link value, not the value (src/auth.mjs `secretHash`), so the
+        # URL walked below is the raw token and the row is its digest — what the app looks up.
         con.execute(
             "insert or replace into password_resets (token, user_id, created_at, expires_at) values (?, ?, ?, ?)",
-            (token, row[0], stamp(now), stamp(now + timedelta(days=1))),
+            (hashlib.sha256(token.encode()).hexdigest(), row[0], stamp(now), stamp(now + timedelta(days=1))),
         )
         con.commit()
     finally:

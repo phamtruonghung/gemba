@@ -15,6 +15,10 @@ Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
+# Nothing this service creates may be world-readable: the state file carries the hashes of live
+# session ids and reset tokens, and a 0644 database in a 0755 directory was readable by the
+# unprivileged `github-runner` account on the same container.
+UMask=0077
 # The SQLite database and the admin token live outside the checkout so a redeploy of the
 # code cannot overwrite live state.
 ReadWritePaths=/var/lib/gemba
