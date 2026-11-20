@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { createApp } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
 import { upsertExpert, upsertNote } from '../src/db.mjs';
+import { hashPassword } from '../src/auth.mjs';
 
 const ADMIN = 'test-admin-token';
 const EXPERT_TOKEN = 'tok-hung-test';
@@ -99,14 +100,15 @@ function post(path, data = {}) {
   });
 }
 
-test('healthz reports the corpus size and the AI tier honestly', async () => {
+test('healthz answers liveness and nothing else', async () => {
   const res = await fetch(`${base}/healthz`);
   const body = await res.json();
   assert.equal(res.status, 200);
+  // The body used to carry the corpus size and the gateway's verdict on the AI key. On a published
+  // instance that told a stranger a working paid credential sits behind it, so neither is here any
+  // more — the tier is on the operator's settings page, which needs a session.
+  assert.deepEqual(Object.keys(body).sort(), ['ok'], 'healthz must publish no tier, no corpus size and no path');
   assert.equal(body.ok, true);
-  assert.equal(body.notes, 4);
-  assert.equal(body.llm, 'none');
-  assert.equal(body.db, undefined, 'healthz must not print the database path on a public host');
 });
 
 test('ask: an on-corpus question is answered with citations to real notes', async () => {
@@ -228,7 +230,6 @@ async function runInterview(answers) {
 }
 
 const noteCount = () => app.db.prepare('select count(*) n from notes').get().n;
-const healthNotes = async () => (await (await fetch(`${base}/healthz`)).json()).notes;
 
 test('a ninth interview answer after the published note is filed sends the practitioner to that note, not a second draft', async () => {
   const { id, slug } = await runInterview([
@@ -248,7 +249,6 @@ test('a ninth interview answer after the published note is filed sends the pract
 
   const countBefore = noteCount();
   const deskBefore = await (await fetch(`${base}/c/${EXPERT_TOKEN}`)).text();
-  const healthBefore = await healthNotes();
   const libraryBefore = await (await fetch(`${base}/library`)).text();
 
   const ninth = await post(`/c/${EXPERT_TOKEN}/interview`, { id, answer: 'Alpha: one more thing nobody asked about.' });
@@ -256,7 +256,6 @@ test('a ninth interview answer after the published note is filed sends the pract
   assert.equal(ninth.headers.get('location'), `/notes/${slug}`);
   assert.doesNotMatch(ninth.headers.get('location'), /draft\?slug=|-2/);
   assert.equal(noteCount(), countBefore);
-  assert.equal(await healthNotes(), healthBefore);
   const libraryAfter = await (await fetch(`${base}/library`)).text();
   assert.equal(libraryAfter, libraryBefore);
   assert.equal(libraryAfter.split('Field notes: Alpha colour drift').length, libraryBefore.split('Field notes: Alpha colour drift').length, 'no duplicated title');
@@ -462,7 +461,7 @@ test('the app opens the database the configuration names, not a file next to the
   app.db.close?.();
 });
 
-async function healthzApp(status, calls) {
+async function llmApp(status, calls) {
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
     return { status, ok: status >= 200 && status < 300 };
@@ -480,35 +479,43 @@ async function healthzApp(status, calls) {
   return { a, b: `http://127.0.0.1:${a.server.address().port}` };
 }
 
-test("healthz reports the gateway's verdict on the key, not its presence", async () => {
+/** The operator account and its session cookie: the AI tier is only shown behind this door now. */
+async function operatorCookie(a, b) {
+  const password = 'a-long-enough-operator-password';
+  a.db.prepare('insert into users (email, name, password_hash, role, status, created_at) values (?, ?, ?, ?, ?, ?)')
+    .run('ops@gemba.test', 'Ops', await hashPassword(password), 'admin', 'active', new Date().toISOString());
+  const res = await fetch(`${b}/admin/login`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'ops@gemba.test', password })
+  });
+  return res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+}
+
+test("the gateway's verdict on the key is behind the operator session, not on /healthz", async () => {
   for (const [status, want] of [[401, 'rejected'], [200, 'configured']]) {
     const calls = [];
-    const { a, b } = await healthzApp(status, calls);
+    const { a, b } = await llmApp(status, calls);
     try {
-      const res = await fetch(`${b}/healthz`);
-      const body = await res.json();
-      assert.equal(res.status, 200);
-      assert.equal(body.ok, true);
-      assert.equal(body.llm, want);
-      assert.equal(body.db, undefined);
-      assert.equal(calls.length, 1);
+      // Anyone who can reach the path: liveness, and no gateway call spent on their behalf.
+      const anon = await (await fetch(`${b}/healthz`)).json();
+      assert.deepEqual(anon, { ok: true }, 'a public path must not say whether the paid key works');
+      assert.equal(calls.length, 0, 'a public path must not probe the gateway');
+
+      // The operator: the same fact, and one probe however many times the page is loaded.
+      const cookie = await operatorCookie(a, b);
+      const page = await (await fetch(`${b}/admin/settings`, { headers: { cookie }, redirect: 'manual' })).text();
+      assert.match(page, new RegExp(`id="llm-tier"[^<]*<strong>${want}</strong>`), `the settings page must show ${want}`);
+      const again = await Promise.all(
+        Array.from({ length: 5 }, async () => (await fetch(`${b}/admin/settings`, { headers: { cookie } })).text())
+      );
+      for (const html of again) assert.match(html, new RegExp(`<strong>${want}</strong>`));
+      assert.equal(calls.length, 1, 'the tier is probed at most once a minute, not once per page view');
       assert.ok(calls[0].url.endsWith('/models'));
     } finally {
       a.server.close();
       a.shutdown();
     }
-  }
-});
-
-test('healthz asks the gateway once for a burst of requests', async () => {
-  const calls = [];
-  const { a, b } = await healthzApp(200, calls);
-  try {
-    const bodies = await Promise.all(Array.from({ length: 5 }, async () => (await fetch(`${b}/healthz`)).json()));
-    assert.equal(calls.length, 1);
-    for (const body of bodies) assert.equal(body.llm, 'configured');
-  } finally {
-    a.server.close();
-    a.shutdown();
   }
 });

@@ -76,6 +76,32 @@ test('set-env.py appends a key the file has never held, and refuses a newline', 
   }
 });
 
+test('set-env.py removes the superseded copies of the file it just wrote', async () => {
+  const dir = await scratch();
+  try {
+    const env = await writeEnv(dir, 'GEMBA_PASS=old-one\n');
+    // The shape measured on CT150: a hand-made copy holding the retired secret, and a copy named
+    // after the lane that made it. Rotating the live file never touched either.
+    const timestamped = join(dir, 'gemba.env.bak-2026-11-04T01-49-57-195Z');
+    const laneNamed = join(dir, 'gemba.env.bak-t_a2-2026-11-05T02-00-00Z');
+    await writeFile(timestamped, 'GEMBA_PASS=even-older\n', { mode: 0o600 });
+    await writeFile(laneNamed, 'GEMBA_PASS=oldest\n');
+    // Not a copy of this file: the sweep is scoped by name and must not touch it.
+    const foreign = join(dir, 'other.env.bak-2026-11-04');
+    await writeFile(foreign, 'GEMBA_PORT=8090\n');
+
+    const { stdout, stderr } = await run('python3', [SET_ENV, env, 'GEMBA_PASS', 'new-one']);
+    assert.equal(stderr, '');
+    assert.match(await readFile(env, 'utf8'), /^GEMBA_PASS=new-one$/m);
+    await assert.rejects(stat(timestamped), 'a superseded copy still holding the retired secret must be gone');
+    await assert.rejects(stat(laneNamed));
+    assert.ok((await stat(foreign)).size > 0, 'a copy of a different file is not this script to remove');
+    assert.match(stdout, /removed the superseded copy gemba\.env\.bak-/, 'the removal is named, not silent');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('the installer never builds a secret into sed, a heredoc, or a sourced file', async () => {
   const script = await readFile(join(ROOT, 'deploy/install.sh'), 'utf8');
   assert.ok(script.includes('deploy/set-env.py'), 'install.sh must write secrets through set-env.py');

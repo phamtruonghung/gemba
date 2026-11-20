@@ -15,6 +15,22 @@ Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
+# --- the confinement the comments above claim, actually applied -------------------------------
+# `ReadWritePaths=` only restricts anything under a non-default `ProtectSystem=`, and the unit used to
+# leave that at `no`: measured on CT150 (2026-11-20) the service ran with ProtectSystem=no,
+# ProtectHome=no, MemoryMax=infinity and the whole capability set, so the process could write
+# anywhere in the container and `ReadWritePaths` was decoration. State, the admin token and the gate
+# rules live in /var/lib/gemba; the only other writable place it needs is the private /tmp above.
+# A `User=` that is not root is the rest of the fix; it changes who owns /var/lib/gemba, so it is a
+# separate change (see the repo issue) rather than something folded in here.
+ProtectSystem=strict
+ProtectHome=yes
+# Nothing it does needs a capability: it binds 8090 (unprivileged), and it reaches its own files as
+# uid 0 rather than through CAP_DAC_OVERRIDE.
+CapabilityBoundingSet=
+# Measured working set 42 MB (MemoryCurrent=42270720 on CT150, 2026-11-20); 256 MB leaves ~6x for the
+# SQLite cache and a JSON burst, and a runaway process is killed instead of taking the container with it.
+MemoryMax=256M
 # Nothing this service creates may be world-readable: the state file carries the hashes of live
 # session ids and reset tokens, and a 0644 database in a 0755 directory was readable by the
 # unprivileged `github-runner` account on the same container.
