@@ -197,7 +197,7 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 
 | Route | What it does |
 |---|---|
-| `GET /healthz` | liveness + corpus size + the gateway's verdict on the AI tier: `none` (no key), `configured` (the gateway accepted it), `rejected` (401/403 — the key is dead), `unreachable` (no verdict: network, timeout or any other non-2xx — 5xx, 429, 404, a redirect); probed at most once a minute, so the answer can be up to a minute old, and the first read after a quiet spell is the previous tier (the refresh happens behind the request) |
+| `GET /healthz` | liveness only: `{"ok": true}`. It used to publish the corpus size and the gateway's verdict on the AI key, which told anyone who could reach a published instance that a working paid credential sat behind it; the tier is now on `/admin/settings`, behind the operator session |
 | `GET/POST /signup`, `GET/POST /signin`, `POST /signout` | create an account, sign in, sign out |
 | `GET/POST /invite/:token` | a practitioner sets their own password from an invitation (single use, seven days) |
 | `GET/POST /reset/:token` | a forgotten password is reset from an operator-issued link (single use, seven days) |
@@ -408,6 +408,11 @@ It runs as a systemd service (`gemba.service`) on the demo host `192.168.1.150:8
 there belong to another stack, so the app is published on 8090 — a reverse proxy is the deployment's
 job, not the app's.
 
+The unit is confined, not merely labelled: `ProtectSystem=strict` with `ReadWritePaths=/var/lib/gemba`,
+`ProtectHome=yes`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, an empty `CapabilityBoundingSet=`, and
+`MemoryMax=256M` against a measured working set of ~42 MB. (It still runs as `root`; a dedicated
+account is the remaining step, and it is a separate change because it moves ownership of `/var/lib/gemba`.)
+
 ### Backups, and the one thing that must never be lost
 
 The database is the product's only state: the questions, the bookings, what was paid, the published
@@ -471,7 +476,8 @@ gate rather than relying on the deployment to remember one:
 
 - set `GEMBA_USER` and `GEMBA_PASS` and every path — the pages, `/api/ask`, the expert desks, the
   console — answers `401` with a basic-auth challenge until the browser authenticates;
-- `/healthz` stays open (it is the readiness probe) and deliberately does not print the database path;
+- `/healthz` stays open (it is the readiness probe) and answers `{"ok": true}` and nothing else — no
+  corpus size, no database path, no verdict on the AI key;
 - with neither variable set the app is open, which is what local development wants;
 - the installer refuses to continue when only one of the pair is set: a half-configured gate used to
   leave the instance open while every check reported it configured.

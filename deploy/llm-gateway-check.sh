@@ -37,8 +37,8 @@ for _ in $(seq 1 40); do
   if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/healthz")" = "200" ]; then break; fi
   sleep 0.25
 done
-echo "--- what the app thinks it is talking to:"
-curl -s "http://127.0.0.1:$PORT/healthz"
+echo "--- liveness: /healthz answers {\"ok\": true} and nothing about the key (it moved to /admin/settings)"
+curl -s "http://127.0.0.1:$PORT/healthz"; echo
 
 ask() {
   curl -s -X POST "http://127.0.0.1:$PORT/api/ask" \

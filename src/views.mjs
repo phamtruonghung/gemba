@@ -2036,7 +2036,16 @@ export function adminOverviewPage({ admin, stats, settings, events = [], flash =
   });
 }
 
-export function adminSettingsPage({ admin, settings, errors = {}, flash = '' }) {
+export function adminSettingsPage({ admin, settings, errors = {}, flash = '', llmTier = '' }) {
+  // The AI tier is the gateway's own answer about the key, shown here because `/healthz` used to
+  // publish it to anyone who could reach that path. A dead key is silent otherwise: every answer
+  // quietly falls back to quoting the notes.
+  const tierNote = {
+    none: 'no key is configured — every answer quotes the notes',
+    configured: 'the gateway accepted the key',
+    rejected: 'the gateway refused the key (401/403) — every answer falls back to quoting the notes',
+    unreachable: 'the gateway gave no verdict — network, timeout or an unexpected status'
+  }[llmTier];
   const field = (key) => {
     const spec = SETTING_SPECS[key];
     return `<div class="field">
@@ -2057,6 +2066,7 @@ export function adminSettingsPage({ admin, settings, errors = {}, flash = '' }) 
       <span class="muted small">Whole numbers only, in VND. Nought decimals: this product never holds a fraction of a đồng.</span></div>
   </form>
   <p class="small muted">Changing a value here changes what the booking form quotes immediately. A session already booked keeps the price it was booked at.</p>
+  ${tierNote ? `<p class="small muted" id="llm-tier">The AI key, as the gateway answers for it: <strong>${esc(llmTier)}</strong> — ${esc(tierNote)}. Probed at most once a minute, so this can lag by a minute.</p>` : ''}
 </div></section>`,
   });
 }

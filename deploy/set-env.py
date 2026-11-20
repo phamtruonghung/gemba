@@ -75,6 +75,25 @@ def main(argv):
         except OSError:
             pass
         raise
+
+    # A copy of this file taken before an edit is a second copy of every secret it held: rotating a
+    # value in the live file leaves the retired one readable in the copy, and nothing ever revisits
+    # it. Measured on CT150 (2026-11-20): a `gemba.env.bak-<timestamp>` left by a November change
+    # still held the model key and the front-gate pair long after both had been rotated. The write
+    # above is atomic (`os.replace`), so this script never creates such a copy itself — a sibling
+    # `.bak-<timestamp>` comes from an operator or a lane doing `cp` by hand — and a successful write
+    # is the moment to remove them. Scoped to this file's own name in this file's own directory, and
+    # it names what it deleted: removing a secret's copy is not a silent act.
+    base = os.path.basename(path)
+    for name in sorted(os.listdir(directory)):
+        if not name.startswith(f"{base}.bak-"):
+            continue
+        try:
+            os.unlink(os.path.join(directory, name))
+        except OSError as err:
+            print(f"could not remove the superseded copy {name}: {err.strerror}", file=sys.stderr)
+        else:
+            print(f"removed the superseded copy {name}")
     return 0
 
 

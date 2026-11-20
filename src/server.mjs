@@ -487,7 +487,11 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     };
 
     // --- health (the only path that answers without the front gate) --------
-    if (path === '/healthz') return sendJson(200, { ok: true, notes: index.n, llm: await llmTier(config.llm, fetchImpl) });
+    // Liveness and nothing else. It used to carry the corpus size and the gateway's verdict on the AI
+    // key, which told any stranger who could reach this path that a working paid credential sits
+    // behind it — and the corpus size is not a stranger's business either. The verdict is on the
+    // operator's own settings page instead (see /admin/settings below).
+    if (path === '/healthz') return sendJson(200, { ok: true });
 
     // --- front gate: optional HTTP basic auth ------------------------------
     // The gate exists for the *anonymous* surface: a public tunnel where every question spends a model
@@ -840,6 +844,10 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
         }
         return send(200, views.adminSettingsPage({
           admin: account, settings: loadSettings(db), errors: {},
+          // The AI tier moved here from `/healthz`, which answered it to anyone: it says whether the
+          // gateway accepted the key, which is a fact about a paid credential. Operators still need it
+          // — a dead key silently degrades every answer to quoting — so it is shown behind the session.
+          llmTier: await llmTier(config.llm, fetchImpl),
           flash: url.searchParams.get('saved') === '1' ? 'Saved. Prices use these immediately.' : ''
         }));
       }
