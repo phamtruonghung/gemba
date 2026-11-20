@@ -675,6 +675,34 @@ test('a guest can still ask, and JSON from a bot needs no token but a text/plain
   }
 });
 
+test('a Basic-authenticated POST from another origin is refused, and the same POST from this one is not', async () => {
+  // The front gate's shared credential is replayed by the browser preemptively for this origin, so a
+  // cross-site page can borrow it. Origin is the only thing it cannot borrow: a browser sets it and
+  // no other page can change it. The token rule below covers sessions, which hold a token; a gated
+  // visitor holds no session, so the origin of the request is what is checked instead.
+  const s = await start({ user: 'gate-u', pass: 'gate-p-long-enough' });
+  const basic = 'Basic ' + Buffer.from('gate-u:gate-p-long-enough', 'utf8').toString('base64');
+  const ask = (headers) => fetch(`${s.base}/ask`, {
+    method: 'POST', redirect: 'manual',
+    headers: { ...FORM, authorization: basic, ...headers },
+    body: enc({ q: 'why does the line stop at the sealer?' })
+  });
+  const questions = () => s.app.db.prepare('select count(*) n from questions').get().n;
+  try {
+    const crossSite = await ask({ origin: 'https://perdu.example' });
+    assert.equal(crossSite.status, 403, 'a form post from another origin is refused');
+    assert.match(await crossSite.text(), /Nothing was changed/);
+    assert.equal((await ask({})).status, 403, 'a form post naming no origin at all is refused');
+    assert.equal(questions(), 0, 'no question row, so no model call');
+    assert.equal(s.app.db.prepare("select count(*) n from events where kind = 'csrf_refused'").get().n, 2);
+    assert.equal((await ask({ origin: s.base })).status, 303, 'the gated visitor own form still works');
+    assert.equal(questions(), 1);
+    assert.equal((await ask({ referer: `${s.base}/ask` })).status, 303, 'Referer stands in where no Origin is sent');
+  } finally {
+    s.stop();
+  }
+});
+
 test('every post form carries the token and no get form does', async () => {
   const s = await start(roomy);
   try {

@@ -421,6 +421,28 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
         return '/';
       }
     };
+    // Whether this POST came from a page on this host. A browser attaches `Origin` to every POST it
+    // makes and `Referer` where that is absent or stripped, and no other site can set either to this
+    // host — which is what makes the check a cross-site-write defence. A request naming neither is
+    // refused: an ordinary browser form always names one, and a client that names nothing is
+    // indistinguishable from a cross-site page.
+    const sameOriginPost = () => {
+      const host = String(req.headers.host ?? '');
+      if (!host) return false;
+      const fromThisHost = (value) => {
+        try {
+          const u = new URL(String(value));
+          return (u.protocol === 'https:' || u.protocol === 'http:') && u.host === host;
+        } catch {
+          return false; // unparseable, and `Origin: null` from a sandboxed or file: page
+        }
+      };
+      const originHeader = req.headers.origin;
+      if (typeof originHeader === 'string' && originHeader) return fromThisHost(originHeader);
+      const referer = req.headers.referer;
+      if (typeof referer === 'string' && referer) return fromThisHost(referer);
+      return false;
+    };
     const tooManySignups = () => {
       const r = limiter.check('signupIp', ip, now());
       return r.ok ? null : tooMany(r, { kind: 'signup' });
@@ -457,22 +479,36 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
       });
       return res.end(page);
     }
+    // A visitor who got this far on the shared credential instead of a session. `basicAuthOk` also
+    // answers true when no gate is configured at all (local development), so the credential only
+    // marks a gated visitor when one is actually set — otherwise every guest would become one.
+    const gateAuthed = Boolean(config.user || config.pass) && !gateExempt && !account
+      && basicAuthOk(req.headers.authorization, config);
 
-    // --- CSRF: a POST that carries a session must carry that session's token ---------------------
-    // The token is a hidden form field (no JavaScript involved). A guest has no session, so a guest can
-    // still ask. JSON is exempt: a browser cannot send application/json cross-site without a CORS
-    // preflight, and this server never answers one; anything else is parsed as a form and is checked.
-    // The two preference posts only set a cookie that names a text size or a place in a note.
+    // --- CSRF: no cross-site write, whatever authenticated the request ---------------------------
+    // A signed-in person's forms carry their session's token as a hidden field (no JavaScript
+    // involved), and a POST carrying a session must present it. A visitor the front gate let in holds
+    // the shared Basic credential instead — no session, so no token to present — and gets the same
+    // guarantee from the request's origin, which a browser sets and no other page can forge.
+    // A guest carries neither, so a guest can still ask: the ask form is this instance's way in, and
+    // there is no one's authority for a stranger to borrow. JSON is exempt: a browser cannot send
+    // application/json cross-site without a CORS preflight, and this server never answers one;
+    // anything else is parsed as a form and is checked. The two preference posts only set a cookie
+    // that names a text size or a place in a note.
     const csrfExempt = path === '/prefs/text' || /^\/notes\/[^/]+\/place$/.test(path);
-    if (method === 'POST' && account && !csrfExempt && !String(req.headers['content-type'] ?? '').includes('application/json')) {
-      if (!sameSecret(form.csrf ?? '', dbm.csrfFor(db, sessionId))) {
-        dbm.logEvent(db, 'csrf_refused', '', `${path} user=${account.id}`);
-        return send(403, views.errorPage({
-          code: 403, message: 'This form expired or came from another page.', user,
-          lead: 'Nothing was changed.', retry: safeNext(refererPath())
-        }));
-      }
+    const formPost = method === 'POST' && !csrfExempt
+      && !String(req.headers['content-type'] ?? '').includes('application/json');
+    const csrfRefused = (who) => {
+      dbm.logEvent(db, 'csrf_refused', '', `${path} ${who}`);
+      return send(403, views.errorPage({
+        code: 403, message: 'This form expired or came from another page.', user,
+        lead: 'Nothing was changed.', retry: safeNext(refererPath())
+      }));
+    };
+    if (formPost && account && !sameSecret(form.csrf ?? '', dbm.csrfFor(db, sessionId))) {
+      return csrfRefused(`user=${account.id}`);
     }
+    if (formPost && gateAuthed && !sameOriginPost()) return csrfRefused('gate');
 
     // --- installable-app files: manifest, worker, offline page, icons ------
     if ((path === '/manifest.webmanifest' || path === '/sw.js') && (method === 'GET' || method === 'HEAD')) {
