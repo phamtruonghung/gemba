@@ -242,6 +242,9 @@ What it buys you:
   and it lists only rows whose `user_id` matches.
 
 Sign-ins are rate-limited per address and per email, and every post form carries its session's CSRF token.
+A post made with the shared `GEMBA_USER`/`GEMBA_PASS` credential holds no session, so it is refused
+unless it came from this host's own pages — the `Origin` a browser sets, or `Referer` where no `Origin`
+is sent. A guest carrying neither a session nor that credential can still ask.
 What it does not do yet: no email verification. A forgotten password is reset from `/signin` — the page
 says what to do, and the operator issues the one-time link from `/admin/accounts`.
 
@@ -303,7 +306,7 @@ states the three money shapes, a recommendation, and the questions. These are en
 
 ## Tests, and what they caught
 
-448 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+449 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
 (a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:
