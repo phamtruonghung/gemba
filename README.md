@@ -174,7 +174,7 @@ implemented. The contract is in `SPEC.md` section 3 and enforced by `test/llm.te
 | `GEMBA_PORT` | `8090` | HTTP port |
 | `GEMBA_HOST` | `0.0.0.0` | bind address |
 | `GEMBA_USER` / `GEMBA_PASS` | — | HTTP basic auth in front of everything except `/healthz` (set both or neither: the server refuses to start with one); **set this before publishing the instance to any hostname** |
-| `GEMBA_TRUST_PROXY` | — | `1` behind the Cloudflare tunnel: rate limits are charged to `cf-connecting-ip` (else `x-forwarded-for`) instead of the socket, which is always `127.0.0.1` there. Leave unset on a direct bind, where those headers are forgeable. Limits: 10 asks/min per address, 60/h per identity; 5 sign-ins/min per address, 20/h per email; 5 sign-ups/min. Bodies over 64 KiB (512 KiB for a practitioner's note) answer 413 |
+| `GEMBA_TRUST_PROXY` | — | `1` behind the Cloudflare tunnel: rate limits are charged to the address the tunnel reports (`cf-connecting-ip`, else the first `x-forwarded-for` entry) instead of the socket. Those headers are believed only from a peer that is a proxy for this instance — loopback for a tunnel running on this host (`--url http://127.0.0.1:8090`), or a comma-separated list of the addresses a managed tunnel connects from (`GEMBA_TRUST_PROXY=192.168.1.22`). A request that connected from any other address is charged to the address it really came from, so on a direct bind the header is not forgeable and one visitor cannot spend another's budget. Unset, every visitor behind the tunnel shares one bucket. Limits: 10 asks/min per address, 60/h per identity; 5 sign-ins/min per address, 20/h per email; 5 sign-ups/min; 20 refused front-gate attempts/min per address. Bodies over 64 KiB (512 KiB for a practitioner's note) answer 413 |
 | `GEMBA_SESSION_IDLE_MINUTES` | `720` | a session with no request for this long (12 h) is refused and its row deleted. The absolute 30-day `expires_at` stays the ceiling; this can only shorten a session. Non-numeric or non-positive ⇒ the default |
 | `GEMBA_SESSION_ADMIN_IDLE_MINUTES` | `60` | the same for an operator (`role = 'admin'`), 1 h. The role is read on every request, so a promotion takes effect on the person's next request. Non-numeric or non-positive ⇒ the default |
 | `GEMBA_DATA_DIR` | `./data` | where the SQLite file and the admin token live |
@@ -247,6 +247,10 @@ Sign-ins are rate-limited per address and per email, and every post form carries
 A post made with the shared `GEMBA_USER`/`GEMBA_PASS` credential holds no session, so it is refused
 unless it came from this host's own pages — the `Origin` a browser sets, or `Referer` where no `Origin`
 is sent. A guest carrying neither a session nor that credential can still ask.
+A refused `GEMBA_USER`/`GEMBA_PASS` attempt is rate-limited per address — 20 a minute — and every
+gate admission and refusal is one row in the audit trail (`gate_admit` / `gate_refused`, with the
+address the tunnel reported), so a run of guesses on the shared password is visible at `/admin/audit`
+instead of being silent.
 What it does not do yet: no email verification. A forgotten password is reset from `/signin` — the page
 says what to do, and the operator issues the one-time link from `/admin/accounts`.
 
@@ -308,7 +312,7 @@ states the three money shapes, a recommendation, and the questions. These are en
 
 ## Tests, and what they caught
 
-450 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+453 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
 (a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:
@@ -471,11 +475,17 @@ gate rather than relying on the deployment to remember one:
 - with neither variable set the app is open, which is what local development wants;
 - the installer refuses to continue when only one of the pair is set: a half-configured gate used to
   leave the instance open while every check reported it configured.
+- set `GEMBA_TRUST_PROXY=1` with them. Every request arrives from the tunnel on `127.0.0.1`, so without
+  it the per-address limits are one bucket for the whole world — five wrong passwords typed by anyone
+  would lock the console out for everyone (a per-email bucket still applies). With it each visitor is
+  charged to the address the tunnel reports, and the headers are believed only from a peer that really
+  is the tunnel (see the `GEMBA_TRUST_PROXY` row above).
 
 Tunnelling is the deployment's business, not the app's. On this host the tunnel is managed in the
 Cloudflare dashboard (a token-managed `cloudflared` runs on the Proxmox host), so a public hostname
-is one ingress entry there: `gemba.<your-domain>` → `http://192.168.1.150:8090`. Verification that
-counts is a request from outside the LAN: `401` without credentials, `200` with them.
+is one ingress entry there: `gemba.<your-domain>` → `http://192.168.1.150:8090`. That connection comes
+over the LAN, so it names its peer instead of the loopback default: `GEMBA_TRUST_PROXY=192.168.1.22`.
+Verification that counts is a request from outside the LAN: `401` without credentials, `200` with them.
 
 For a URL today there is `deploy/quick-tunnel.sh`: it installs `cloudflared`, runs a quick tunnel to
 `127.0.0.1:8090`, and prints the `https://<name>.trycloudflare.com` URL. It refuses to start when no

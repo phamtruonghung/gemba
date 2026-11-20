@@ -39,7 +39,12 @@ export const DEFAULT_LIMITS = {
   askIdentity: { capacity: 60, perMs: HOUR },
   signinIp: { capacity: 5, perMs: MIN },
   signinEmail: { capacity: 20, perMs: HOUR },
-  signupIp: { capacity: 5, perMs: MIN }
+  signupIp: { capacity: 5, perMs: MIN },
+  // The front gate's own bucket, charged on a *refused* credential only. Wider than sign-in because a
+  // gated page view is one request and an unauthenticated browser re-asks on every navigation, but
+  // bounded: at 20 a minute a guesser gets nowhere, and the front gate is the only barrier in front of
+  // the anonymous surface, so it cannot be free.
+  gateIp: { capacity: 20, perMs: MIN }
 };
 
 /** One window set per rule; `check(rule, key)` is `{ ok, retryAfter }`. */

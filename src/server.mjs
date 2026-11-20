@@ -148,8 +148,11 @@ export function loadConfig(env = process.env) {
     bankBin: merged.GEMBA_BANK_BIN || '',
     bankAccount: merged.GEMBA_BANK_ACCOUNT || '',
     // Behind the Cloudflare tunnel every visitor reaches us from 127.0.0.1; with this set the limiter
-    // keys on the address the proxy reports. Off by default: on a direct bind the header is forgeable.
-    trustProxy: merged.GEMBA_TRUST_PROXY === '1',
+    // keys on the address the proxy reports. The forwarding headers are believed only from a peer that
+    // is actually a proxy for us — loopback for the tunnel on this host, or the one address a managed
+    // tunnel connects from. Any other peer connected straight to the listener, so its headers are its
+    // own to write and it is charged to the address it really came from.
+    ...trustProxySpec(merged.GEMBA_TRUST_PROXY),
     // Outbound mail (src/outbox.mjs). The origin goes into every link a message carries, so a real
     // deployment sets GEMBA_PUBLIC_URL; the transport is 'sendmail', 'file' or unset (nothing is sent).
     publicUrl: (merged.GEMBA_PUBLIC_URL || '').replace(/\/+$/, ''),
@@ -164,15 +167,42 @@ export function loadConfig(env = process.env) {
   };
 }
 
-/** The address a request's limits are charged to. See `trustProxy` in `loadConfig`. */
+/** The addresses a request from a proxy or a tunnel on this host arrives on. */
+const isLoopbackPeer = (addr) => addr === '::1' || /^(::ffff:)?127\./.test(String(addr ?? ''));
+
+/**
+ * Read `GEMBA_TRUST_PROXY`: which peers may speak for the visitor behind them.
+ *
+ * `1` is the tunnel on this host (it dials loopback). A comma-separated address list names the peer(s)
+ * a managed tunnel connects from — e.g. the Proxmox host that fronts `192.168.1.150:8090`. Unset means
+ * no peer is a proxy: every request is charged to the address it connected from, because a direct
+ * client's `cf-connecting-ip` is a value it chose.
+ */
+function trustProxySpec(value) {
+  const v = String(value ?? '').trim();
+  if (!v || v === '0') return { trustProxy: false, trustedProxies: [] };
+  const named = v === '1' ? [] : v.split(',').map((s) => s.trim()).filter(Boolean);
+  return { trustProxy: true, trustedProxies: named };
+}
+
+/**
+ * The address a request's limits are charged to. See `trustProxy` in `loadConfig`.
+ *
+ * Only a request that arrived from a peer we named can be a proxied one: its headers carry the
+ * visitor's address. Otherwise the headers are the client's own claim, and honouring them would let
+ * one client spend — or protect — another client's budget.
+ */
 export function clientIp(req, config = {}) {
-  if (config.trustProxy) {
+  const peer = req.socket?.remoteAddress ?? 'unknown';
+  const fromProxy = config.trustProxy
+    && (isLoopbackPeer(peer) || (config.trustedProxies ?? []).includes(peer));
+  if (fromProxy) {
     const cf = String(req.headers['cf-connecting-ip'] ?? '').trim();
     if (cf) return cf;
     const xff = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
     if (xff) return xff;
   }
-  return req.socket?.remoteAddress ?? 'unknown';
+  return peer;
 }
 
 // Body caps. A practitioner's note is long Vietnamese text, which URL-encodes to 6-9 bytes a character,
@@ -471,6 +501,12 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     // source, the icons are static art, and /offline renders the signed-out frame with no data.
     const gateExempt = /^\/(signin|admin\/login|invite\/[^/]+|reset\/[^/]+|manifest\.webmanifest|sw\.js|app\.[0-9a-f]{12}\.css|offline|icons\/[A-Za-z0-9._-]+)$/.test(path);
     if (!gateExempt && !account && !basicAuthOk(req.headers.authorization, config)) {
+      // A refused gate credential is the cheapest guess on the whole surface, and the gate is the only
+      // barrier in front of an anonymous visitor, so a refusal is charged to that client's own bucket
+      // and recorded. Charged before the comparison: the budget spent is always the guesser's.
+      const r = limiter.check('gateIp', ip, now());
+      if (!r.ok) return tooMany(r, { kind: 'gate' });
+      dbm.logEvent(db, 'gate_refused', ip, path);
       const page = stamp(views.unauthorizedPage()); // before writeHead: the header wrapper reads the nonce
       res.writeHead(401, {
         'www-authenticate': 'Basic realm="gemba", charset="UTF-8"',
@@ -484,6 +520,9 @@ export function createApp({ dbPath, config = loadConfig(), rules = loadRules(rea
     // marks a gated visitor when one is actually set — otherwise every guest would become one.
     const gateAuthed = Boolean(config.user || config.pass) && !gateExempt && !account
       && basicAuthOk(req.headers.authorization, config);
+    // The other half of the trail: who the gate let in, and to what. One row per gated request, which
+    // is one page view — a refusal is only meaningful next to the admissions it sits among.
+    if (gateAuthed) dbm.logEvent(db, 'gate_admit', ip, path);
 
     // --- CSRF: no cross-site write, whatever authenticated the request ---------------------------
     // A signed-in person's forms carry their session's token as a hidden field (no JavaScript

@@ -97,6 +97,11 @@ else
 # Gemba runtime configuration. Mode 600 — holds the LLM key and the operator token.
 GEMBA_PORT=$PORT
 GEMBA_HOST=0.0.0.0
+# 1 = believe the forwarding headers of a proxy on this host. The Cloudflare tunnel dials
+# 127.0.0.1:8090, so without this every visitor behind it is charged to 127.0.0.1 and the
+# per-address rate limits become one global bucket. A managed tunnel that reaches this host over
+# the LAN is named instead: GEMBA_TRUST_PROXY=192.168.1.22.
+GEMBA_TRUST_PROXY=1
 # Secrets are written below by deploy/set-env.py, never by this heredoc: an unquoted heredoc
 # expands `$` and a backtick inside the value.
 GEMBA_USER=
@@ -127,6 +132,14 @@ for key in GEMBA_USER GEMBA_PASS; do
     echo "added the missing key $key to $ENV_DIR/gemba.env (empty — fill it in to use it)"
   fi
 done
+# An instance published through the tunnel answers every visitor from 127.0.0.1; without this the
+# per-address limits are one bucket for the whole world, and five wrong gate passwords typed by
+# anyone lock the console out for everyone. `1` trusts the loopback peer only, so a LAN client's own
+# forwarding headers stay ignored (README: GEMBA_TRUST_PROXY).
+if ! grep -q "^GEMBA_TRUST_PROXY=" "$ENV_DIR/gemba.env"; then
+  python3 "$SRC_DIR/deploy/set-env.py" "$ENV_DIR/gemba.env" GEMBA_TRUST_PROXY 1 || exit 1
+  echo "set GEMBA_TRUST_PROXY=1 in $ENV_DIR/gemba.env (the tunnel reaches the app over loopback)"
+fi
 # A password is data, not syntax. This used to be a `sed` replacement built out of the value: `&`
 # expanded to the matched text, `|` broke the delimiter, and a space made the later sourced file
 # execute the tail as a command. The installer then printed "front gate set" and exited 0 while the
