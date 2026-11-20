@@ -210,6 +210,17 @@ GEMBA_ADMIN_PASSWORD="$ADMIN_PASSWORD_ARG" \
 "$NODE_DIR/bin/node" scripts/admin-create.mjs
 unset GEMBA_ADMIN_PASSWORD
 
+# The state file is the operator's data and holds the hashes of live session ids and reset tokens
+# (src/db.mjs): nothing but root may read it, and the WAL and shared-memory sibling are part of the
+# database rather than scratch files. The unit's UMask=0077 covers every file the *service* creates;
+# these two steps ran outside it (the installer's own umask), so set them here as well. A fresh host
+# has no database yet — step 6 creates it under the unit's umask.
+STATE_DB="${CONFIGURED_DB:-$DATA_DIR/gemba.db}"
+for f in "$STATE_DB" "$STATE_DB-wal" "$STATE_DB-shm"; do
+  if [ -e "$f" ]; then chmod 600 "$f"; fi
+done
+chmod 700 "$DATA_DIR"
+
 say "6. systemd unit"
 install -m 644 "$APP_DIR/deploy/gemba.service" /etc/systemd/system/gemba.service
 systemctl daemon-reload

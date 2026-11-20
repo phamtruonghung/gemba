@@ -224,7 +224,9 @@ Secrets belong in the environment or in the systemd `EnvironmentFile`, never in 
 
 An asker can create an account (name, email, password) and sign in. The session cookie is an
 **opaque random id** with a row in `sessions` — not a signed token — so signing out *revokes* it
-server-side rather than trusting the client to forget. A session also ends after a stretch of no
+server-side rather than trusting the client to forget. The row holds `sha256` of that id, not the id
+itself, so a copy of the state file (or a backup, or its WAL) is a list of hashes and not a set of
+working cookies; a password-reset link is stored the same way. A session also ends after a stretch of no
 requests (12 hours; 1 hour for an operator), well inside its 30 days; presence costs one write a
 minute. Passwords are hashed with `scrypt` at
 cost `N=2^17`, `r=8`, `p=1`, salts are per-account, verification is constant-time, and the hash
@@ -306,7 +308,7 @@ states the three money shapes, a recommendation, and the questions. These are en
 
 ## Tests, and what they caught
 
-449 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
+450 tests (`npm test`), including an end-to-end walk over real HTTP, plus `scripts/ui-check.py`
 (a headless-browser check, not run by `npm test`: overflow at 375/1440, contrast, focus, tap targets, labels, card
 alignment, and the primary button sampled from the pixels it actually painted). They are worth more
 than the coverage number because of what they found:

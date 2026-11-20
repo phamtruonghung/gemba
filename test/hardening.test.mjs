@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { createApp, basicAuthOk, loadConfig } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
 import { upsertExpert, createUser, makeRef } from '../src/db.mjs';
-import { hashPassword } from '../src/auth.mjs';
+import { hashPassword, secretHash } from '../src/auth.mjs';
 
 const baseConfig = (extra = {}) => ({
   port: 0, host: '127.0.0.1', dbPath: ':memory:', dataDir: 'data',
@@ -764,7 +764,7 @@ test('signing in with a session cookie already held replaces that session', asyn
     // a stale session is signed out of at the form, so post with the token it carries
     const res = await post(s.base, '/signin', { email: 'rot@plant.vn', password: PW, csrf: first.csrf }, first.cookie);
     assert.equal(res.status, 303);
-    assert.equal(s.app.db.prepare('select count(*) n from sessions where id = ?').get(oldId).n, 0, 'the old session row is gone');
+    assert.equal(s.app.db.prepare('select count(*) n from sessions where id = ?').get(secretHash(oldId)).n, 0, 'the old session row is gone');
     assert.notEqual(/gemba_session=([^;]+)/.exec(cookieOf(res))[1], oldId);
   } finally {
     s.stop();

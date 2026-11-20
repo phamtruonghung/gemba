@@ -344,7 +344,8 @@ reach. (4) Nobody sells the standalone answer — which is the rung this prototy
     invitation makes one user: the invite is claimed inside the same transaction that creates the user.
 - `users` — email (unique, lowercased), name, `password_hash` (`scrypt`, salted), created/last seen;
 - `sessions` — session id (32 random bytes), user, expiry, `last_seen_at`, user agent; a session is a
-  row, so signing out revokes it. A session idle past its limit (12 h; 1 h for `role = 'admin'`) is refused and deleted;
+  row, so signing out revokes it. The `id` column holds `sha256` of the cookie value (the raw id exists
+  only in the browser's cookie), so the state file is not a set of usable sessions. A session idle past its limit (12 h; 1 h for `role = 'admin'`) is refused and deleted;
   the 30-day absolute expiry is the ceiling;
 - `events` — an append-only log of what the system did, so a dispute has a record.
 

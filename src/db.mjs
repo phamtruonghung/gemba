@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { checkEmail, SESSION_IDLE_MINUTES, SESSION_ADMIN_IDLE_MINUTES, SESSION_TOUCH_MS } from './auth.mjs';
+import { checkEmail, secretHash, SESSION_IDLE_MINUTES, SESSION_ADMIN_IDLE_MINUTES, SESSION_TOUCH_MS } from './auth.mjs';
 
 export const SCHEMA = `
 create table if not exists experts (
@@ -115,6 +115,8 @@ create table if not exists users (
   created_at text not null,
   last_seen_at text
 );
+-- The row key is sha256 of the cookie value, never the cookie itself (see secretHash in src/auth.mjs):
+-- a copy of this file is a list of hashes, not a set of sessions.
 create table if not exists sessions (
   id text primary key,
   user_id integer not null references users(id) on delete cascade,
@@ -134,6 +136,8 @@ create table if not exists invites (
   accepted_at text,
   created_by text not null default ''
 );
+-- The token below is the one-time link's value: what the row holds is its sha256, for the same reason
+-- the session id is hashed — the file must not be a set of working links.
 create table if not exists password_resets (
   token text primary key,
   user_id integer not null references users(id) on delete cascade,
@@ -244,6 +248,20 @@ export function migrate(db) {
   // The language a question was asked in ('vi' | 'en'); a booking carries the language of the question it came from.
   addColumn('questions', 'lang', "lang text not null default 'en'");
   addColumn('bookings', 'lang', "lang text not null default 'en'");
+  // One-time, keyed on the file's own schema version: before this revision `sessions.id` held the
+  // cookie value and `password_resets.token` held the link value themselves. Every lookup now hashes
+  // what the request presented, so those rows can never match again — and they are exactly the rows
+  // this change exists to get out of the file. Drop them once, which signs every current session out
+  // (and makes an operator hand out new reset links); a later open must not do it again, or every
+  // restart would sign everyone out.
+  if (db.prepare('pragma user_version').get().user_version < 1) {
+    const sessions = db.prepare('delete from sessions').run().changes;
+    const resets = db.prepare('delete from password_resets').run().changes;
+    db.exec('pragma user_version = 1;');
+    if (sessions || resets) {
+      console.warn(`hashed session ids: dropped ${sessions} session row(s) and ${resets} reset link(s) that stored the raw value — everyone signs in again`);
+    }
+  }
   // A backstop for "one slot, one open booking". Old rows hold free-text starts_at and may collide, so
   // a failed build must not stop the app from booting: the check inside createBookingOnce is the guarantee.
   try {
@@ -581,8 +599,11 @@ export function expertStatement(db, expertId) {
 }
 
 export function createSession(db, { id, userId, expiresAt, userAgent = '' }) {
+  // Stored as sha256(id): the cookie is the only place the raw value exists on the server side.
+  // The caller gets `id` back to put in the Set-Cookie header, and every lookup hashes what it was
+  // presented, so nothing in the app has to remember which side of the boundary it is holding.
   db.prepare('insert into sessions (id, user_id, created_at, expires_at, user_agent, csrf, last_seen_at) values (?, ?, ?, ?, ?, ?, ?)').run(
-    id,
+    secretHash(id),
     userId,
     nowIso(),
     expiresAt,
@@ -596,11 +617,12 @@ export function createSession(db, { id, userId, expiresAt, userAgent = '' }) {
 /** The CSRF token for a session, minted on first use for a row that predates the column. '' for no session. */
 export function csrfFor(db, sessionId) {
   if (!sessionId) return '';
-  const row = db.prepare('select csrf from sessions where id = ?').get(String(sessionId));
+  const key = secretHash(sessionId);
+  const row = db.prepare('select csrf from sessions where id = ?').get(key);
   if (!row) return '';
   if (row.csrf) return row.csrf;
   const token = randomBytes(24).toString('base64url');
-  db.prepare('update sessions set csrf = ? where id = ?').run(token, String(sessionId));
+  db.prepare('update sessions set csrf = ? where id = ?').run(token, key);
   return token;
 }
 
@@ -612,7 +634,8 @@ export function setPasswordHash(db, userId, hash) {
  *  grow without bound on an instance nobody signs out of. */
 export function sessionUser(db, id, { idleMs, adminIdleMs } = {}) {
   if (!id) return null;
-  const row = db.prepare('select * from sessions where id = ?').get(String(id));
+  // The request presents the cookie; the table holds hashes, so the lookup hashes once, here.
+  const row = db.prepare('select * from sessions where id = ?').get(secretHash(id));
   if (!row) return null;
   if (row.expires_at <= nowIso()) {
     db.prepare('delete from sessions where id = ?').run(row.id);
@@ -641,7 +664,7 @@ export function sessionUser(db, id, { idleMs, adminIdleMs } = {}) {
 }
 
 export function deleteSession(db, id) {
-  return db.prepare('delete from sessions where id = ?').run(String(id)).changes;
+  return db.prepare('delete from sessions where id = ?').run(secretHash(id)).changes;
 }
 
 export function deleteSessionsForUser(db, userId) {
@@ -813,18 +836,20 @@ export const RESET_DAYS = 7;
 export function createPasswordReset(db, { token, userId, createdBy = '', days = RESET_DAYS }) {
   const at = new Date();
   db.prepare('delete from password_resets where user_id = ? and used_at is null').run(userId);
+  // Hashing lives in the insert and in every lookup, so the link itself is handed over once (the
+  // operator's page) and the database never holds a value that works.
   db.prepare(
     `insert into password_resets (token, user_id, created_at, expires_at, created_by)
      values (?, ?, ?, ?, ?)`
   ).run(
-    token, userId, at.toISOString(),
+    secretHash(token), userId, at.toISOString(),
     new Date(at.getTime() + days * 86400_000).toISOString(), createdBy
   );
   return passwordResetByToken(db, token);
 }
 
 export function passwordResetByToken(db, token) {
-  return db.prepare('select * from password_resets where token = ?').get(String(token ?? ''));
+  return db.prepare('select * from password_resets where token = ?').get(secretHash(token));
 }
 
 /** Live, used or expired — computed, not stored, so there is one source of truth for time. */
@@ -838,7 +863,7 @@ export function passwordResetState(reset, at = new Date()) {
 /** Claim a reset link: 1 if this call redeemed it, 0 if it was already used or has lapsed. */
 export function usePasswordReset(db, token, now = new Date()) {
   return db.prepare('update password_resets set used_at = ? where token = ? and used_at is null and expires_at > ?')
-    .run(now.toISOString(), String(token ?? ''), now.toISOString()).changes;
+    .run(now.toISOString(), secretHash(token), now.toISOString()).changes;
 }
 
 /** What each practitioner is actually doing — the numbers an operator looks at before changing a rate. */

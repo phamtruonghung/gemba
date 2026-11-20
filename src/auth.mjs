@@ -12,10 +12,21 @@
 // scrypt is async on purpose: the sync form blocks the event loop for the whole derivation, and a
 // single-process server that stops answering for ~100ms per sign-in is a denial-of-service on itself.
 
-import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const scryptAsync = promisify(scrypt);
+
+/**
+ * What is stored in the database for a bearer secret — a session id or a reset token.
+ *
+ * The cookie (and the reset link) carries the raw value; the row carries sha256 of it, and lookups
+ * hash what the request presented. So a copy of the state file, a backup, or a WAL file is not a set
+ * of usable sessions: the hash is not the cookie. Plain SHA-256, no salt, is the right tool here —
+ * the input is 32 random bytes, not a guessable password, so there is nothing to guess and no
+ * rainbow table to build; a salt would only make the hash unusable for a lookup.
+ */
+export const secretHash = (value) => createHash('sha256').update(String(value ?? '')).digest('hex');
 
 export const SESSION_COOKIE = 'gemba_session';
 // Over HTTPS the cookie is named with the `__Host-` prefix, which makes the browser refuse it unless it is

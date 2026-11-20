@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 
 import { createApp } from '../src/server.mjs';
 import { loadRules } from '../src/gate.mjs';
-import { hashPassword } from '../src/auth.mjs';
+import { hashPassword, secretHash } from '../src/auth.mjs';
 
 // Not under test here: the limiter has its own tests (test/hardening.test.mjs); this fixture signs up
 // and signs in many times from one address.
@@ -148,7 +148,7 @@ test('a link that is unknown, expired, or superseded says which it is', async ()
 
   // Expiry is computed from the row, so a row created a day in the past is a link that has lapsed.
   app.db.prepare('insert into password_resets (token, user_id, created_at, expires_at) values (?, ?, ?, ?)')
-    .run('expired-token', asker.id, new Date(Date.now() - 8 * 86400_000).toISOString(), new Date(Date.now() - 86400_000).toISOString());
+    .run(secretHash('expired-token'), asker.id, new Date(Date.now() - 8 * 86400_000).toISOString(), new Date(Date.now() - 86400_000).toISOString());
   const expired = await get('/reset/expired-token');
   assert.equal(expired.status, 410);
   assert.match(await text(expired), /expired/);
@@ -183,7 +183,7 @@ test('only an operator issues a link, and never for a locked account', async () 
 
   // A link that existed before the lock is refused too, with the reason on the page.
   app.db.prepare('insert into password_resets (token, user_id, created_at, expires_at) values (?, ?, ?, ?)')
-    .run('locked-token', victim.id, new Date().toISOString(), new Date(Date.now() + 86400_000).toISOString());
+    .run(secretHash('locked-token'), victim.id, new Date().toISOString(), new Date(Date.now() + 86400_000).toISOString());
   const locked = await get('/reset/locked-token');
   assert.equal(locked.status, 403);
   assert.match(await text(locked), /locked/);
